@@ -32,6 +32,9 @@ DISTANCE_THRESHOLD = 0.12  # Conservative relative face-width threshold; not cen
 
 # How often history is recorded
 HISTORY_INTERVAL = 5.0
+SESSION_WRITE_INTERVAL = 1.0
+FRAME_WRITE_INTERVAL = 1.0
+FRAME_MAX_WIDTH = 960
 
 
 # ============================================================
@@ -41,25 +44,31 @@ HISTORY_INTERVAL = 5.0
 # This points to the EXISTING dashboard/session_data.json
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SESSION_FILE = os.path.abspath(
+SESSION_FILE = os.path.abspath(os.environ.get(
+    "FOCUSMATE_SESSION_FILE",
     os.path.join(
         BASE_DIR,
         "..",
         "dashboard",
         "session_data.json"
     )
-)
-FRAME_OUTPUT = os.path.abspath(
+))
+PROFILE_FILE = os.path.abspath(os.environ.get(
+    "FOCUSMATE_PROFILE_FILE",
+    os.path.join(os.path.dirname(SESSION_FILE), "player_profile.json")
+))
+FRAME_OUTPUT = os.path.abspath(os.environ.get(
+    "FOCUSMATE_FRAME_FILE",
     os.path.join(
         os.path.dirname(SESSION_FILE),
         "latest_frame.jpg"
     )
-)
+))
 
-STOP_FILE = os.path.join(
-    os.path.dirname(SESSION_FILE),
-    "stop_session.request"
-)
+STOP_FILE = os.path.abspath(os.environ.get(
+    "FOCUSMATE_STOP_FILE",
+    os.path.join(os.path.dirname(SESSION_FILE), "stop_session.request")
+))
 
 # ============================================================
 # LANDMARKERS
@@ -159,6 +168,7 @@ class FocusMonitor:
         self.session_start_time = None
         self.session_id = None
         self.session_completed = False
+        self.last_session_write = 0.0
 
         self.events = []
 
@@ -223,6 +233,7 @@ class FocusMonitor:
 
         self.history = []
         self.last_history_time = time.time()
+        self.last_session_write = 0.0
 
         self.events.append({
             "type": "SESSION_STARTED",
@@ -290,8 +301,7 @@ class FocusMonitor:
         # Persist lifetime progress independently of the dashboard being open.
         # A completed session ID is recorded once, preventing duplicate XP.
         try:
-            dashboard_dir = os.path.dirname(SESSION_FILE)
-            profile_file = os.path.join(dashboard_dir, "player_profile.json")
+            profile_file = PROFILE_FILE
             profile = {
                 "version": 1,
                 "total_xp": 0,
@@ -484,10 +494,7 @@ class FocusMonitor:
 
             duration = now - self.session_start_time
 
-        minute = max(
-            1,
-            math.ceil(duration / 60)
-        )
+        minute = round(duration / 60, 2)
 
         history_entry = {
             "minute": minute,
@@ -891,9 +898,10 @@ class FocusMonitor:
         # WRITE DASHBOARD DATA
         # ----------------------------------------------------
 
-        if self.session_started:
+        if self.session_started and now - self.last_session_write >= SESSION_WRITE_INTERVAL:
 
             self.write_session_data()
+            self.last_session_write = now
 
         # ----------------------------------------------------
         # RETURN DATA
@@ -1047,6 +1055,8 @@ if __name__ == "__main__":
     # Prevent an old stop request from immediately ending
     # the next session.
     clear_stop_request()
+    last_frame_write = 0.0
+    last_console_update = 0.0
 
     print()
     print("====================================")
@@ -1100,20 +1110,36 @@ if __name__ == "__main__":
 
             data = monitor.process_frame(frame)
 
-            try:
-                os.makedirs(os.path.dirname(FRAME_OUTPUT), exist_ok=True)
-                cv2.imwrite(FRAME_OUTPUT, frame)
-            except Exception:
-                pass
+            now = time.monotonic()
+            if now - last_frame_write >= FRAME_WRITE_INTERVAL:
+                try:
+                    os.makedirs(os.path.dirname(FRAME_OUTPUT), exist_ok=True)
+                    preview = frame
+                    height, width = frame.shape[:2]
+                    if width > FRAME_MAX_WIDTH:
+                        preview = cv2.resize(
+                            frame,
+                            (FRAME_MAX_WIDTH, round(height * FRAME_MAX_WIDTH / width)),
+                        )
+                    cv2.imwrite(
+                        FRAME_OUTPUT,
+                        preview,
+                        [cv2.IMWRITE_JPEG_QUALITY, 75],
+                    )
+                except Exception:
+                    pass
+                last_frame_write = now
 
-            print(
-                f"Score: {data['focus_score']} | "
-                f"Status: {data['status']} | "
-                f"Eyes: {data['eyes_closed']} | "
-                f"Posture: {data['posture']} | "
-                f"Away: {data['looking_away']} | "
-                f"Distance: {data['distance_status']}"
-            )
+            if now - last_console_update >= 5.0:
+                print(
+                    f"Score: {data['focus_score']} | "
+                    f"Status: {data['status']} | "
+                    f"Eyes: {data['eyes_closed']} | "
+                    f"Posture: {data['posture']} | "
+                    f"Away: {data['looking_away']} | "
+                    f"Distance: {data['distance_status']}"
+                )
+                last_console_update = now
 
     except KeyboardInterrupt:
         print()
@@ -1206,9 +1232,6 @@ if __name__ == "__main__":
         print(SESSION_FILE)
 
         print("Player profile:")
-        print(os.path.join(
-            os.path.dirname(SESSION_FILE),
-            "player_profile.json"
-        ))
+        print(PROFILE_FILE)
 
         print("====================================")

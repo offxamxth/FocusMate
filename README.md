@@ -54,6 +54,11 @@ list, session insights, daily quests, and profile/wellbeing settings. The webcam
 is optional; the timer and task list work without it. Use the sidebar to switch
 between pages.
 
+At startup, enter a username to reopen its saved local profile or create a new
+one. Profiles and webcam session data are stored separately under
+`dashboard/profiles/`. Usernames select local data; they are not passwords or
+secure authentication.
+
 ## Notes
 
 - The project expects the model files in `webcam_detection/`:
@@ -62,6 +67,8 @@ between pages.
 - The local virtual environment folder should not be committed to GitHub.
 - `dashboard/session_data.json` and `dashboard/player_profile.json` are local
   runtime files and are ignored by Git.
+- `dashboard/profiles/` contains per-username profiles, webcam snapshots, and
+  session data; it is local runtime data and is ignored by Git.
 
 ## GitHub upload
 

@@ -1,14 +1,20 @@
 """Animated, multi-page Streamlit experience for FocusMate."""
 
 import json
+import hashlib
 import html
+import io
+import math
 import os
+import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
 import time
+import wave
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -19,9 +25,8 @@ from streamlit_autorefresh import st_autorefresh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILE_FILE = os.path.join(HERE, "player_profile.json")
+PROFILE_DIR = os.path.join(HERE, "profiles")
 SESSION_FILE = os.path.join(HERE, "session_data.json")
-RESET_MARKER_FILE = os.path.join(HERE, "session_closed.marker")
-FRAME_OUTPUT = os.path.join(HERE, "latest_frame.jpg")
 WEBCAM_DIR = os.path.abspath(os.path.join(HERE, "..", "webcam_detection"))
 WEBCAM_FILE = os.path.join(WEBCAM_DIR, "integrated_detection.py")
 
@@ -82,11 +87,51 @@ QUESTS = [
 ]
 
 
-def fresh_profile():
+def normalize_username(username):
+    value = str(username or "").strip().lstrip("@").casefold()
+    if not value or len(value) > 32 or not re.fullmatch(r"[a-z0-9_.-]+", value):
+        return ""
+    return value
+
+
+def user_data_directory(username=None):
+    if username is None:
+        username = st.session_state.get("active_username")
+    normalized = normalize_username(username)
+    if not normalized:
+        return HERE
+    key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+    return os.path.join(PROFILE_DIR, key)
+
+
+def user_data_file(filename, username=None):
+    return os.path.join(user_data_directory(username), filename)
+
+
+def profile_file(username=None):
+    if username is None:
+        username = st.session_state.get("active_username")
+    normalized = normalize_username(username)
+    if not normalized:
+        return PROFILE_FILE
+    return user_data_file("player_profile.json", normalized)
+
+
+def profile_exists(username):
+    normalized = normalize_username(username)
+    if not normalized:
+        return False
+    if os.path.isfile(profile_file(normalized)):
+        return True
+    legacy = read_json(PROFILE_FILE, None)
+    return isinstance(legacy, dict) and normalize_username(legacy.get("username")) == normalized
+
+
+def fresh_profile(username="focusfriend"):
     return {
         "version": 1,
         "player_name": "Focus friend",
-        "username": "focusfriend",
+        "username": normalize_username(username) or "focusfriend",
         "total_xp": 0,
         "total_study_seconds": 0,
         "sessions_completed": 0,
@@ -100,6 +145,8 @@ def fresh_profile():
             "posture_alerts": True,
             "mood_checkins": True,
             "session_chimes": False,
+            "session_length_minutes": 25,
+            "daily_goal_minutes": 180,
         },
         "last_session_id": None,
         "created_at": datetime.now().isoformat(),
@@ -114,82 +161,135 @@ def read_json(path, default):
         return default
 
 
-def load_profile():
-    loaded = read_json(PROFILE_FILE, None)
-    profile = loaded if isinstance(loaded, dict) else fresh_profile()
+def bounded_int(value, default, minimum, maximum):
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def load_profile(username=None):
+    normalized = normalize_username(
+        username if username is not None else st.session_state.get("active_username")
+    )
+    path = profile_file(normalized)
+    loaded = read_json(path, None)
+    if not isinstance(loaded, dict) and normalized:
+        legacy = read_json(PROFILE_FILE, None)
+        if isinstance(legacy, dict) and normalize_username(legacy.get("username")) == normalized:
+            loaded = legacy
+    profile = loaded if isinstance(loaded, dict) else fresh_profile(normalized or "focusfriend")
+    if normalized:
+        profile["username"] = normalized
     for key, value in fresh_profile().items():
         profile.setdefault(key, value)
     if not isinstance(profile.get("username"), str):
         profile["username"] = "focusfriend"
     if not isinstance(profile["session_history"], list):
         profile["session_history"] = []
+    profile["session_history"] = [
+        entry for entry in profile["session_history"] if isinstance(entry, dict)
+    ]
     if not isinstance(profile["quest_claims"], list):
         profile["quest_claims"] = []
+    profile["quest_claims"] = [
+        claim for claim in profile["quest_claims"] if isinstance(claim, dict)
+    ]
     if not isinstance(profile["tasks"], list):
         profile["tasks"] = []
+    profile["tasks"] = [task for task in profile["tasks"] if isinstance(task, dict)]
     if not isinstance(profile["session_wellbeing"], dict):
         profile["session_wellbeing"] = {}
+    wellbeing = profile["session_wellbeing"]
+    try:
+        sleep_hours = float(wellbeing.get("sleep_hours", 0.0) or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        sleep_hours = 0.0
+    wellbeing["sleep_hours"] = max(0.0, min(24.0, sleep_hours)) if math.isfinite(sleep_hours) else 0.0
+    wellbeing["water_glasses"] = bounded_int(
+        wellbeing.get("water_glasses", 0), 0, 0, 100
+    )
+    wellbeing["reflection"] = str(wellbeing.get("reflection") or "")[:500]
+    if not isinstance(wellbeing.get("mood"), str):
+        wellbeing.pop("mood", None)
+    if not isinstance(wellbeing.get("mood_checkin_date"), str):
+        wellbeing.pop("mood_checkin_date", None)
+    profile["total_xp"] = bounded_int(profile.get("total_xp"), 0, 0, 2**63 - 1)
+    profile["total_study_seconds"] = bounded_int(
+        profile.get("total_study_seconds"), 0, 0, 2**63 - 1
+    )
+    profile["sessions_completed"] = bounded_int(
+        profile.get("sessions_completed"), 0, 0, 2**31 - 1
+    )
     if not isinstance(profile.get("session_preferences"), dict):
         profile["session_preferences"] = {}
     default_prefs = fresh_profile()["session_preferences"]
     profile["session_preferences"] = {**default_prefs, **profile["session_preferences"]}
+    for key in ("focus_monitoring", "posture_alerts", "mood_checkins", "session_chimes"):
+        if not isinstance(profile["session_preferences"].get(key), bool):
+            profile["session_preferences"][key] = default_prefs[key]
+    profile["session_preferences"]["session_length_minutes"] = bounded_int(
+        profile["session_preferences"].get("session_length_minutes"), 25, 15, 120
+    )
+    profile["session_preferences"]["daily_goal_minutes"] = bounded_int(
+        profile["session_preferences"].get("daily_goal_minutes"), 180, 30, 720
+    )
     return profile
 
 
-def save_profile(profile):
-    os.makedirs(os.path.dirname(PROFILE_FILE), exist_ok=True)
+def save_profile(profile, username=None):
+    normalized = normalize_username(
+        username if username is not None else st.session_state.get("active_username")
+    )
+    path = profile_file(normalized)
+    if normalized:
+        profile["username"] = normalized
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, temporary_path = tempfile.mkstemp(
-        prefix="focusmate_", suffix=".tmp", dir=os.path.dirname(PROFILE_FILE)
+        prefix="focusmate_", suffix=".tmp", dir=os.path.dirname(path)
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             json.dump(profile, file, indent=2)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary_path, PROFILE_FILE)
+        os.replace(temporary_path, path)
     finally:
         if os.path.exists(temporary_path):
             os.remove(temporary_path)
 
 
 def load_live_data():
-    data = read_json(SESSION_FILE, {})
+    username = normalize_username(st.session_state.get("active_username"))
+    path = user_data_file("session_data.json", username)
+    if username and not os.path.isfile(path):
+        legacy = read_json(PROFILE_FILE, None)
+        if isinstance(legacy, dict) and normalize_username(legacy.get("username")) == username:
+            path = SESSION_FILE
+    data = read_json(path, {})
     return data if isinstance(data, dict) else {}
 
 
-def kill_stale_webcam_processes():
-    if not sys.platform.startswith("win"):
-        return
+def mark_session_closed(marker_path=None):
     try:
-        subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'integrated_detection.py' }; foreach ($p in $procs) { $p.Terminate() }",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except Exception:
-        pass
-
-
-def mark_session_closed():
-    try:
-        with open(RESET_MARKER_FILE, "w", encoding="utf-8") as file:
+        path = marker_path or user_data_file("session_closed.marker")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as file:
             file.write(datetime.now().isoformat())
     except OSError:
         pass
 
 
 def consume_session_reset_marker():
-    if not os.path.exists(RESET_MARKER_FILE):
+    marker_path = user_data_file("session_closed.marker")
+    if not os.path.exists(marker_path):
         return False
 
     try:
-        with open(RESET_MARKER_FILE, "r", encoding="utf-8") as file:
+        with open(marker_path, "r", encoding="utf-8") as file:
             marker_value = (file.read() or "").strip()
     except OSError:
         marker_value = ""
@@ -207,7 +307,7 @@ def consume_session_reset_marker():
         return False
 
     try:
-        os.remove(RESET_MARKER_FILE)
+        os.remove(marker_path)
     except OSError:
         pass
     return True
@@ -218,25 +318,29 @@ def webcam_is_running():
     return process is not None and process.poll() is None
 
 
+def live_snapshot_is_fresh(live, max_age=35):
+    updated = live.get("last_updated")
+    if not updated:
+        return False
+    try:
+        age = (datetime.now() - datetime.fromisoformat(updated)).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age <= max_age
+
+
 def webcam_session_active():
     if webcam_is_running():
         return True
 
     window = st.session_state.get("webcam_start_time")
     if isinstance(window, datetime):
-        if (datetime.now() - window).total_seconds() <= 35:
+        age = (datetime.now() - window).total_seconds()
+        if 0 <= age <= 35:
             return True
 
     live = load_live_data()
-    if live.get("session_active"):
-        updated = live.get("last_updated")
-        if updated:
-            try:
-                last_update = datetime.fromisoformat(updated)
-                return (datetime.now() - last_update).total_seconds() <= 35
-            except (TypeError, ValueError):
-                return False
-    return False
+    return bool(live.get("session_active")) and live_snapshot_is_fresh(live)
 
 
 def ensure_stop_server():
@@ -246,11 +350,17 @@ def ensure_stop_server():
 
     class StopHandler(BaseHTTPRequestHandler):
         def do_POST(self):
-            if self.path == "/focusmate-stop":
+            prefix = "/focusmate-stop/"
+            request_path = self.path.partition("?")[0]
+            key = request_path.removeprefix(prefix)
+            if request_path.startswith(prefix) and re.fullmatch(r"[a-f0-9]{32}", key):
+                data_directory = os.path.join(PROFILE_DIR, key)
                 try:
-                    if "webcam_process" in st.session_state:
-                        stop_webcam()
-                    mark_session_closed()
+                    os.makedirs(data_directory, exist_ok=True)
+                    stop_path = os.path.join(data_directory, "stop_session.request")
+                    with open(stop_path, "w", encoding="utf-8") as file:
+                        file.write("stop")
+                    mark_session_closed(os.path.join(data_directory, "session_closed.marker"))
                 except Exception:
                     try:
                         mark_session_closed()
@@ -276,9 +386,10 @@ def ensure_stop_server():
 
 
 def start_webcam():
-    kill_stale_webcam_processes()
-    if webcam_is_running():
+    if webcam_is_running() or webcam_session_active():
         return True, "Your study session is already running."
+    if not load_profile().get("session_preferences", {}).get("focus_monitoring", True):
+        return False, "Webcam monitoring is turned off in your session preferences."
     if not os.path.isfile(WEBCAM_FILE):
         return False, f"Webcam detector not found: {WEBCAM_FILE}"
     if not os.path.isfile(WEBCAM_PYTHON):
@@ -302,15 +413,20 @@ def start_webcam():
             f"Python environment.\n\n{check.stderr[-1500:]}"
         )
 
-    stop_file = os.path.join(HERE, "stop_session.request")
-    if os.path.exists(stop_file):
+    stop_path = user_data_file("stop_session.request")
+    if os.path.exists(stop_path):
         try:
-            os.remove(stop_file)
+            os.remove(stop_path)
         except OSError as error:
             return False, f"Could not clear the previous stop request: {error}"
     try:
+        worker_env = os.environ.copy()
+        worker_env["FOCUSMATE_SESSION_FILE"] = user_data_file("session_data.json")
+        worker_env["FOCUSMATE_PROFILE_FILE"] = profile_file()
+        worker_env["FOCUSMATE_FRAME_FILE"] = user_data_file("latest_frame.jpg")
+        worker_env["FOCUSMATE_STOP_FILE"] = stop_path
         st.session_state.webcam_process = subprocess.Popen(
-            [WEBCAM_PYTHON, WEBCAM_FILE], cwd=WEBCAM_DIR
+            [WEBCAM_PYTHON, WEBCAM_FILE], cwd=WEBCAM_DIR, env=worker_env
         )
         st.session_state.webcam_start_time = datetime.now()
     except OSError as error:
@@ -319,25 +435,21 @@ def start_webcam():
 
 
 def stop_webcam():
-    kill_stale_webcam_processes()
     process = st.session_state.get("webcam_process")
-    if process is None or process.poll() is not None:
-        st.session_state.webcam_process = None
-        st.session_state.webcam_start_time = None
-        if os.path.exists(FRAME_OUTPUT):
-            try:
-                os.remove(FRAME_OUTPUT)
-            except OSError:
-                pass
+    process_running = process is not None and process.poll() is None
+    session_active = webcam_session_active()
+    if not process_running and not session_active:
         return False, "There is no running webcam session to stop."
 
-    stop_file = os.path.join(HERE, "stop_session.request")
     try:
-        with open(stop_file, "w", encoding="utf-8") as file:
+        with open(user_data_file("stop_session.request"), "w", encoding="utf-8") as file:
             file.write("stop")
+    except OSError as error:
+        return False, f"Could not stop the webcam detector: {error}"
 
+    if process_running:
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=15)
         except subprocess.TimeoutExpired:
             if sys.platform.startswith("win"):
                 subprocess.run(
@@ -348,33 +460,24 @@ def stop_webcam():
                 )
             else:
                 process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
             try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-            except Exception:
-                pass
-    except OSError as error:
-        return False, f"Could not stop the webcam detector: {error}"
 
     st.session_state.webcam_process = None
     st.session_state.webcam_start_time = None
-    if os.path.exists(FRAME_OUTPUT):
+    frame_path = user_data_file("latest_frame.jpg")
+    if os.path.exists(frame_path):
         try:
-            os.remove(FRAME_OUTPUT)
+            os.remove(frame_path)
         except OSError:
             pass
-    if os.path.exists(stop_file):
+    stop_path = user_data_file("stop_session.request")
+    if process is not None and os.path.exists(stop_path):
         try:
-            os.remove(stop_file)
+            os.remove(stop_path)
         except OSError:
             pass
     return True, "Session ended. Your progress has been saved."
@@ -382,11 +485,15 @@ def stop_webcam():
 
 def inject_exit_handler():
     ensure_stop_server()
+    stop_url = f"http://127.0.0.1:{SESSION_STOP_PORT}/focusmate-stop/{hashlib.sha256(normalize_username(st.session_state.get('active_username')).encode('utf-8')).hexdigest()[:32]}"
     st.markdown(
         """
         <script>
-        const stopUrl = 'http://127.0.0.1:8765/focusmate-stop';
+        const stopUrl = '__STOP_URL__';
+        let stopSent = false;
         const triggerStop = () => {
+          if (stopSent) return;
+          stopSent = true;
           try {
             const payload = 'stop';
             if (navigator.sendBeacon) {
@@ -398,15 +505,9 @@ def inject_exit_handler():
             // ignore page-close cleanup errors
           }
         };
-        window.addEventListener('beforeunload', triggerStop);
         window.addEventListener('pagehide', triggerStop);
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'hidden') {
-            triggerStop();
-          }
-        });
         </script>
-        """,
+        """.replace("__STOP_URL__", stop_url),
         unsafe_allow_html=True,
     )
 
@@ -630,6 +731,7 @@ def inject_styles():
             color: var(--ink); text-shadow: 0 0 34px rgba(168,240,208,.13);
             font-variant-numeric: tabular-nums;
         }
+        .timer.running { animation: timer-breathe 3s ease-in-out infinite alternate; }
         .quest-card {
             padding: 1.05rem 1.2rem; margin: .55rem 0; border: 1px solid var(--line);
             border-radius: 17px; background: rgba(23,33,48,.68);
@@ -646,6 +748,7 @@ def inject_styles():
         @keyframes reveal { from { opacity: 0; transform: translateY(12px); filter: blur(8px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
         @keyframes floaty { from { transform: translateY(0) translateX(0); } to { transform: translateY(-18px) translateX(16px); } }
         @keyframes name-shimmer { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+        @keyframes timer-breathe { to { transform: scale(1.02); } }
         @media (prefers-reduced-motion: reduce) {
             *, *:before, *:after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
         }
@@ -657,16 +760,14 @@ def inject_styles():
 
 
 def welcome_intro_form():
-    profile = load_profile()
-    default_name = str(profile.get("player_name") or "").strip() or ""
-    default_username = str(profile.get("username") or "").strip() or ""
+    generation = int(st.session_state.get("login_form_generation", 0))
     st.markdown(
         """
         <div class="welcome-shell">
           <div class="welcome-card">
             <div class="welcome-badge">FocusMate</div>
             <h1 class="welcome-title">Welcome</h1>
-            <p class="welcome-subtitle">A calm study space built for your next focused hour. Tell us your name and username, and we’ll get you started.</p>
+            <p class="welcome-subtitle">A calm study space built for your next focused hour. Sign in with your username or create a new local profile.</p>
           </div>
         </div>
         """,
@@ -675,30 +776,47 @@ def welcome_intro_form():
     with st.form("welcome_form", clear_on_submit=False):
         st.markdown('<div class="welcome-form">', unsafe_allow_html=True)
         name = st.text_input(
-            "Your name",
-            value=default_name,
-            placeholder="Type your name here...",
+            "Your name (new profiles)",
+            placeholder="Enter a name when creating a profile...",
             max_chars=40,
+            key=f"welcome_name_{generation}",
         )
         username = st.text_input(
             "Username",
-            value=default_username,
-            placeholder="Choose a username...",
-            max_chars=25,
+            placeholder="Your saved username...",
+            max_chars=32,
+            key=f"welcome_username_{generation}",
         )
-        submitted = st.form_submit_button("Start my focus space", type="primary")
+        submitted = st.form_submit_button("Continue", type="primary")
         st.markdown('</div>', unsafe_allow_html=True)
+    st.caption("Existing usernames reopen their saved progress. New usernames create a separate profile on this computer.")
 
     if submitted:
-        cleaned_name = (name or "").strip() or "Focus friend"
-        cleaned_username = (username or "").strip() or "focusfriend"
+        cleaned_username = normalize_username(username)
+        if not cleaned_username:
+            st.error("Enter a username using letters, numbers, dots, dashes, or underscores.")
+            return
+
+        existing_profile = profile_exists(cleaned_username)
+        if existing_profile:
+            profile = load_profile(cleaned_username)
+            cleaned_name = str(profile.get("player_name") or "Focus friend").strip()
+        else:
+            cleaned_name = (name or "").strip()
+            if not cleaned_name:
+                st.error("Enter your name to create a new profile.")
+                return
+            profile = fresh_profile(cleaned_username)
+            profile["player_name"] = cleaned_name
+
+        st.session_state.active_username = cleaned_username
+        st.session_state.login_form_generation = generation + 1
         st.session_state.welcome_name = cleaned_name
         st.session_state.welcome_username = cleaned_username
         st.session_state.welcome_step = "animation"
         st.session_state.welcome_started_at = time.time()
-        profile["player_name"] = cleaned_name
         profile["username"] = cleaned_username
-        save_profile(profile)
+        save_profile(profile, cleaned_username)
         st.rerun()
 
 
@@ -748,6 +866,28 @@ def render_brand(profile):
     st.sidebar.progress((xp % LEVEL_STEP) / LEVEL_STEP)
     st.sidebar.caption(f"{LEVEL_STEP - (xp % LEVEL_STEP)} XP to your next level")
     st.sidebar.divider()
+    if st.sidebar.button(
+        "Switch profile",
+        width="stretch",
+        disabled=webcam_session_active() or st.session_state.get("focus_running", False),
+        help="Pause the focus timer and end the webcam session before switching profiles.",
+    ):
+        st.session_state.active_username = None
+        st.session_state.welcome_step = "form"
+        st.session_state.login_form_generation = int(
+            st.session_state.get("login_form_generation", 0)
+        ) + 1
+        for key in (
+            "focus_duration",
+            "focus_remaining",
+            "focus_deadline",
+            "focus_running",
+            "focus_finished",
+            "focus_preference_seen",
+            "pending_session_chime",
+        ):
+            st.session_state.pop(key, None)
+        st.rerun()
     st.sidebar.caption("Progress, not perfection. Take care of yourself.")
 
 
@@ -786,33 +926,61 @@ def hero(name, xp_to_next):
 
 
 def render_live_camera_preview():
-    if not os.path.exists(FRAME_OUTPUT):
+    frame_path = user_data_file("latest_frame.jpg")
+    if not os.path.exists(frame_path):
         return
     try:
         from PIL import Image
-        image = Image.open(FRAME_OUTPUT)
+        image = Image.open(frame_path)
         st.image(image, caption="Live camera feed", use_container_width=True)
     except Exception:
         try:
-            st.image(FRAME_OUTPUT, caption="Live camera feed", use_container_width=True)
+            st.image(frame_path, caption="Live camera feed", use_container_width=True)
         except Exception:
             pass
 
 
-def render_webcam_controls(live):
+def render_webcam_controls(live, profile):
     running = webcam_is_running()
     active = webcam_session_active()
-    updated = live.get("last_updated")
-    fresh = False
-    if updated:
-        try:
-            fresh = (datetime.now() - datetime.fromisoformat(updated)).total_seconds() < 20
-        except (ValueError, TypeError):
-            fresh = False
+    fresh = live_snapshot_is_fresh(live, max_age=20)
+    prefs = {**fresh_profile()["session_preferences"], **profile.get("session_preferences", {})}
+    wellbeing = profile.get("session_wellbeing") or {}
+    mood_checkin_required = (
+        bool(prefs.get("mood_checkins", True))
+        and wellbeing.get("mood_checkin_date") != date.today().isoformat()
+    )
+    selected_mood = "Choose a mood"
 
     if not running and not active:
+        if not prefs.get("focus_monitoring", True):
+            st.info("Webcam monitoring is off. Turn it on in Session preferences to start a camera session.")
+            render_live_camera_preview()
+            return
+
         st.info("Ready when you are. The camera only starts when you choose.")
-        if st.button("Start session", type="primary", width="stretch"):
+        if mood_checkin_required:
+            selected_mood = st.selectbox(
+                "How are you feeling before this session?",
+                ["Choose a mood", "Calm", "Focused", "Okay", "Tired", "Stressed"],
+                key=f"mood_checkin_{normalize_username(profile.get('username'))}_{date.today().isoformat()}",
+            )
+        if st.button(
+            "Start session",
+            type="primary",
+            width="stretch",
+            disabled=mood_checkin_required and selected_mood == "Choose a mood",
+        ):
+            if mood_checkin_required:
+                latest = load_profile()
+                latest_wellbeing = latest.get("session_wellbeing") or {}
+                latest_wellbeing.update({
+                    "mood": selected_mood,
+                    "mood_checkin_date": date.today().isoformat(),
+                    "mood_updated_at": datetime.now().isoformat(),
+                })
+                latest["session_wellbeing"] = latest_wellbeing
+                save_profile(latest)
             ok, message = start_webcam()
             (st.success if ok else st.error)(message)
             st.rerun()
@@ -835,6 +1003,8 @@ def render_webcam_controls(live):
 
     if active and fresh:
         st.success("Live connection · your study buddy is checking in.")
+        if prefs.get("posture_alerts", True) and live.get("posture") == "Slouching":
+            st.warning("Your posture looks uncomfortable. Try relaxing your shoulders or adjusting your seat.")
     elif active:
         st.warning("The latest camera update is delayed. Check that the detector is still running.")
     else:
@@ -860,6 +1030,22 @@ def render_overview(profile, live):
     with d:
         stat_card("Sessions", int(profile.get("sessions_completed", 0) or 0), "Completed")
     st.progress(xp_into_level / LEVEL_STEP, text=f"{xp_to_next} XP to Level {level + 1}")
+    preferences = profile.get("session_preferences", {})
+    daily_goal_seconds = max(1, int(preferences.get("daily_goal_minutes", 180) or 180)) * 60
+    today_seconds = sum(
+        item["seconds"]
+        for item in normalized_history(profile)
+        if item["date"] == date.today()
+    )
+    if live.get("session_active") and live_snapshot_is_fresh(live):
+        try:
+            today_seconds += max(0, int(float(live.get("session_seconds", 0) or 0)))
+        except (TypeError, ValueError):
+            pass
+    st.progress(
+        min(1.0, today_seconds / daily_goal_seconds),
+        text=f"Today's goal · {today_seconds // 60} of {daily_goal_seconds // 60} minutes",
+    )
 
     st.write("")
     left, right = st.columns([1.15, .85], gap="large")
@@ -879,7 +1065,7 @@ def render_overview(profile, live):
     with right:
         st.markdown('<div class="divider-label">Your study buddy</div>', unsafe_allow_html=True)
         st.subheader("Check in")
-        render_webcam_controls(live)
+        render_webcam_controls(live, profile)
         posture = str(live.get("posture") or "Waiting for data")
         distance = str(live.get("distance_status") or "Not measured")
         status = str(live.get("status") or "Waiting for webcam")
@@ -919,21 +1105,65 @@ def render_overview(profile, live):
         )
 
 
-def timer_controls():
+def render_pending_session_chime(profile):
+    kind = st.session_state.pop("pending_session_chime", None)
+    if kind not in {"start", "complete"}:
+        return
+    if not profile.get("session_preferences", {}).get("session_chimes", False):
+        return
+
+    sample_rate = 22050
+    note_duration = 0.18
+    notes = (587.33, 783.99) if kind == "start" else (783.99, 587.33)
+    frames = bytearray()
+    for index in range(int(sample_rate * note_duration * len(notes))):
+        elapsed = index / sample_rate
+        note_index = min(int(elapsed / note_duration), len(notes) - 1)
+        note_time = elapsed - note_index * note_duration
+        envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / 0.035)
+        sample = int(5000 * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
+        frames.extend(struct.pack("<h", sample))
+
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(frames)
+    st.audio(audio.getvalue(), format="audio/wav", autoplay=True, width="content")
+
+
+def timer_controls(profile):
     st.markdown('<div class="divider-label">A calm little Pomodoro</div>', unsafe_allow_html=True)
     durations = {"15 min": 15, "25 min": 25, "45 min": 45, "60 min": 60}
+    preferences = profile.get("session_preferences", {})
+    default_duration = max(15, min(120, int(preferences.get("session_length_minutes", 25) or 25)))
+    if default_duration not in durations.values():
+        durations[f"{default_duration} min"] = default_duration
     if "focus_duration" not in st.session_state:
-        st.session_state.focus_duration = 25
-        st.session_state.focus_remaining = 25 * 60
+        st.session_state.focus_duration = default_duration
+        st.session_state.focus_remaining = default_duration * 60
         st.session_state.focus_deadline = None
         st.session_state.focus_running = False
         st.session_state.focus_finished = False
+        st.session_state.focus_preference_seen = default_duration
+    elif (
+        not st.session_state.focus_running
+        and st.session_state.get("focus_preference_seen") != default_duration
+    ):
+        st.session_state.focus_duration = default_duration
+        st.session_state.focus_remaining = default_duration * 60
+        st.session_state.focus_finished = False
+        st.session_state.focus_preference_seen = default_duration
+    if st.session_state.focus_duration not in durations.values():
+        durations[f"{st.session_state.focus_duration} min"] = st.session_state.focus_duration
 
     selected_label = st.selectbox(
         "Choose a focus block",
         list(durations),
         index=list(durations.values()).index(st.session_state.focus_duration),
         disabled=st.session_state.focus_running,
+        key=f"focus_duration_{normalize_username(profile.get('username'))}",
     )
     selected_duration = durations[selected_label]
     if selected_duration != st.session_state.focus_duration and not st.session_state.focus_running:
@@ -948,12 +1178,15 @@ def timer_controls():
             st.session_state.focus_running = False
             st.session_state.focus_deadline = None
             st.session_state.focus_finished = True
+            if preferences.get("session_chimes", False):
+                st.session_state.pending_session_chime = "complete"
             st.toast("Focus block complete. Take a little break—you earned it.")
     else:
         remaining = int(st.session_state.focus_remaining)
     minutes, seconds = divmod(remaining, 60)
+    timer_state = " running" if st.session_state.focus_running else ""
     st.markdown(
-        f'<div class="timer" aria-label="Timer: {minutes} minutes and {seconds} seconds">'
+        f'<div class="timer{timer_state}" aria-label="Timer: {minutes} minutes and {seconds} seconds">'
         f'{minutes:02d}:{seconds:02d}</div>',
         unsafe_allow_html=True,
     )
@@ -971,6 +1204,8 @@ def timer_controls():
             st.session_state.focus_deadline = time.time() + remaining
             st.session_state.focus_running = True
             st.session_state.focus_finished = False
+            if preferences.get("session_chimes", False):
+                st.session_state.pending_session_chime = "start"
             st.rerun()
     with pause_col:
         if st.button("Pause", width="stretch", disabled=not st.session_state.focus_running):
@@ -994,10 +1229,16 @@ def timer_controls():
 
 
 def render_tasks(profile):
+    username = normalize_username(profile.get("username"))
     st.subheader("Your small-step list")
     st.caption("Keep it light: a few clear next steps are plenty.")
-    with st.form("add_task_form", clear_on_submit=True):
-        new_task = st.text_input("Add a task", placeholder="e.g. Review chapter two", max_chars=120)
+    with st.form(f"add_task_form_{username}", clear_on_submit=True):
+        new_task = st.text_input(
+            "Add a task",
+            placeholder="e.g. Review chapter two",
+            max_chars=120,
+            key=f"new_task_{username}",
+        )
         submitted = st.form_submit_button("Add to my list")
     if submitted:
         if new_task.strip():
@@ -1019,7 +1260,7 @@ def render_tasks(profile):
         checked = st.checkbox(
             task_text,
             value=bool(task.get("done", False)),
-            key=f"task_{task_id}",
+            key=f"task_{username}_{task_id}",
         )
         if checked != bool(task.get("done", False)):
             latest = load_profile()
@@ -1045,7 +1286,7 @@ def render_focus(profile, live):
     timer_col, session_col = st.columns([1.15, .85], gap="large")
     with timer_col:
         with st.container(border=True):
-            timer_controls()
+            timer_controls(profile)
     with session_col:
         st.markdown('<div class="divider-label">OPTIONAL CAMERA SESSION</div>', unsafe_allow_html=True)
         st.subheader("Study buddy")
@@ -1053,7 +1294,7 @@ def render_focus(profile, live):
             "Turn on webcam tracking only if it feels useful. You can use the focus timer and "
             "task list without enabling the camera."
         )
-        render_webcam_controls(live)
+        render_webcam_controls(live, profile)
         st.caption(
             "Camera estimates are guidance only, not grades or medical advice. "
             "You can stop a session at any time."
@@ -1101,7 +1342,8 @@ def render_insights(profile, live):
         daily = {start + timedelta(days=offset): 0 for offset in range(7)}
         for item in rows:
             if item["date"] in daily:
-                daily[item["date"]] += item["seconds"] // 60
+                daily[item["date"]] += item["seconds"]
+        daily = {day: seconds // 60 for day, seconds in daily.items()}
         chart_data = pd.DataFrame(
             {"Study minutes": list(daily.values())},
             index=[day.strftime("%a") for day in daily],
@@ -1179,7 +1421,12 @@ def sprint_is_unlocked(profile, live):
         live_seconds = int(float(live_seconds or 0))
     except (TypeError, ValueError):
         live_seconds = 0
-    return live_seconds >= 900 or any(
+    live_sprint_complete = (
+        bool(live.get("session_active"))
+        and live_snapshot_is_fresh(live)
+        and live_seconds >= 900
+    )
+    return live_sprint_complete or any(
         item["seconds"] >= 900 for item in normalized_history(profile)
     )
 
@@ -1209,7 +1456,7 @@ def render_quests(profile, live):
             st.caption("Complete a 15-minute study session to unlock this quest.")
         elif st.button(
             f"Claim {quest['reward']} XP",
-            key=f"claim_{quest['id']}",
+            key=f"claim_{normalize_username(profile.get('username'))}_{quest['id']}",
             disabled=not available,
         ):
             latest = load_profile()
@@ -1259,7 +1506,7 @@ def render_session_preferences(profile):
             st.markdown('<div class="settings-panel"><h3>Monitoring & reminders</h3>', unsafe_allow_html=True)
             rows = [
                 ("Focus monitoring", "Use the webcam locally to detect attention", "focus_monitoring"),
-                ("Posture alerts", "Nudge me when I slouch for over 2 minutes", "posture_alerts"),
+                ("Posture alerts", "Show a gentle reminder when the detector reports slouching", "posture_alerts"),
                 ("Mood check-ins", "Ask how I feel before each first session", "mood_checkins"),
                 ("Session chimes", "Soft tone at start and end of a block", "session_chimes"),
             ]
@@ -1268,8 +1515,28 @@ def render_session_preferences(profile):
                 with c1:
                     st.markdown(f'<div class="settings-label">{html.escape(label)}<span class="settings-caption">{html.escape(caption)}</span></div>', unsafe_allow_html=True)
                 with c2:
-                    enabled = st.toggle("", value=bool(prefs.get(key_name, default_prefs.get(key_name, False))), key=f"pref_{key_name}")
+                    enabled = st.toggle(
+                        "",
+                        value=bool(prefs.get(key_name, default_prefs.get(key_name, False))),
+                        key=f"pref_{normalize_username(profile.get('username'))}_{key_name}",
+                    )
                     prefs[key_name] = enabled
+            prefs["session_length_minutes"] = st.number_input(
+                "Default focus block (minutes)",
+                min_value=15,
+                max_value=120,
+                step=5,
+                value=int(prefs.get("session_length_minutes", 25) or 25),
+                key=f"pref_{normalize_username(profile.get('username'))}_session_length_minutes",
+            )
+            prefs["daily_goal_minutes"] = st.number_input(
+                "Daily study goal (minutes)",
+                min_value=30,
+                max_value=720,
+                step=15,
+                value=int(prefs.get("daily_goal_minutes", 180) or 180),
+                key=f"pref_{normalize_username(profile.get('username'))}_daily_goal_minutes",
+            )
             st.markdown('</div>', unsafe_allow_html=True)
 
         latest = load_profile()
@@ -1288,9 +1555,13 @@ def render_session_preferences(profile):
         profile_rows = [
             ("Name", str(profile.get("player_name") or "Focus friend").strip() or "Focus friend"),
             ("Handle", f"@{str(profile.get('username') or 'focusfriend').strip() or 'focusfriend'}"),
-            ("Rank", "Deep Work Adept"),
-            ("Session length", "50 minutes"),
-            ("Daily goal", "3 hours"),
+            ("Rank", f"Level {max(0, int(profile.get('total_xp', 0) or 0)) // LEVEL_STEP + 1}"),
+            ("Session length", f"{int(prefs.get('session_length_minutes', 25) or 25)} minutes"),
+            (
+                "Daily goal",
+                f"{int(prefs.get('daily_goal_minutes', 180) or 180) // 60}h "
+                f"{int(prefs.get('daily_goal_minutes', 180) or 180) % 60:02d}m",
+            ),
         ]
         for key, value in profile_rows:
             st.markdown(
@@ -1300,6 +1571,7 @@ def render_session_preferences(profile):
 
 
 def render_profile(profile):
+    username_key = normalize_username(profile.get("username"))
     page_header(
         "YOUR SPACE",
         "Make it yours.",
@@ -1308,16 +1580,19 @@ def render_profile(profile):
     left, right = st.columns([1, 1], gap="large")
     with left:
         st.subheader("A little about you")
-        with st.form("profile_form"):
+        with st.form(f"profile_form_{username_key}"):
             name = st.text_input(
                 "What should we call you?",
                 value=str(profile.get("player_name") or "Focus friend"),
                 max_chars=40,
+                key=f"profile_name_{username_key}",
             )
             username = st.text_input(
                 "Username",
                 value=str(profile.get("username") or "focusfriend"),
-                max_chars=25,
+                max_chars=32,
+                disabled=True,
+                key=f"profile_username_{username_key}",
             )
             saved = st.form_submit_button("Save details", type="primary")
         if saved:
@@ -1326,7 +1601,6 @@ def render_profile(profile):
             else:
                 latest = load_profile()
                 latest["player_name"] = name.strip()
-                latest["username"] = username.strip() or "focusfriend"
                 save_profile(latest)
                 st.success("Your profile has been updated.")
                 st.rerun()
@@ -1334,35 +1608,40 @@ def render_profile(profile):
         st.subheader("Wellbeing check-in")
         st.caption("These are personal notes; the webcam does not measure sleep, water, or wellbeing.")
         wellbeing = profile["session_wellbeing"]
-        with st.form("wellbeing_form"):
+        with st.form(f"wellbeing_form_{username_key}"):
             sleep = st.number_input(
                 "Hours of sleep last night",
                 min_value=0.0,
                 max_value=24.0,
                 value=float(wellbeing.get("sleep_hours", 0.0) or 0.0),
                 step=0.5,
+                key=f"sleep_hours_{username_key}",
             )
             water = st.number_input(
                 "Glasses of water today",
                 min_value=0,
                 max_value=100,
                 value=int(wellbeing.get("water_glasses", 0) or 0),
+                key=f"water_glasses_{username_key}",
             )
             reflection = st.text_area(
                 "A kind note to future you",
                 value=str(wellbeing.get("reflection", "")),
                 max_chars=500,
                 placeholder="What went well? What would make tomorrow easier?",
+                key=f"reflection_{username_key}",
             )
             save_checkin = st.form_submit_button("Save check-in", type="primary")
         if save_checkin:
             latest = load_profile()
-            latest["session_wellbeing"] = {
+            saved_wellbeing = latest.get("session_wellbeing") or {}
+            saved_wellbeing.update({
                 "sleep_hours": float(sleep),
                 "water_glasses": int(water),
                 "reflection": reflection.strip(),
                 "updated_at": datetime.now().isoformat(),
-            }
+            })
+            latest["session_wellbeing"] = saved_wellbeing
             save_profile(latest)
             st.success("Your check-in has been saved.")
             st.rerun()
@@ -1395,40 +1674,48 @@ def run_app():
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    st_autorefresh(interval=1000, key="focusmate_live_refresh")
     inject_styles()
-    inject_exit_handler()
-    profile = load_profile()
-    live = load_live_data()
-    kill_stale_webcam_processes()
     if "webcam_process" not in st.session_state:
         st.session_state.webcam_process = None
     if "webcam_start_time" not in st.session_state:
         st.session_state.webcam_start_time = None
 
-    if consume_session_reset_marker():
+    if "welcome_step" not in st.session_state:
         st.session_state.welcome_step = "form"
-    elif "welcome_step" not in st.session_state:
-        if str(profile.get("player_name") or "").strip() and str(profile.get("username") or "").strip():
-            st.session_state.welcome_step = "main"
-        else:
-            st.session_state.welcome_step = "form"
-    elif st.session_state.welcome_step == "form":
-        if str(profile.get("player_name") or "").strip() and str(profile.get("username") or "").strip():
-            st.session_state.welcome_step = "main"
-    if "welcome_name" not in st.session_state:
-        st.session_state.welcome_name = str(profile.get("player_name") or "").strip() or "Focus friend"
-    if "welcome_username" not in st.session_state:
-        st.session_state.welcome_username = str(profile.get("username") or "").strip() or "focusfriend"
+    if not normalize_username(st.session_state.get("active_username")):
+        st.session_state.welcome_step = "form"
+    elif consume_session_reset_marker():
+        st.session_state.welcome_step = "form"
 
     if st.session_state.welcome_step == "form":
         welcome_intro_form()
         return
 
+    username = normalize_username(st.session_state.get("active_username"))
+    if not username:
+        st.session_state.welcome_step = "form"
+        welcome_intro_form()
+        return
+
+    profile = load_profile(username)
+    live = load_live_data()
+    if "welcome_name" not in st.session_state:
+        st.session_state.welcome_name = str(profile.get("player_name") or "").strip() or "Focus friend"
+    if "welcome_username" not in st.session_state:
+        st.session_state.welcome_username = str(profile.get("username") or "").strip() or "focusfriend"
+
+    if st.session_state.welcome_step == "animation":
+        st_autorefresh(interval=200, key="focusmate_welcome_refresh")
+    elif st.session_state.get("focus_running"):
+        st_autorefresh(interval=1000, key="focusmate_timer_refresh")
+    elif webcam_session_active():
+        st_autorefresh(interval=2000, key="focusmate_live_refresh")
+
     if st.session_state.welcome_step == "animation":
         welcome_animation()
         return
 
+    inject_exit_handler()
     render_brand(profile)
     pages = {
         "Your space": [
@@ -1475,6 +1762,7 @@ def run_app():
     }
     page = st.navigation(pages, position="sidebar")
     page.run()
+    render_pending_session_chime(profile)
     st.markdown(
         '<div style="margin-top:3rem;padding-top:1rem;border-top:1px solid rgba(193,217,220,.1);'
         'color:#8794a8;font-size:.78rem">FocusMate · Progress, not perfection. Be kind to yourself.</div>',
