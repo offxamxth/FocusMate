@@ -1,11 +1,11 @@
 # FocusMate
 
-FocusMate is a desktop-like productivity assistant that combines webcam-based attention monitoring with a Streamlit dashboard.
+FocusMate is a desktop-like productivity assistant that combines optional webcam-based attention monitoring with a multi-page Streamlit study space.
 
 ## Project structure
 
 - `start_focusmate.py` – launches the webcam detector and the dashboard together
-- `dashboard/` – Streamlit dashboard files and session data
+- `dashboard/` – animated multi-page Streamlit app, profile, and session data
 - `webcam_detection/` – Mediapipe-based camera monitoring and event detection
 
 ## Requirements
@@ -43,10 +43,16 @@ To open only the dashboard:
 dashboard\venv\Scripts\python.exe -m streamlit run dashboard\step7_analytics.py
 ```
 
-This starts:
+This opens the dashboard. Webcam detection remains off until you start a
+session from the Focus room or Overview page:
 
-1. the webcam AI detection
-2. the Streamlit dashboard in the browser
+1. the Streamlit dashboard in your browser
+2. optional webcam AI detection, started only when requested in the dashboard
+
+The dashboard includes an overview, a focus room with a Pomodoro timer and task
+list, session insights, daily quests, and profile/wellbeing settings. The webcam
+is optional; the timer and task list work without it. Use the sidebar to switch
+between pages.
 
 ## Notes
 

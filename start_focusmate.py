@@ -1,11 +1,8 @@
 """
-FocusMate - Automatic Launcher
+FocusMate launcher.
 
-Starts:
-    1. Webcam AI detection
-    2. Streamlit dashboard
-
-The existing webcam and dashboard files are not modified.
+Starts the Streamlit dashboard. Webcam detection is started on demand
+from the FocusMate dashboard.
 """
 
 import os
@@ -21,19 +18,9 @@ import webbrowser
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WEBCAM_DIR = os.path.join(
-    BASE_DIR,
-    "webcam_detection"
-)
-
 DASHBOARD_DIR = os.path.join(
     BASE_DIR,
     "dashboard"
-)
-
-WEBCAM_FILE = os.path.join(
-    WEBCAM_DIR,
-    "integrated_detection.py"
 )
 
 DASHBOARD_FILE = os.path.join(
@@ -60,14 +47,6 @@ print("=" * 60)
 
 print()
 
-if not os.path.exists(WEBCAM_FILE):
-
-    print("ERROR: Webcam file not found:")
-    print(WEBCAM_FILE)
-    input("\nPress Enter to exit...")
-    sys.exit(1)
-
-
 if not os.path.exists(DASHBOARD_FILE):
 
     print("ERROR: Dashboard file not found:")
@@ -84,42 +63,6 @@ if not os.path.exists(DASHBOARD_PYTHON):
     print("Make sure the dashboard venv exists.")
     input("\nPress Enter to exit...")
     sys.exit(1)
-
-
-# =========================================================
-# START WEBCAM AI
-# =========================================================
-
-webcam_process = None
-
-try:
-    import cv2  # noqa: F401
-    import mediapipe  # noqa: F401
-except ImportError:
-    print("Webcam AI is unavailable in this Python environment.")
-    print("The dashboard will continue without webcam detection.")
-    print("Install Python 3.12 or 3.13 and webcam_detection/requirements.txt for webcam support.")
-    print()
-else:
-    print("Starting webcam AI...")
-    print()
-
-    webcam_process = subprocess.Popen(
-        [
-            WEBCAM_PYTHON,
-            WEBCAM_FILE,
-        ],
-        cwd=WEBCAM_DIR,
-    )
-
-
-# =========================================================
-# GIVE CAMERA TIME TO START
-# =========================================================
-
-if webcam_process is not None:
-    print("Waiting for webcam AI to initialize...")
-    time.sleep(3)
 
 
 # =========================================================
@@ -169,8 +112,8 @@ print("=" * 60)
 print("             FOCUSMATE IS RUNNING")
 print("=" * 60)
 print()
-print("Camera AI:     RUNNING")
 print("Dashboard:     RUNNING")
+print("Webcam AI:     starts only when requested in the dashboard")
 print()
 print("Dashboard:")
 print("http://localhost:8501")
@@ -182,14 +125,6 @@ print("=" * 60)
 try:
 
     while True:
-
-        # If webcam closes unexpectedly
-        if webcam_process is not None and webcam_process.poll() is not None:
-
-            print()
-            print("⚠️ Webcam AI has stopped.")
-            print("Dashboard will continue running without webcam detection.")
-            webcam_process = None
 
         # If dashboard closes unexpectedly
         if dashboard_process.poll() is not None:
@@ -211,10 +146,6 @@ except KeyboardInterrupt:
 # =========================================================
 # CLEAN SHUTDOWN
 # =========================================================
-
-if webcam_process is not None:
-    print("Stopping webcam AI...")
-    webcam_process.terminate()
 
 print("Stopping dashboard...")
 dashboard_process.terminate()
