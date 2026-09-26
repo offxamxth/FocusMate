@@ -49,6 +49,12 @@ SESSION_FILE = os.path.abspath(
         "session_data.json"
     )
 )
+FRAME_OUTPUT = os.path.abspath(
+    os.path.join(
+        os.path.dirname(SESSION_FILE),
+        "latest_frame.jpg"
+    )
+)
 
 STOP_FILE = os.path.join(
     os.path.dirname(SESSION_FILE),
@@ -1094,6 +1100,12 @@ if __name__ == "__main__":
 
             data = monitor.process_frame(frame)
 
+            try:
+                os.makedirs(os.path.dirname(FRAME_OUTPUT), exist_ok=True)
+                cv2.imwrite(FRAME_OUTPUT, frame)
+            except Exception:
+                pass
+
             print(
                 f"Score: {data['focus_score']} | "
                 f"Status: {data['status']} | "
@@ -1102,16 +1114,6 @@ if __name__ == "__main__":
                 f"Away: {data['looking_away']} | "
                 f"Distance: {data['distance_status']}"
             )
-
-            cv2.imshow("FocusMate AI", frame)
-
-            # ------------------------------------------------
-            # KEYBOARD STOP
-            # ------------------------------------------------
-
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("Q pressed. Ending session.")
-                break
 
     except KeyboardInterrupt:
         print()
@@ -1144,7 +1146,11 @@ if __name__ == "__main__":
         if cap is not None:
             cap.release()
 
-        cv2.destroyAllWindows()
+        if os.path.exists(FRAME_OUTPUT):
+            try:
+                os.remove(FRAME_OUTPUT)
+            except OSError:
+                pass
 
         # ----------------------------------------------------
         # REMOVE STOP REQUEST

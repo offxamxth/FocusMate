@@ -3,11 +3,14 @@
 import json
 import html
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import date, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pandas as pd
 import streamlit as st
@@ -17,9 +20,34 @@ from streamlit_autorefresh import st_autorefresh
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILE_FILE = os.path.join(HERE, "player_profile.json")
 SESSION_FILE = os.path.join(HERE, "session_data.json")
+RESET_MARKER_FILE = os.path.join(HERE, "session_closed.marker")
+FRAME_OUTPUT = os.path.join(HERE, "latest_frame.jpg")
 WEBCAM_DIR = os.path.abspath(os.path.join(HERE, "..", "webcam_detection"))
 WEBCAM_FILE = os.path.join(WEBCAM_DIR, "integrated_detection.py")
-WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", sys.executable)
+
+
+def resolve_webcam_python():
+    candidates = [
+        os.environ.get("FOCUSMATE_WEBCAM_PYTHON"),
+        os.path.join(os.path.expanduser("~"), "focusmate-webcam-venv", "Scripts", "python.exe"),
+        os.path.join(os.path.expanduser("~"), "focusmate-webcam-venv", "bin", "python"),
+        shutil.which("python"),
+        shutil.which("python3"),
+        sys.executable,
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    for candidate in candidates:
+        if candidate:
+            return candidate
+    return sys.executable
+
+
+DEFAULT_WEBCAM_PYTHON = resolve_webcam_python()
+WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", DEFAULT_WEBCAM_PYTHON)
+SESSION_STOP_PORT = 8765
+SESSION_STOP_SERVER = None
 LEVEL_STEP = 100
 
 QUESTS = [
@@ -58,6 +86,7 @@ def fresh_profile():
     return {
         "version": 1,
         "player_name": "Focus friend",
+        "username": "focusfriend",
         "total_xp": 0,
         "total_study_seconds": 0,
         "sessions_completed": 0,
@@ -66,6 +95,12 @@ def fresh_profile():
         "session_history": [],
         "tasks": [],
         "session_wellbeing": {},
+        "session_preferences": {
+            "focus_monitoring": True,
+            "posture_alerts": True,
+            "mood_checkins": True,
+            "session_chimes": False,
+        },
         "last_session_id": None,
         "created_at": datetime.now().isoformat(),
     }
@@ -84,6 +119,8 @@ def load_profile():
     profile = loaded if isinstance(loaded, dict) else fresh_profile()
     for key, value in fresh_profile().items():
         profile.setdefault(key, value)
+    if not isinstance(profile.get("username"), str):
+        profile["username"] = "focusfriend"
     if not isinstance(profile["session_history"], list):
         profile["session_history"] = []
     if not isinstance(profile["quest_claims"], list):
@@ -92,6 +129,10 @@ def load_profile():
         profile["tasks"] = []
     if not isinstance(profile["session_wellbeing"], dict):
         profile["session_wellbeing"] = {}
+    if not isinstance(profile.get("session_preferences"), dict):
+        profile["session_preferences"] = {}
+    default_prefs = fresh_profile()["session_preferences"]
+    profile["session_preferences"] = {**default_prefs, **profile["session_preferences"]}
     return profile
 
 
@@ -116,12 +157,126 @@ def load_live_data():
     return data if isinstance(data, dict) else {}
 
 
+def kill_stale_webcam_processes():
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'integrated_detection.py' }; foreach ($p in $procs) { $p.Terminate() }",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        pass
+
+
+def mark_session_closed():
+    try:
+        with open(RESET_MARKER_FILE, "w", encoding="utf-8") as file:
+            file.write(datetime.now().isoformat())
+    except OSError:
+        pass
+
+
+def consume_session_reset_marker():
+    if not os.path.exists(RESET_MARKER_FILE):
+        return False
+
+    try:
+        with open(RESET_MARKER_FILE, "r", encoding="utf-8") as file:
+            marker_value = (file.read() or "").strip()
+    except OSError:
+        marker_value = ""
+
+    if marker_value:
+        try:
+            marker_time = datetime.fromisoformat(marker_value)
+            if (datetime.now() - marker_time).total_seconds() < 5:
+                return False
+        except ValueError:
+            pass
+
+    live = load_live_data()
+    if isinstance(live, dict) and bool(live.get("session_active")):
+        return False
+
+    try:
+        os.remove(RESET_MARKER_FILE)
+    except OSError:
+        pass
+    return True
+
+
 def webcam_is_running():
     process = st.session_state.get("webcam_process")
     return process is not None and process.poll() is None
 
 
+def webcam_session_active():
+    if webcam_is_running():
+        return True
+
+    window = st.session_state.get("webcam_start_time")
+    if isinstance(window, datetime):
+        if (datetime.now() - window).total_seconds() <= 35:
+            return True
+
+    live = load_live_data()
+    if live.get("session_active"):
+        updated = live.get("last_updated")
+        if updated:
+            try:
+                last_update = datetime.fromisoformat(updated)
+                return (datetime.now() - last_update).total_seconds() <= 35
+            except (TypeError, ValueError):
+                return False
+    return False
+
+
+def ensure_stop_server():
+    global SESSION_STOP_SERVER
+    if SESSION_STOP_SERVER is not None:
+        return SESSION_STOP_SERVER
+
+    class StopHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == "/focusmate-stop":
+                try:
+                    if "webcam_process" in st.session_state:
+                        stop_webcam()
+                    mark_session_closed()
+                except Exception:
+                    try:
+                        mark_session_closed()
+                    except Exception:
+                        pass
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            return
+
+    server = HTTPServer(("127.0.0.1", SESSION_STOP_PORT), StopHandler)
+    SESSION_STOP_SERVER = server
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
 def start_webcam():
+    kill_stale_webcam_processes()
     if webcam_is_running():
         return True, "Your study session is already running."
     if not os.path.isfile(WEBCAM_FILE):
@@ -157,31 +312,103 @@ def start_webcam():
         st.session_state.webcam_process = subprocess.Popen(
             [WEBCAM_PYTHON, WEBCAM_FILE], cwd=WEBCAM_DIR
         )
+        st.session_state.webcam_start_time = datetime.now()
     except OSError as error:
         return False, f"Could not start the webcam detector: {error}"
     return True, "Your webcam study session has started."
 
 
 def stop_webcam():
+    kill_stale_webcam_processes()
     process = st.session_state.get("webcam_process")
     if process is None or process.poll() is not None:
         st.session_state.webcam_process = None
+        st.session_state.webcam_start_time = None
+        if os.path.exists(FRAME_OUTPUT):
+            try:
+                os.remove(FRAME_OUTPUT)
+            except OSError:
+                pass
         return False, "There is no running webcam session to stop."
 
     stop_file = os.path.join(HERE, "stop_session.request")
     try:
         with open(stop_file, "w", encoding="utf-8") as file:
             file.write("stop")
-        process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        return False, (
-            "The detector has not stopped within 30 seconds. It is still "
-            "running so your session data is not interrupted."
-        )
+
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            if sys.platform.startswith("win"):
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
     except OSError as error:
         return False, f"Could not stop the webcam detector: {error}"
+
     st.session_state.webcam_process = None
+    st.session_state.webcam_start_time = None
+    if os.path.exists(FRAME_OUTPUT):
+        try:
+            os.remove(FRAME_OUTPUT)
+        except OSError:
+            pass
+    if os.path.exists(stop_file):
+        try:
+            os.remove(stop_file)
+        except OSError:
+            pass
     return True, "Session ended. Your progress has been saved."
+
+
+def inject_exit_handler():
+    ensure_stop_server()
+    st.markdown(
+        """
+        <script>
+        const stopUrl = 'http://127.0.0.1:8765/focusmate-stop';
+        const triggerStop = () => {
+          try {
+            const payload = 'stop';
+            if (navigator.sendBeacon) {
+              navigator.sendBeacon(stopUrl, payload);
+              return;
+            }
+            fetch(stopUrl, { method: 'POST', mode: 'no-cors', keepalive: true, body: payload });
+          } catch (error) {
+            // ignore page-close cleanup errors
+          }
+        };
+        window.addEventListener('beforeunload', triggerStop);
+        window.addEventListener('pagehide', triggerStop);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') {
+            triggerStop();
+          }
+        });
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def inject_styles():
@@ -230,8 +457,8 @@ def inject_styles():
             box-shadow: 0 8px 24px rgba(82,190,151,.13); border-color: var(--mint);
         }
         div[data-testid="stButton"] button[kind="primary"] {
-            color: #10211c; border: 0;
-            background: linear-gradient(105deg, var(--mint), var(--lime));
+            color: #f5f4f0; border: 0;
+            background: #0b0d11;
             font-weight: 700;
         }
         [data-testid="stProgressBar"] > div > div {
@@ -241,6 +468,17 @@ def inject_styles():
         [data-testid="stProgressBar"] > div { background: rgba(255,255,255,.09); }
         [data-testid="stTabs"] button { color: var(--muted); }
         [data-testid="stTabs"] button[aria-selected="true"] { color: var(--mint); }
+        div[data-testid="stToggle"] > div > div > div > div > input[role="switch"] {
+            background-color: rgba(255,255,255,.14);
+            border: 1px solid rgba(255,255,255,.15);
+        }
+        div[data-testid="stToggle"] > div > div > div > div > input[role="switch"][aria-checked="true"] {
+            background-color: #35d9a5 !important;
+            border-color: #35d9a5 !important;
+        }
+        div[data-testid="stToggle"] > div > div > div > div > span {
+            background-color: #ffffff;
+        }
         [data-testid="stDataFrame"], [data-testid="stTable"] {
             border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
         }
@@ -251,6 +489,106 @@ def inject_styles():
         [data-testid="stAlert"] { border-radius: 14px; }
         .brand-lockup { font: 800 1.2rem 'Aptos Display','Segoe UI',sans-serif; letter-spacing: -.05em; color: var(--ink); }
         .brand-lockup span { color: var(--mint); }
+        .nav-greeting {
+            margin: 0 0 1rem; padding: 1rem .9rem .9rem; border-radius: 18px;
+            border: 1px solid rgba(168,240,208,.18); background: linear-gradient(135deg, rgba(26,39,48,.88), rgba(15,22,31,.78));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 18px 35px rgba(10,18,24,.22);
+            position: sticky; top: 0; z-index: 2;
+        }
+        .nav-greeting-kicker {
+            color: var(--mint); font-size: .62rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 700;
+        }
+        .nav-greeting-name {
+            margin-top: .5rem; font-size: 1.7rem; line-height: 1.1; font-weight: 800; letter-spacing: -.06em; color: var(--ink);
+            text-shadow: 0 0 22px rgba(168,240,208,.18);
+        }
+        .nav-greeting-handle {
+            margin-top: .2rem; color: #b5c2d1; font-size: .8rem; letter-spacing: .04em;
+        }
+        .settings-shell {
+            padding: 0.5rem 0 0;
+        }
+        .settings-header {
+            display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem;
+        }
+        .settings-badge {
+            display: inline-flex; align-items: center; padding: .35rem .65rem; border-radius: 999px;
+            background: rgba(168,240,208,.08); color: var(--mint); border: 1px solid rgba(168,240,208,.18);
+            font-size: .72rem; letter-spacing: .16em; text-transform: uppercase; font-weight: 700;
+        }
+        .settings-panel {
+            padding: 1.1rem 1.3rem; background: rgba(17, 25, 34, 0.78); border: 1px solid rgba(193,217,220,.12); border-radius: 22px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.02);
+        }
+        .settings-panel h3 {
+            margin: 0 0 0.9rem; font-size: 1.18rem; color: var(--ink);
+        }
+        .settings-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+            padding: 1rem 0; border-top: 1px solid rgba(193,217,220,.08);
+        }
+        .settings-row:first-of-type { border-top: 0; }
+        .settings-label {
+            color: #dfe8f3; font-size: 1.05rem; line-height: 1.5;
+        }
+        .settings-caption {
+            display: block; margin-top: .2rem; color: #8ea0b5; font-size: .88rem;
+        }
+        .profile-card {
+            padding: 1.25rem 1.2rem; background: rgba(17, 25, 34, 0.82); border: 1px solid rgba(193,217,220,.12); border-radius: 20px; min-height: 100%;
+        }
+        .profile-card h3 { margin: 0 0 1.2rem; font-size: 1.25rem; }
+        .profile-line {
+            display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .7rem 0; border-top: 1px solid rgba(193,217,220,.08);
+        }
+        .profile-line:first-of-type { border-top: 0; }
+        .profile-key { color: #9aa9bb; font-size: .98rem; }
+        .profile-value { color: var(--ink); font-weight: 600; font-size: 1rem; }
+        .welcome-shell {
+            min-height: 84vh; display: grid; place-items: center; padding: 2rem 0 1rem;
+        }
+        .welcome-card {
+            width: min(680px, 100%); padding: 2.2rem 2rem; border-radius: 32px;
+            border: 1px solid rgba(193,217,220,.16); background: linear-gradient(135deg, rgba(38,56,57,.72), rgba(17,28,37,.88));
+            box-shadow: 0 30px 80px rgba(0,0,0,.22); text-align: center; position: relative; overflow: hidden;
+            animation: fade-up .76s ease both;
+        }
+        .welcome-card:before {
+            content: ''; position: absolute; inset: -30% auto auto -10%; width: 260px; height: 260px; border-radius: 50%;
+            background: rgba(168,240,208,.12); filter: blur(10px); animation: floaty 8s ease-in-out infinite alternate;
+        }
+        .welcome-card:after {
+            content: ''; position: absolute; inset: auto -8% -30% auto; width: 240px; height: 240px; border-radius: 50%;
+            background: rgba(214,245,138,.10); filter: blur(8px); animation: floaty 10s ease-in-out infinite alternate-reverse;
+        }
+        .welcome-badge {
+            position: relative; display: inline-block; padding: .55rem .9rem; border-radius: 999px; border: 1px solid rgba(168,240,208,.35);
+            background: rgba(168,240,208,.08); color: var(--mint); letter-spacing: .18em; text-transform: uppercase; font-size: .7rem; font-weight: 700;
+        }
+        .welcome-title {
+            position: relative; margin: 1.2rem 0 .5rem; font-size: clamp(2.3rem, 5vw, 4.3rem); line-height: 1.05; font-weight: 800;
+            color: var(--ink); letter-spacing: -.06em; animation: reveal 1.1s ease both;
+        }
+        .welcome-name {
+            position: relative; display: inline-block; background: linear-gradient(90deg, #a8f0d0, #d6f58a, #dceef2, #a8f0d0);
+            background-size: 220% 100%; color: transparent; -webkit-background-clip: text; background-clip: text; animation: name-shimmer 3s linear infinite;
+            text-shadow: 0 0 26px rgba(168,240,208,.18);
+        }
+        .welcome-subtitle {
+            position: relative; margin: 0 auto; max-width: 560px; color: #d2dbe6; font-size: 1.05rem; line-height: 1.7;
+        }
+        .welcome-form {
+            position: relative; margin-top: 1.8rem; display: flex; flex-direction: column; gap: 1rem; align-items: center;
+        }
+        .welcome-form .stTextInput > div > div > input {
+            min-height: 3.2rem; border-radius: 14px; background: rgba(10,17,23,.45); border: 1px solid rgba(193,217,220,.12);
+            color: var(--ink); font-size: 1.05rem; box-shadow: 0 0 0 rgba(0,0,0,0);
+        }
+        .welcome-actions { position: relative; margin-top: .6rem; }
+        .welcome-actions .stButton > button {
+            min-width: 230px; border-radius: 999px; border: none; font-weight: 700; padding: .8rem 1.5rem;
+            background: linear-gradient(90deg, #a8f0d0, #d6f58a); color: #0d151e; box-shadow: 0 18px 35px rgba(168,240,208,.2);
+        }
         .eyebrow { color: var(--mint); font-size: .72rem; font-weight: 700; letter-spacing: .17em; text-transform: uppercase; }
         .hero {
             position: relative; overflow: hidden; padding: 2rem 2.1rem; margin-bottom: 1.2rem;
@@ -304,6 +642,10 @@ def inject_styles():
         @keyframes rise-in { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes drift { from { transform: translate(0,0); } to { transform: translate(-20px,18px); } }
         @keyframes glow-shift { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+        @keyframes fade-up { from { opacity: 0; transform: translateY(20px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes reveal { from { opacity: 0; transform: translateY(12px); filter: blur(8px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
+        @keyframes floaty { from { transform: translateY(0) translateX(0); } to { transform: translateY(-18px) translateX(16px); } }
+        @keyframes name-shimmer { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
         @media (prefers-reduced-motion: reduce) {
             *, *:before, *:after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
         }
@@ -314,13 +656,92 @@ def inject_styles():
     )
 
 
+def welcome_intro_form():
+    profile = load_profile()
+    default_name = str(profile.get("player_name") or "").strip() or ""
+    default_username = str(profile.get("username") or "").strip() or ""
+    st.markdown(
+        """
+        <div class="welcome-shell">
+          <div class="welcome-card">
+            <div class="welcome-badge">FocusMate</div>
+            <h1 class="welcome-title">Welcome</h1>
+            <p class="welcome-subtitle">A calm study space built for your next focused hour. Tell us your name and username, and we’ll get you started.</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.form("welcome_form", clear_on_submit=False):
+        st.markdown('<div class="welcome-form">', unsafe_allow_html=True)
+        name = st.text_input(
+            "Your name",
+            value=default_name,
+            placeholder="Type your name here...",
+            max_chars=40,
+        )
+        username = st.text_input(
+            "Username",
+            value=default_username,
+            placeholder="Choose a username...",
+            max_chars=25,
+        )
+        submitted = st.form_submit_button("Start my focus space", type="primary")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if submitted:
+        cleaned_name = (name or "").strip() or "Focus friend"
+        cleaned_username = (username or "").strip() or "focusfriend"
+        st.session_state.welcome_name = cleaned_name
+        st.session_state.welcome_username = cleaned_username
+        st.session_state.welcome_step = "animation"
+        st.session_state.welcome_started_at = time.time()
+        profile["player_name"] = cleaned_name
+        profile["username"] = cleaned_username
+        save_profile(profile)
+        st.rerun()
+
+
+def welcome_animation():
+    name = str(st.session_state.get("welcome_name") or "Focus friend").strip() or "Focus friend"
+    start_time = float(st.session_state.get("welcome_started_at") or time.time())
+    elapsed = time.time() - start_time
+
+    st.markdown(
+        f"""
+        <div class="welcome-shell">
+          <div class="welcome-card">
+            <div class="welcome-badge">FocusMate</div>
+            <h1 class="welcome-title">Welcome, <span class="welcome-name">{html.escape(name)}</span></h1>
+            <p class="welcome-subtitle">Your study space is ready. Take a breath, pick one task, and let the next focused session begin.</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if elapsed >= 2.0:
+        st.session_state.welcome_step = "main"
+        st.rerun()
+
+
 def render_brand(profile):
     name = str(profile.get("player_name") or "Focus friend").strip() or "Focus friend"
+    username = str(profile.get("username") or "focusfriend").strip() or "focusfriend"
+    st.sidebar.markdown(
+        f"""
+        <div class="nav-greeting">
+          <div class="nav-greeting-kicker">Welcome back</div>
+          <div class="nav-greeting-name">{html.escape(name)}</div>
+          <div class="nav-greeting-handle">@{html.escape(username)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.sidebar.markdown(
         '<div class="brand-lockup">focus<span>mate</span> ✳</div>',
         unsafe_allow_html=True,
     )
-    st.sidebar.caption(f"A little more focus, {name}.")
     xp = max(0, int(profile.get("total_xp", 0) or 0))
     level = xp // LEVEL_STEP + 1
     st.sidebar.markdown(f"**Level {level}** · {xp:,} lifetime XP")
@@ -364,9 +785,23 @@ def hero(name, xp_to_next):
     )
 
 
+def render_live_camera_preview():
+    if not os.path.exists(FRAME_OUTPUT):
+        return
+    try:
+        from PIL import Image
+        image = Image.open(FRAME_OUTPUT)
+        st.image(image, caption="Live camera feed", use_container_width=True)
+    except Exception:
+        try:
+            st.image(FRAME_OUTPUT, caption="Live camera feed", use_container_width=True)
+        except Exception:
+            pass
+
+
 def render_webcam_controls(live):
     running = webcam_is_running()
-    active = bool(live.get("session_active", False))
+    active = webcam_session_active()
     updated = live.get("last_updated")
     fresh = False
     if updated:
@@ -375,18 +810,28 @@ def render_webcam_controls(live):
         except (ValueError, TypeError):
             fresh = False
 
-    if running:
-        st.success("Your webcam session is running.")
-        if st.button("End study session", type="primary", width="stretch"):
-            ok, message = stop_webcam()
-            (st.success if ok else st.warning)(message)
-            st.rerun()
-    else:
+    if not running and not active:
         st.info("Ready when you are. The camera only starts when you choose.")
-        if st.button("Start webcam session", type="primary", width="stretch"):
+        if st.button("Start session", type="primary", width="stretch"):
             ok, message = start_webcam()
             (st.success if ok else st.error)(message)
             st.rerun()
+        if active and fresh:
+            st.success("Live connection · your study buddy is checking in.")
+        elif active:
+            st.warning("The latest camera update is delayed. Check that the detector is still running.")
+        else:
+            st.caption("No active camera session. Your focus timer works independently.")
+        render_live_camera_preview()
+        return
+
+    st.success("Your webcam session is running.")
+    if st.button("End session", type="primary", width="stretch"):
+        ok, message = stop_webcam()
+        (st.success if ok else st.warning)(message)
+        st.rerun()
+
+    render_live_camera_preview()
 
     if active and fresh:
         st.success("Live connection · your study buddy is checking in.")
@@ -788,6 +1233,72 @@ def render_quests(profile, live):
     st.caption("Self-care quests are self-reported. Take breaks because they feel right for you—not for a reward.")
 
 
+def render_session_preferences(profile):
+    prefs = profile.get("session_preferences") or {}
+    default_prefs = fresh_profile()["session_preferences"]
+    prefs = {**default_prefs, **prefs}
+
+    st.markdown(
+        """
+        <div class="settings-shell">
+          <div class="settings-header">
+            <div class="settings-badge">Settings</div>
+          </div>
+          <h1 style="margin:0 0 0.4rem; font-size: clamp(2.4rem, 4vw, 4rem); letter-spacing: -.06em;">Session preferences</h1>
+          <p style="margin:0 0 1.5rem; color:#aab8c9; font-size:1.08rem;">Shape how FocusMate watches, nudges and rewards your study time.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1.7, 0.9], gap="large")
+
+    with left:
+        panel = st.container(border=True)
+        with panel:
+            st.markdown('<div class="settings-panel"><h3>Monitoring & reminders</h3>', unsafe_allow_html=True)
+            rows = [
+                ("Focus monitoring", "Use the webcam locally to detect attention", "focus_monitoring"),
+                ("Posture alerts", "Nudge me when I slouch for over 2 minutes", "posture_alerts"),
+                ("Mood check-ins", "Ask how I feel before each first session", "mood_checkins"),
+                ("Session chimes", "Soft tone at start and end of a block", "session_chimes"),
+            ]
+            for label, caption, key_name in rows:
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    st.markdown(f'<div class="settings-label">{html.escape(label)}<span class="settings-caption">{html.escape(caption)}</span></div>', unsafe_allow_html=True)
+                with c2:
+                    enabled = st.toggle("", value=bool(prefs.get(key_name, default_prefs.get(key_name, False))), key=f"pref_{key_name}")
+                    prefs[key_name] = enabled
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        latest = load_profile()
+        latest["session_preferences"] = prefs
+        save_profile(latest)
+
+    with right:
+        st.markdown(
+            """
+            <div class="profile-card">
+              <h3>Profile</h3>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        profile_rows = [
+            ("Name", str(profile.get("player_name") or "Focus friend").strip() or "Focus friend"),
+            ("Handle", f"@{str(profile.get('username') or 'focusfriend').strip() or 'focusfriend'}"),
+            ("Rank", "Deep Work Adept"),
+            ("Session length", "50 minutes"),
+            ("Daily goal", "3 hours"),
+        ]
+        for key, value in profile_rows:
+            st.markdown(
+                f'<div class="profile-line"><div class="profile-key">{html.escape(key)}</div><div class="profile-value">{html.escape(str(value))}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
 def render_profile(profile):
     page_header(
         "YOUR SPACE",
@@ -803,13 +1314,19 @@ def render_profile(profile):
                 value=str(profile.get("player_name") or "Focus friend"),
                 max_chars=40,
             )
-            saved = st.form_submit_button("Save name", type="primary")
+            username = st.text_input(
+                "Username",
+                value=str(profile.get("username") or "focusfriend"),
+                max_chars=25,
+            )
+            saved = st.form_submit_button("Save details", type="primary")
         if saved:
             if not name.strip():
                 st.warning("Please enter a name, or use “Focus friend”.")
             else:
                 latest = load_profile()
                 latest["player_name"] = name.strip()
+                latest["username"] = username.strip() or "focusfriend"
                 save_profile(latest)
                 st.success("Your profile has been updated.")
                 st.rerun()
@@ -880,10 +1397,37 @@ def run_app():
     )
     st_autorefresh(interval=1000, key="focusmate_live_refresh")
     inject_styles()
+    inject_exit_handler()
     profile = load_profile()
     live = load_live_data()
+    kill_stale_webcam_processes()
     if "webcam_process" not in st.session_state:
         st.session_state.webcam_process = None
+    if "webcam_start_time" not in st.session_state:
+        st.session_state.webcam_start_time = None
+
+    if consume_session_reset_marker():
+        st.session_state.welcome_step = "form"
+    elif "welcome_step" not in st.session_state:
+        if str(profile.get("player_name") or "").strip() and str(profile.get("username") or "").strip():
+            st.session_state.welcome_step = "main"
+        else:
+            st.session_state.welcome_step = "form"
+    elif st.session_state.welcome_step == "form":
+        if str(profile.get("player_name") or "").strip() and str(profile.get("username") or "").strip():
+            st.session_state.welcome_step = "main"
+    if "welcome_name" not in st.session_state:
+        st.session_state.welcome_name = str(profile.get("player_name") or "").strip() or "Focus friend"
+    if "welcome_username" not in st.session_state:
+        st.session_state.welcome_username = str(profile.get("username") or "").strip() or "focusfriend"
+
+    if st.session_state.welcome_step == "form":
+        welcome_intro_form()
+        return
+
+    if st.session_state.welcome_step == "animation":
+        welcome_animation()
+        return
 
     render_brand(profile)
     pages = {
@@ -916,6 +1460,12 @@ def run_app():
                 url_path="quests",
             ),
             st.Page(
+                lambda: render_session_preferences(profile),
+                title="Session preferences",
+                icon=":material/settings:",
+                url_path="session-preferences",
+            ),
+            st.Page(
                 lambda: render_profile(profile),
                 title="Profile & wellbeing",
                 icon=":material/person:",
@@ -930,3 +1480,7 @@ def run_app():
         'color:#8794a8;font-size:.78rem">FocusMate · Progress, not perfection. Be kind to yourself.</div>',
         unsafe_allow_html=True,
     )
+
+
+if __name__ == "__main__":
+    run_app()

@@ -33,7 +33,10 @@ DASHBOARD_PYTHON = os.environ.get(
     "FOCUSMATE_DASHBOARD_PYTHON",
     os.path.join(DASHBOARD_DIR, "venv", "Scripts", "python.exe")
 )
-WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", sys.executable)
+DEFAULT_WEBCAM_PYTHON = os.path.join(os.path.expanduser("~"), "focusmate-webcam-venv", "Scripts", "python.exe")
+if not os.path.exists(DEFAULT_WEBCAM_PYTHON):
+    DEFAULT_WEBCAM_PYTHON = sys.executable
+WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", DEFAULT_WEBCAM_PYTHON)
 
 
 # =========================================================
