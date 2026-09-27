@@ -139,6 +139,8 @@ def fresh_profile(username="focusfriend"):
         "achievements": [],
         "session_history": [],
         "tasks": [],
+        "water_glasses_today": 0,
+        "water_glasses_last_reset": date.today().isoformat(),
         "session_wellbeing": {},
         "session_preferences": {
             "focus_monitoring": True,
@@ -210,7 +212,7 @@ def load_profile(username=None):
         sleep_hours = 0.0
     wellbeing["sleep_hours"] = max(0.0, min(24.0, sleep_hours)) if math.isfinite(sleep_hours) else 0.0
     wellbeing["water_glasses"] = bounded_int(
-        wellbeing.get("water_glasses", 0), 0, 0, 100
+        profile.get("water_glasses_today", wellbeing.get("water_glasses", 0)), 0, 0, 100
     )
     wellbeing["reflection"] = str(wellbeing.get("reflection") or "")[:500]
     if not isinstance(wellbeing.get("mood"), str):
@@ -224,6 +226,15 @@ def load_profile(username=None):
     profile["sessions_completed"] = bounded_int(
         profile.get("sessions_completed"), 0, 0, 2**31 - 1
     )
+    profile["water_glasses_today"] = bounded_int(
+        profile.get("water_glasses_today"), 0, 0, 100
+    )
+    water_reset_date = str(profile.get("water_glasses_last_reset") or "")
+    today = date.today().isoformat()
+    if water_reset_date != today:
+        profile["water_glasses_today"] = 0
+        profile["water_glasses_last_reset"] = today
+    wellbeing["water_glasses"] = profile["water_glasses_today"]
     if not isinstance(profile.get("session_preferences"), dict):
         profile["session_preferences"] = {}
     default_prefs = fresh_profile()["session_preferences"]
@@ -928,16 +939,31 @@ def hero(name, xp_to_next):
 def render_live_camera_preview():
     frame_path = user_data_file("latest_frame.jpg")
     if not os.path.exists(frame_path):
+        st.markdown(
+            '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
+            unsafe_allow_html=True,
+        )
         return
     try:
         from PIL import Image
         image = Image.open(frame_path)
-        st.image(image, caption="Live camera feed", use_container_width=True)
+        st.image(image, use_container_width=True)
     except Exception:
         try:
-            st.image(frame_path, caption="Live camera feed", use_container_width=True)
+            st.image(frame_path, use_container_width=True)
         except Exception:
-            pass
+            st.markdown(
+                '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
+                unsafe_allow_html=True,
+            )
+
+
+def mood_prompt_required(profile):
+    prefs = profile.get("session_preferences") or {}
+    if not prefs.get("mood_checkins", True):
+        return False
+    wellbeing = profile.get("session_wellbeing") or {}
+    return wellbeing.get("mood_checkin_date") != date.today().isoformat()
 
 
 def render_webcam_controls(live, profile):
@@ -946,12 +972,8 @@ def render_webcam_controls(live, profile):
     fresh = live_snapshot_is_fresh(live, max_age=20)
     prefs = {**fresh_profile()["session_preferences"], **profile.get("session_preferences", {})}
     wellbeing = profile.get("session_wellbeing") or {}
-    mood_checkin_required = (
-        bool(prefs.get("mood_checkins", True))
-        and wellbeing.get("mood_checkin_date") != date.today().isoformat()
-    )
+    mood_prompt = mood_prompt_required(profile)
     selected_mood = "Choose a mood"
-
     if not running and not active:
         if not prefs.get("focus_monitoring", True):
             st.info("Webcam monitoring is off. Turn it on in Session preferences to start a camera session.")
@@ -959,19 +981,20 @@ def render_webcam_controls(live, profile):
             return
 
         st.info("Ready when you are. The camera only starts when you choose.")
-        if mood_checkin_required:
+        if mood_prompt:
             selected_mood = st.selectbox(
                 "How are you feeling before this session?",
                 ["Choose a mood", "Calm", "Focused", "Okay", "Tired", "Stressed"],
                 key=f"mood_checkin_{normalize_username(profile.get('username'))}_{date.today().isoformat()}",
             )
+        cam_button_label = "📷 Start camera"
         if st.button(
-            "Start session",
+            cam_button_label,
             type="primary",
             width="stretch",
-            disabled=mood_checkin_required and selected_mood == "Choose a mood",
+            disabled=mood_prompt and selected_mood == "Choose a mood",
         ):
-            if mood_checkin_required:
+            if mood_prompt:
                 latest = load_profile()
                 latest_wellbeing = latest.get("session_wellbeing") or {}
                 latest_wellbeing.update({
@@ -994,16 +1017,35 @@ def render_webcam_controls(live, profile):
         return
 
     st.success("Your webcam session is running.")
-    if st.button("End session", type="primary", width="stretch"):
+    if st.button("🛑 Stop camera", type="primary", width="stretch"):
         ok, message = stop_webcam()
         (st.success if ok else st.warning)(message)
         st.rerun()
 
-    render_live_camera_preview()
+    if not os.path.exists(user_data_file("latest_frame.jpg")):
+        st.markdown(
+            '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        render_live_camera_preview()
+
+    attention = bounded_int(live.get("focus_score"), 0, 0, 100)
+    distraction = max(0, 100 - attention)
+    posture_value = 100 if str(live.get("posture") or "Unknown").strip() == "Good" else 0 if str(live.get("posture") or "Unknown").strip() == "Slouching" else 50
+    face_value = 100 if bool(live.get("face_detected")) else 0
+    bars = [
+        ("Attention", attention),
+        ("Distraction", distraction),
+        ("Posture", posture_value),
+        ("Face detected", face_value),
+    ]
+    for label, value in bars:
+        st.progress(min(100, max(0, value)) / 100.0, text=f"{label}: {value}%")
 
     if active and fresh:
         st.success("Live connection · your study buddy is checking in.")
-        if prefs.get("posture_alerts", True) and live.get("posture") == "Slouching":
+        if prefs.get("posture_alerts", True) and str(live.get("posture") or "Unknown").strip() == "Slouching":
             st.warning("Your posture looks uncomfortable. Try relaxing your shoulders or adjusting your seat.")
     elif active:
         st.warning("The latest camera update is delayed. Check that the detector is still running.")
@@ -1018,9 +1060,10 @@ def render_overview(profile, live):
     xp_to_next = LEVEL_STEP - xp_into_level
     minutes = max(0, int(profile.get("total_study_seconds", 0) or 0)) // 60
     history = profile["session_history"]
+    water_today = int(profile.get("water_glasses_today", 0) or 0)
     hero(str(profile.get("player_name") or "Focus friend").strip(), xp_to_next)
 
-    a, b, c, d = st.columns(4, gap="small")
+    a, b, c, d, e = st.columns(5, gap="small")
     with a:
         stat_card("Your level", f"Level {level}", f"{xp_into_level} / {LEVEL_STEP} XP")
     with b:
@@ -1029,6 +1072,8 @@ def render_overview(profile, live):
         stat_card("Study time", f"{minutes // 60}h {minutes % 60:02d}m", "Across sessions")
     with d:
         stat_card("Sessions", int(profile.get("sessions_completed", 0) or 0), "Completed")
+    with e:
+        stat_card("Water today", f"{water_today} 🥤", "Glasses")
     st.progress(xp_into_level / LEVEL_STEP, text=f"{xp_to_next} XP to Level {level + 1}")
     preferences = profile.get("session_preferences", {})
     daily_goal_seconds = max(1, int(preferences.get("daily_goal_minutes", 180) or 180)) * 60
@@ -1046,6 +1091,20 @@ def render_overview(profile, live):
         min(1.0, today_seconds / daily_goal_seconds),
         text=f"Today's goal · {today_seconds // 60} of {daily_goal_seconds // 60} minutes",
     )
+    water_row = st.columns([1, 2])
+    with water_row[0]:
+        if st.button("+ Glass of water", use_container_width=True):
+            updated = load_profile()
+            if str(updated.get("water_glasses_last_reset") or "") != date.today().isoformat():
+                updated["water_glasses_today"] = 0
+                updated["water_glasses_last_reset"] = date.today().isoformat()
+            updated["water_glasses_today"] = int(updated.get("water_glasses_today", 0) or 0) + 1
+            updated["session_wellbeing"] = updated.get("session_wellbeing") or {}
+            updated["session_wellbeing"]["water_glasses"] = updated["water_glasses_today"]
+            save_profile(updated)
+            st.rerun()
+    with water_row[1]:
+        st.caption(f"Current count: {water_today} glass(es) today")
 
     st.write("")
     left, right = st.columns([1.15, .85], gap="large")
@@ -1122,6 +1181,38 @@ def render_pending_session_chime(profile):
         note_time = elapsed - note_index * note_duration
         envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / 0.035)
         sample = int(5000 * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
+        frames.extend(struct.pack("<h", sample))
+
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(frames)
+    st.audio(audio.getvalue(), format="audio/wav", autoplay=True, width="content")
+
+
+def render_pending_posture_beep(profile, live):
+    token = live.get("posture_beep_token")
+    if token is None:
+        return
+    if not profile.get("session_preferences", {}).get("posture_alerts", True):
+        return
+    last_token = st.session_state.get("last_posture_beep_token")
+    if last_token == token:
+        return
+    st.session_state.last_posture_beep_token = token
+
+    sample_rate = 22050
+    note_duration = 0.22
+    notes = (220.0, 180.0)
+    frames = bytearray()
+    for index in range(int(sample_rate * note_duration * len(notes))):
+        elapsed = index / sample_rate
+        note_index = min(int(elapsed / note_duration), len(notes) - 1)
+        note_time = elapsed - note_index * note_duration
+        envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / 0.04)
+        sample = int(7000 * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
         frames.extend(struct.pack("<h", sample))
 
     audio = io.BytesIO()
@@ -1763,6 +1854,7 @@ def run_app():
     page = st.navigation(pages, position="sidebar")
     page.run()
     render_pending_session_chime(profile)
+    render_pending_posture_beep(profile, live)
     st.markdown(
         '<div style="margin-top:3rem;padding-top:1rem;border-top:1px solid rgba(193,217,220,.1);'
         'color:#8794a8;font-size:.78rem">FocusMate · Progress, not perfection. Be kind to yourself.</div>',

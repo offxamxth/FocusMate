@@ -169,6 +169,10 @@ class FocusMonitor:
         self.session_id = None
         self.session_completed = False
         self.last_session_write = 0.0
+        self.posture_beep_triggered = False
+        self.posture_bad_since = None
+        self.posture_beep_token = None
+        self.posture_beep_pending = False
 
         self.events = []
 
@@ -234,6 +238,10 @@ class FocusMonitor:
         self.history = []
         self.last_history_time = time.time()
         self.last_session_write = 0.0
+        self.posture_beep_triggered = False
+        self.posture_bad_since = None
+        self.posture_beep_token = None
+        self.posture_beep_pending = False
 
         self.events.append({
             "type": "SESSION_STARTED",
@@ -576,6 +584,12 @@ class FocusMonitor:
                     "Unknown"
                 ),
 
+            "posture_beep_pending":
+                bool(self.posture_beep_pending),
+
+            "posture_beep_token":
+                self.posture_beep_token,
+
             "distance_status":
                 getattr(
                     self,
@@ -893,6 +907,20 @@ class FocusMonitor:
             if posture_angle is not None
             else None
         )
+
+        if posture == "Slouching":
+            if self.posture_bad_since is None:
+                self.posture_bad_since = now
+                self.posture_beep_triggered = False
+            elif now - self.posture_bad_since >= 600 and not self.posture_beep_triggered:
+                self.posture_beep_triggered = True
+                self.posture_beep_token = int(time.time())
+                self.posture_beep_pending = True
+        else:
+            self.posture_bad_since = None
+            self.posture_beep_triggered = False
+            self.posture_beep_pending = False
+            self.posture_beep_token = None
 
         # ----------------------------------------------------
         # WRITE DASHBOARD DATA
