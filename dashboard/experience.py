@@ -1587,13 +1587,44 @@ def inject_styles():
             border-right: 1px solid var(--line);
         }
         [data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
-        .block-container { max-width: 1350px; padding-top: 2.2rem; padding-bottom: 4rem; }
-        h1, h2, h3 { font-family: 'Aptos Display', 'Segoe UI', sans-serif; letter-spacing: -.035em; color: var(--ink); }
+        .block-container {
+            width: 100%; max-width: 1350px;
+            padding: 2.2rem clamp(.9rem, 3vw, 2.5rem) 4rem;
+        }
+        [data-testid="stAppViewContainer"], [data-testid="stMainBlockContainer"],
+        [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+            min-width: 0;
+        }
+        .block-container, [data-testid="stMainBlockContainer"] { width: 100%; }
+        img, video, iframe, canvas { max-width: 100%; }
+        p, li, label, button, [data-testid="stMetricValue"] { overflow-wrap: anywhere; }
+        [data-testid="stButton"] button { min-height: 2.75rem; white-space: normal; }
+        [data-testid="stDataFrame"], [data-testid="stTable"] { max-width: 100%; overflow-x: auto; }
+        h1, h2, h3 { font-family: 'Aptos Display', 'Segoe UI', sans-serif; letter-spacing: 0; color: var(--ink); }
         h1 { font-weight: 800; }
+        h3 { font-size: 1.2rem !important; line-height: 1.3 !important; }
         p, li, label { color: #d7deea; }
         [data-testid="stCaptionContainer"] p, .muted { color: var(--muted) !important; }
+        .page-heading {
+            margin: 0 0 1.35rem; padding: .25rem 0 1.15rem;
+            border-bottom: 1px solid var(--line);
+        }
+        .page-heading .eyebrow { margin-bottom: .45rem; }
+        .page-heading h1 { margin: 0; font-size: 2.2rem; line-height: 1.12; }
+        .page-description { max-width: 52rem; margin: .55rem 0 0 !important; line-height: 1.6; }
+        .stMarkdownContainer > [data-testid="stHeadingWithActionElements"]:has(h3) {
+            margin-top: 1.65rem; margin-bottom: .7rem;
+            padding-bottom: .45rem; border-bottom: 1px solid var(--line);
+        }
+        .stMarkdownContainer > [data-testid="stHeadingWithActionElements"] h3 {
+            margin: 0; font-size: 1.12rem; line-height: 1.35;
+        }
+        .surface h3, .settings-panel h3, .profile-card h3 {
+            margin: .1rem 0 .6rem; padding: 0; border: 0;
+            font-size: 1.07rem !important; line-height: 1.3 !important;
+        }
         [data-testid="stMetric"] {
-            padding: 1.1rem 1.2rem; border-radius: 20px;
+            padding: 1.1rem 1.2rem; border-radius: 8px;
             border: 1px solid var(--line); background: var(--panel);
             box-shadow: 0 12px 40px rgba(0,0,0,.12);
             animation: rise-in .65s both;
@@ -1636,14 +1667,14 @@ def inject_styles():
             border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
         }
         [data-testid="stForm"], [data-testid="stExpander"] {
-            border-color: var(--line) !important; border-radius: 16px !important;
+            border-color: var(--line) !important; border-radius: 8px !important;
             background: rgba(23,33,48,.48);
         }
         [data-testid="stAlert"] { border-radius: 14px; }
         .brand-lockup { font: 800 1.2rem 'Aptos Display','Segoe UI',sans-serif; letter-spacing: -.05em; color: var(--ink); }
         .brand-lockup span { color: var(--mint); }
         .nav-greeting {
-            margin: 0 0 1rem; padding: 1rem .9rem .9rem; border-radius: 18px;
+            margin: 0 0 1rem; padding: 1rem .9rem .9rem; border-radius: 8px;
             border: 1px solid rgba(168,240,208,.18); background: linear-gradient(135deg, rgba(26,39,48,.88), rgba(15,22,31,.78));
             box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 18px 35px rgba(10,18,24,.22);
             position: sticky; top: 0; z-index: 2;
@@ -1670,7 +1701,7 @@ def inject_styles():
             font-size: .72rem; letter-spacing: .16em; text-transform: uppercase; font-weight: 700;
         }
         .settings-panel {
-            padding: 1.1rem 1.3rem; background: rgba(17, 25, 34, 0.78); border: 1px solid rgba(193,217,220,.12); border-radius: 22px;
+            padding: 1.1rem 1.3rem; background: rgba(17, 25, 34, 0.78); border: 1px solid rgba(193,217,220,.12); border-radius: 8px;
             box-shadow: inset 0 1px 0 rgba(255,255,255,.02);
         }
         .settings-panel h3 {
@@ -1688,7 +1719,7 @@ def inject_styles():
             display: block; margin-top: .2rem; color: #8ea0b5; font-size: .88rem;
         }
         .profile-card {
-            padding: 1.25rem 1.2rem; background: rgba(17, 25, 34, 0.82); border: 1px solid rgba(193,217,220,.12); border-radius: 20px; min-height: 100%;
+            padding: 1.25rem 1.2rem; background: rgba(17, 25, 34, 0.82); border: 1px solid rgba(193,217,220,.12); border-radius: 8px; min-height: 100%;
         }
         .profile-card h3 { margin: 0 0 1.2rem; font-size: 1.25rem; }
         .profile-line {
@@ -1745,7 +1776,7 @@ def inject_styles():
         .eyebrow { color: var(--mint); font-size: .72rem; font-weight: 700; letter-spacing: .17em; text-transform: uppercase; }
         .hero {
             position: relative; overflow: hidden; padding: 2rem 2.1rem; margin-bottom: 1.2rem;
-            border: 1px solid rgba(193,217,220,.15); border-radius: 26px;
+            border: 1px solid rgba(193,217,220,.15); border-radius: 12px;
             background: linear-gradient(118deg, rgba(58,91,81,.53), rgba(29,53,60,.42) 56%, rgba(37,48,61,.7));
             box-shadow: 0 24px 70px rgba(0,0,0,.17); animation: rise-in .72s both;
         }
@@ -1758,7 +1789,7 @@ def inject_styles():
         .hero h1 { margin: .5rem 0 .4rem; font-size: clamp(2rem, 4vw, 3.35rem); }
         .hero p { max-width: 640px; color: #c0cbd6; font-size: 1.03rem; margin: 0; line-height: 1.65; }
         .surface {
-            padding: 1.25rem 1.35rem; border-radius: 20px; border: 1px solid var(--line);
+            padding: 1.25rem 1.35rem; border-radius: 8px; border: 1px solid var(--line);
             background: var(--panel); height: 100%;
             transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
             animation: rise-in .72s both;
@@ -1767,7 +1798,8 @@ def inject_styles():
         .surface h3 { margin: .1rem 0 .6rem; font-size: 1.07rem; }
         .surface p { color: var(--muted); line-height: 1.6; }
         .stat-card {
-            padding: 1rem 1.05rem; height: 126px; border-radius: 19px;
+            display: flex; flex-direction: column; justify-content: space-between; gap: .45rem;
+            padding: 1rem 1.05rem; min-height: 126px; height: auto; border-radius: 8px;
             border: 1px solid var(--line); background: var(--panel);
             box-shadow: 0 12px 40px rgba(0,0,0,.12); animation: rise-in .65s both;
         }
@@ -1786,7 +1818,7 @@ def inject_styles():
         .timer.running { animation: timer-breathe 3s ease-in-out infinite alternate; }
         .quest-card {
             padding: 1.05rem 1.2rem; margin: .55rem 0; border: 1px solid var(--line);
-            border-radius: 17px; background: rgba(23,33,48,.68);
+            border-radius: 8px; background: rgba(23,33,48,.68);
             transition: transform .22s ease, border-color .22s ease;
             animation: rise-in .55s both;
         }
@@ -1804,7 +1836,32 @@ def inject_styles():
         @media (prefers-reduced-motion: reduce) {
             *, *:before, *:after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
         }
-        @media (max-width: 760px) { .stat-card { height: auto; min-height: 112px; } }
+        @media (max-width: 900px) {
+            [data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+                align-items: stretch !important;
+            }
+            [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            .stat-card { height: auto; min-height: 112px; }
+        }
+        @media (max-width: 640px) {
+            .block-container { padding: 1.1rem .85rem 2.25rem; }
+            .welcome-shell { min-height: auto; padding: 1rem 0; }
+            .welcome-card { padding: 1.5rem 1rem; border-radius: 20px; }
+            .welcome-title { font-size: 2.35rem; }
+            .welcome-actions .stButton > button { width: 100%; min-width: 0; }
+            .hero { padding: 1.25rem 1rem; border-radius: 18px; }
+            .hero h1 { font-size: 2rem; }
+            .surface, .settings-panel, .profile-card { padding: 1rem; }
+            .timer { font-size: 3.4rem; padding: 1.1rem 0 .6rem; }
+            [data-testid="stMetric"] { padding: .85rem; border-radius: 14px; }
+            [data-testid="stMetricValue"] { font-size: 1.45rem; }
+            .profile-line { align-items: flex-start; flex-direction: column; gap: .25rem; }
+            input, textarea { font-size: 16px !important; }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1949,10 +2006,13 @@ def render_brand(profile):
 
 def page_header(kicker, title, description):
     st.markdown(
-        f'<div class="eyebrow">{kicker}</div><h1 style="margin:.25rem 0 .45rem">{title}</h1>',
+        f'<header class="page-heading">'
+        f'<div class="eyebrow">{html.escape(str(kicker))}</div>'
+        f'<h1>{html.escape(str(title))}</h1>'
+        f'<p class="page-description muted">{html.escape(str(description))}</p>'
+        f'</header>',
         unsafe_allow_html=True,
     )
-    st.markdown(f'<p class="muted">{description}</p>', unsafe_allow_html=True)
 
 
 def stat_card(label, value, note):
@@ -2131,17 +2191,6 @@ def render_webcam_controls(live, profile):
             placeholder="e.g. Complete Chapter 4 exercises",
             key=f"session_goal_{username}",
         ).strip()
-        task_by_id = {
-            str(task.get("id")): task
-            for task in profile.get("tasks", [])
-            if not task.get("done") and task.get("id")
-        }
-        task_id = st.selectbox(
-            "Link a task (optional)",
-            [""] + list(task_by_id),
-            format_func=lambda value: "No linked task" if not value else str(task_by_id[value].get("text", "Task")),
-            key=f"session_task_{username}",
-        )
         if mood_prompt:
             selected_mood = st.selectbox(
                 "How are you feeling before this session?",
@@ -2166,12 +2215,9 @@ def render_webcam_controls(live, profile):
                 })
                 latest["session_wellbeing"] = latest_wellbeing
                 save_profile(latest)
-            task = task_by_id.get(task_id, {})
             session_plan = {
                 "subject": subject,
                 "goal": session_goal,
-                "task_id": task_id,
-                "task_text": str(task.get("text") or ""),
             }
             ok, message = start_webcam(session_plan)
             (st.success if ok else st.error)(message)
@@ -2279,16 +2325,17 @@ def render_overview(profile, live):
         st.session_state["focusmate_open_focus_room"] = True
         st.rerun()
 
-    a, b, c, d, e = st.columns(5, gap="small")
-    with a:
+    summary_columns = st.columns(3, gap="small")
+    with summary_columns[0]:
         stat_card("Your level", f"Level {level}", f"{xp_into_level} / {LEVEL_STEP} XP")
-    with b:
+    with summary_columns[1]:
         stat_card("Lifetime XP", f"{xp:,}", "From study, posture & quests")
-    with c:
+    with summary_columns[2]:
         stat_card("Study time", f"{minutes // 60}h {minutes % 60:02d}m", "Across sessions")
-    with d:
+    secondary_columns = st.columns(2, gap="small")
+    with secondary_columns[0]:
         stat_card("Sessions", int(profile.get("sessions_completed", 0) or 0), "Completed")
-    with e:
+    with secondary_columns[1]:
         stat_card("Water today", f"{water_today} 🥤", "Glasses")
     st.progress(xp_into_level / LEVEL_STEP, text=f"{xp_to_next} XP to Level {level + 1}")
     preferences = profile.get("session_preferences", {})
@@ -2671,11 +2718,18 @@ def render_insights(profile, live):
     total_seconds = int(profile.get("total_study_seconds", 0) or 0)
     total_seconds += int(profile.get("focus_timer_total_seconds", 0) or 0)
     streak = current_session_streak(profile)
-    a, b, c, d = st.columns(4)
-    a.metric("Average focus estimate", f"{average_focus:.0f} / 100" if average_focus is not None else "Not yet available")
-    b.metric("Sessions", total_sessions)
-    c.metric("Total study time", f"{total_seconds // 3600}h {(total_seconds % 3600) // 60:02d}m")
-    d.metric("Study-day streak", f"{streak} days")
+    first_metrics = st.columns(2, gap="small")
+    first_metrics[0].metric(
+        "Average focus estimate",
+        f"{average_focus:.0f} / 100" if average_focus is not None else "Not yet available",
+    )
+    first_metrics[1].metric("Sessions", total_sessions)
+    second_metrics = st.columns(2, gap="small")
+    second_metrics[0].metric(
+        "Total study time",
+        f"{total_seconds // 3600}h {(total_seconds % 3600) // 60:02d}m",
+    )
+    second_metrics[1].metric("Study-day streak", f"{streak} days")
 
     st.write("")
     chart_col, week_col = st.columns([1.15, .85], gap="large")
@@ -3060,17 +3114,10 @@ def render_session_preferences(profile):
     prefs = dict(stored_prefs)
     username_key = normalize_username(profile.get("username"))
 
-    st.markdown(
-        """
-        <div class="settings-shell">
-          <div class="settings-header">
-            <div class="settings-badge">Settings</div>
-          </div>
-          <h1 style="margin:0 0 0.4rem; font-size: clamp(2.4rem, 4vw, 4rem); letter-spacing: -.06em;">Session preferences</h1>
-          <p style="margin:0 0 1.5rem; color:#aab8c9; font-size:1.08rem;">Shape how FocusMate watches, nudges and rewards your study time.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    page_header(
+        "SESSION PREFERENCES",
+        "Set your session up your way.",
+        "Choose how FocusMate monitors, reminds, and supports your study time.",
     )
 
     left, right = st.columns([1.7, 0.9], gap="large")
