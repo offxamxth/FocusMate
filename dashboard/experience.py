@@ -1,4 +1,4 @@
-"""Animated, multi-page Streamlit experience for FocusMate."""
+"""Animated, multi-page Streamlit experience for FocusMate (single-file edition)."""
 
 import json
 import hashlib
@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import secrets
 import subprocess
 import struct
 import sys
@@ -16,10 +17,13 @@ import threading
 import time
 import wave
 from datetime import date, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_autorefresh import st_autorefresh
 
 
@@ -51,9 +55,77 @@ def resolve_webcam_python():
 
 DEFAULT_WEBCAM_PYTHON = resolve_webcam_python()
 WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", DEFAULT_WEBCAM_PYTHON)
-SESSION_STOP_PORT = 8765
+
+# These are (re)bound from the cached camera hub by ensure_stop_server().
+# Streamlit re-executes this script on every rerun, so the real state lives
+# inside st.cache_resource and survives reruns.
+SESSION_STOP_PORT = 0
 SESSION_STOP_SERVER = None
+SESSION_CAMERA_TOKENS = {}
+SESSION_CAMERA_FRAMES = {}
 LEVEL_STEP = 100
+FOCUS_CHALLENGE_SECONDS = 600
+FOCUS_CHALLENGE_XP = 25
+ACHIEVEMENT_DEFINITIONS = tuple(
+    {"id": achievement_id, "title": title, "description": description, "xp": xp}
+    for achievement_id, title, description, xp in (
+        ("first_step", "First Step", "Complete your first study session.", 15),
+        ("locked_in", "Locked In", "Reach a focus score of 90 or higher.", 20),
+        ("time_keeper", "Time Keeper", "Complete a 15-minute session.", 15),
+        ("half_hour_hero", "Half Hour Hero", "Complete a 30-minute session.", 20),
+        ("hour_of_focus", "Hour of Focus", "Complete a 60-minute session.", 30),
+        ("getting_started", "Getting Started", "Complete 3 sessions.", 20),
+        ("focused_mind", "Focused Mind", "Complete 5 sessions.", 25),
+        ("consistency", "Consistency", "Complete 10 sessions.", 35),
+        ("dedicated_student", "Dedicated Student", "Complete 25 sessions.", 50),
+        ("focus_master", "Focus Master", "Complete 50 sessions.", 100),
+        ("two_day_streak", "2-Day Streak", "Complete sessions on 2 consecutive days.", 15),
+        ("three_day_streak", "3-Day Streak", "Complete sessions on 3 consecutive days.", 20),
+        ("seven_day_streak", "7-Day Streak", "Complete sessions on 7 consecutive days.", 40),
+        ("fourteen_day_streak", "14-Day Streak", "Complete sessions on 14 consecutive days.", 75),
+        ("thirty_day_streak", "30-Day Streak", "Complete sessions on 30 consecutive days.", 150),
+        ("posture_pro", "Posture Pro", "Complete a session with no posture alerts.", 20),
+        ("sit_smart", "Sit Smart", "Complete 3 sessions with no posture alerts.", 30),
+        ("perfect_distance", "Perfect Distance", "Complete a session with no distance alerts.", 20),
+        ("eyes_forward", "Eyes Forward", "Complete a session with no looking-away alerts.", 20),
+        ("steady_session", "Steady Session", "Complete a session with no posture or distance alerts.", 35),
+        ("clean_session", "Clean Session", "Complete a session with no recorded alerts.", 50),
+        ("sharp_start", "Sharp Start", "Score 90 or higher in your first session.", 30),
+        ("level_up", "Level Up", "Improve your focus score compared with the previous session.", 20),
+        ("personal_best", "Personal Best", "Achieve your highest focus score ever.", 25),
+        ("ninety_club", "90 Club", "Reach a focus score of 90 or higher.", 20),
+        ("perfect_estimate", "Perfect Estimate", "Reach a focus score of 100.", 50),
+        ("comeback", "Comeback", "Improve your score after a lower-scoring session.", 20),
+        ("getting_better", "Getting Better", "Improve your focus score across 3 consecutive sessions.", 40),
+        ("focused_week", "Focused Week", "Complete 5 sessions in one calendar week.", 35),
+        ("study_routine", "Study Routine", "Complete 10 sessions across multiple days.", 50),
+        ("persistence", "Persistence", "Accumulate 2 hours of study sessions.", 15),
+        ("time_builder", "Time Builder", "Accumulate 5 hours of study sessions.", 25),
+        ("study_veteran", "Study Veteran", "Accumulate 10 hours of study sessions.", 50),
+        ("twenty_hour_club", "20-Hour Club", "Accumulate 20 hours of study sessions.", 75),
+        ("fifty_hour_club", "50-Hour Club", "Accumulate 50 hours of study sessions.", 150),
+        ("quick_focus", "Quick Focus", "Complete a 10-minute session with a focus score of 85 or higher.", 20),
+        ("long_haul", "Long Haul", "Complete a 45-minute session.", 30),
+        ("keep_going", "Keep Going", "Complete 5 sessions in a row.", 30),
+        ("no_quit", "No Quit", "Complete 3 sessions in a row.", 20),
+        ("early_focus", "Early Focus", "Complete a session before noon.", 15),
+        ("evening_focus", "Evening Focus", "Complete a session after 6 PM.", 15),
+        ("routine_builder", "Routine Builder", "Study on 7 different days.", 30),
+        ("xp_collector", "XP Collector", "Earn 500 XP.", 25),
+        ("xp_hunter", "XP Hunter", "Earn 1,000 XP.", 50),
+        ("xp_champion", "XP Champion", "Earn 5,000 XP.", 100),
+        ("explorer", "Explorer", "Complete a session with a new study goal.", 15),
+        ("goal_getter", "Goal Getter", "Complete a session linked to a study goal.", 15),
+        ("self_aware", "Self-Aware", "View your reflection after completing a session.", 10),
+        ("ai_reflection", "AI Reflection", "View your first AI-generated session reflection.", 15),
+        ("focusmate_legend", "FocusMate Legend", "Unlock 20 other achievements.", 250),
+    )
+)
+ACHIEVEMENTS_BY_ID = {item["id"]: item for item in ACHIEVEMENT_DEFINITIONS}
+LEGACY_ACHIEVEMENT_IDS = {
+    "first_session": "first_step",
+    "twenty_minute_focus": "time_keeper",
+}
 
 QUESTS = [
     {
@@ -86,6 +158,66 @@ QUESTS = [
     },
 ]
 
+NUDGE_MESSAGES = {
+    "looking_away": (
+        (
+            "Quick focus check — ready to get back to it?",
+            "Looks like your attention drifted. Ready to get back to it?",
+            "Your task is still waiting. Let’s continue!",
+            "Small distraction detected. Back to focus?",
+            "Eyes back on your study material when you’re ready.",
+        ),
+        (
+            "Your attention has drifted a few times. Try focusing on your current task.",
+            "Quick focus check — let’s get back to the task.",
+        ),
+        (
+            "You may need a reset. Take a short break if you need one, then come back when ready.",
+            "Take a moment to reset before continuing.",
+        ),
+    ),
+    "posture": (
+        (
+            "Quick posture check — sit comfortably and reset your position.",
+            "Small posture reminder: adjust your position if needed.",
+        ),
+        (
+            "Your posture changed. Take a second to get comfortable.",
+            "Let’s reset your posture and continue.",
+        ),
+        (
+            "Small posture reminder: adjust your position if needed.",
+            "Take a moment to get comfortable before continuing.",
+        ),
+    ),
+    "fatigue": (
+        (
+            "Quick check-in: feeling ready to continue?",
+            "You may benefit from a quick break.",
+        ),
+        (
+            "Your session shows repeated eye-closure signals. Consider a short break.",
+            "Take a moment to reset before continuing.",
+        ),
+        (
+            "You may benefit from a quick break. Take a moment to reset before continuing.",
+            "Your session shows repeated eye-closure signals. Consider a short break.",
+        ),
+    ),
+}
+
+MOTIVATIONAL_MESSAGES = (
+    "One more focused minute. You’ve got this.",
+    "Stay with it — you’re making progress.",
+    "Back to the task. Future you will thank you.",
+    "Keep going. Your goal is within reach.",
+    "Let’s finish this session strong.",
+)
+
+
+# ---------------------------------------------------------------------------
+# Users, paths and profile storage
+# ---------------------------------------------------------------------------
 
 def normalize_username(username):
     value = str(username or "").strip().lstrip("@").casefold()
@@ -138,9 +270,15 @@ def fresh_profile(username="focusfriend"):
         "quest_claims": [],
         "achievements": [],
         "session_history": [],
+        "session_reflections": [],
+        "active_session_plan": {},
         "tasks": [],
         "water_glasses_today": 0,
         "water_glasses_last_reset": date.today().isoformat(),
+        "focus_timer_seconds_today": 0,
+        "focus_timer_date": date.today().isoformat(),
+        "focus_timer_total_seconds": 0,
+        "focus_timer_history": [],
         "session_wellbeing": {},
         "session_preferences": {
             "focus_monitoring": True,
@@ -195,6 +333,18 @@ def load_profile(username=None):
     profile["session_history"] = [
         entry for entry in profile["session_history"] if isinstance(entry, dict)
     ]
+    if not isinstance(profile.get("session_reflections"), list):
+        profile["session_reflections"] = []
+    profile["session_reflections"] = [
+        item for item in profile["session_reflections"] if isinstance(item, dict)
+    ][-100:]
+    if not isinstance(profile.get("achievements"), list):
+        profile["achievements"] = []
+    profile["achievements"] = [
+        item for item in profile["achievements"] if isinstance(item, dict)
+    ]
+    if not isinstance(profile.get("active_session_plan"), dict):
+        profile["active_session_plan"] = {}
     if not isinstance(profile["quest_claims"], list):
         profile["quest_claims"] = []
     profile["quest_claims"] = [
@@ -229,11 +379,26 @@ def load_profile(username=None):
     profile["water_glasses_today"] = bounded_int(
         profile.get("water_glasses_today"), 0, 0, 100
     )
+    profile["focus_timer_seconds_today"] = bounded_int(
+        profile.get("focus_timer_seconds_today"), 0, 0, 86400
+    )
+    profile["focus_timer_total_seconds"] = bounded_int(
+        profile.get("focus_timer_total_seconds"), 0, 0, 2**63 - 1
+    )
+    if not isinstance(profile.get("focus_timer_history"), list):
+        profile["focus_timer_history"] = []
+    profile["focus_timer_history"] = [
+        item for item in profile["focus_timer_history"]
+        if isinstance(item, dict) and isinstance(item.get("date"), str)
+    ][-730:]
     water_reset_date = str(profile.get("water_glasses_last_reset") or "")
     today = date.today().isoformat()
     if water_reset_date != today:
         profile["water_glasses_today"] = 0
         profile["water_glasses_last_reset"] = today
+    if str(profile.get("focus_timer_date") or "") != today:
+        profile["focus_timer_seconds_today"] = 0
+        profile["focus_timer_date"] = today
     wellbeing["water_glasses"] = profile["water_glasses_today"]
     if not isinstance(profile.get("session_preferences"), dict):
         profile["session_preferences"] = {}
@@ -267,11 +432,448 @@ def save_profile(profile, username=None):
             json.dump(profile, file, indent=2)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(temporary_path, path)
+        last_permission_error = None
+        for attempt in range(5):
+            try:
+                os.replace(temporary_path, path)
+                return True
+            except PermissionError as error:
+                last_permission_error = error
+                if attempt < 4:
+                    time.sleep(0.05 * (2 ** attempt))
+
+        with open(temporary_path, "r", encoding="utf-8") as file:
+            profile_json = file.read()
+        try:
+            with open(path, "w", encoding="utf-8") as file:
+                file.write(profile_json)
+                file.flush()
+                os.fsync(file.fileno())
+        except OSError as error:
+            raise PermissionError(
+                f"Profile is locked and could not be saved at {path}"
+            ) from (last_permission_error or error)
+        return True
     finally:
         if os.path.exists(temporary_path):
             os.remove(temporary_path)
 
+
+def current_session_streak(profile, today=None):
+    today = today or date.today()
+    study_days = {
+        item["date"]
+        for item in normalized_history(profile)
+        if item["seconds"] > 0
+    }
+    for item in profile.get("focus_timer_history", []):
+        if not isinstance(item, dict) or bounded_int(item.get("seconds"), 0, 0, 86400) == 0:
+            continue
+        try:
+            study_days.add(date.fromisoformat(item.get("date", "")))
+        except (TypeError, ValueError):
+            continue
+    current_day = today if today in study_days else today - timedelta(days=1)
+    streak = 0
+    while current_day in study_days:
+        streak += 1
+        current_day -= timedelta(days=1)
+    return streak
+
+
+def achievement_earned_ids(profile):
+    earned = set()
+    for item in profile.get("achievements", []):
+        if isinstance(item, dict) and item.get("id"):
+            achievement_id = str(item["id"])
+            earned.add(LEGACY_ACHIEVEMENT_IDS.get(achievement_id, achievement_id))
+    return earned
+
+
+def award_achievement_ids(profile, achievement_ids):
+    earned = achievement_earned_ids(profile)
+    newly_earned = []
+    pending = set(achievement_ids) - earned
+    while pending:
+        for achievement_id in sorted(pending):
+            definition = ACHIEVEMENTS_BY_ID.get(achievement_id)
+            if definition is None:
+                continue
+            record = {
+                **definition,
+                "earned_at": datetime.now().isoformat(),
+            }
+            profile["achievements"].append(record)
+            newly_earned.append(record)
+            earned.add(achievement_id)
+            profile["total_xp"] = min(
+                2**63 - 1,
+                profile["total_xp"] + definition["xp"],
+            )
+        legend_id = "focusmate_legend"
+        other_earned = earned.intersection(ACHIEVEMENTS_BY_ID) - {legend_id}
+        pending = (
+            {legend_id}
+            if len(other_earned) >= 20 and legend_id not in earned
+            else set()
+        )
+    return newly_earned
+
+
+def award_profile_achievements(achievement_ids):
+    profile = load_profile()
+    newly_earned = []
+    pending = set(achievement_ids)
+    while True:
+        earned = achievement_earned_ids(profile)
+        pending.update(
+            achievement_id
+            for threshold, achievement_id in (
+                (500, "xp_collector"),
+                (1000, "xp_hunter"),
+                (5000, "xp_champion"),
+            )
+            if profile["total_xp"] >= threshold and achievement_id not in earned
+        )
+        pending -= earned
+        if not pending:
+            break
+        awards = award_achievement_ids(profile, pending)
+        if not awards:
+            break
+        newly_earned.extend(awards)
+    if newly_earned:
+        save_profile(profile)
+    return newly_earned
+
+
+def completed_achievement_ids(profile, session_data, history_entry, plan):
+    session_id = str(session_data.get("session_id") or "")
+    completed_sessions = [
+        item for item in profile["session_history"]
+        if bounded_int(item.get("seconds"), 0, 0, 86_400) > 0
+    ]
+    session_count = len(completed_sessions)
+    current_seconds = bounded_int(session_data.get("session_seconds"), 0, 0, 86_400)
+    focus_score = safe_session_number(session_data.get("focus_score"), 0, 0, 100)
+    posture_alerts = bounded_int(session_data.get("posture_alerts"), 0, 0, 100_000)
+    distance_alerts = bounded_int(session_data.get("distance_alerts"), 0, 0, 100_000)
+    looking_away_alerts = bounded_int(session_data.get("looking_away_alerts"), 0, 0, 100_000)
+    fatigue_signals = bounded_int(session_data.get("fatigue_signals"), 0, 0, 100_000)
+    session_date = str(history_entry.get("date") or "")
+    try:
+        end_time = datetime.fromisoformat(session_date)
+    except (TypeError, ValueError):
+        end_time = datetime.now()
+
+    completed_sessions.sort(key=lambda item: str(item.get("date") or ""))
+    current_index = next(
+        (index for index, item in enumerate(completed_sessions) if str(item.get("session_id") or "") == session_id),
+        len(completed_sessions) - 1,
+    )
+    session_dates = set()
+    for item in completed_sessions:
+        try:
+            session_dates.add(datetime.fromisoformat(str(item.get("date"))).date())
+        except (TypeError, ValueError):
+            continue
+    session_streak = 0
+    streak_day = end_time.date()
+    while streak_day in session_dates:
+        session_streak += 1
+        streak_day -= timedelta(days=1)
+
+    scored_sessions = []
+    for item in completed_sessions:
+        score = item.get("focus_score")
+        if score is not None:
+            scored_sessions.append((str(item.get("session_id") or ""), safe_session_number(score, 0, 0, 100)))
+    prior_scores = [score for item_id, score in scored_sessions if item_id != session_id]
+    scored_values = [score for _, score in scored_sessions]
+    current_is_first = current_index == 0
+    prior_score = prior_scores[-1] if prior_scores else None
+    prior_best = max(prior_scores, default=None)
+    last_three = scored_values[-3:]
+    session_week = end_time.isocalendar()[:2]
+    week_session_count = 0
+    for item in completed_sessions:
+        try:
+            item_week = datetime.fromisoformat(str(item.get("date"))).isocalendar()[:2]
+        except (TypeError, ValueError):
+            continue
+        if item_week == session_week:
+            week_session_count += 1
+
+    total_study_seconds = (
+        bounded_int(profile.get("total_study_seconds"), 0, 0, 2**63 - 1)
+        + bounded_int(profile.get("focus_timer_total_seconds"), 0, 0, 2**63 - 1)
+    )
+    study_days = len({item["date"] for item in normalized_history(profile) if item["seconds"] > 0})
+    study_days += len({
+        item.get("date") for item in profile.get("focus_timer_history", [])
+        if isinstance(item, dict) and bounded_int(item.get("seconds"), 0, 0, 86400) > 0
+        and item.get("date") not in {row["date"].isoformat() for row in normalized_history(profile)}
+    })
+    goals_seen = {
+        str(item.get("goal") or "").strip().casefold()
+        for item in completed_sessions
+        if str(item.get("session_id") or "") != session_id and item.get("goal")
+    }
+    goal = str(plan.get("goal") or "").strip()
+
+    eligible = set()
+    if session_count >= 1:
+        eligible.add("first_step")
+    if focus_score >= 90:
+        eligible.update({"locked_in", "ninety_club"})
+    if current_seconds >= 15 * 60:
+        eligible.add("time_keeper")
+    if current_seconds >= 30 * 60:
+        eligible.add("half_hour_hero")
+    if current_seconds >= 60 * 60:
+        eligible.add("hour_of_focus")
+    for threshold, achievement_id in (
+        (3, "getting_started"), (5, "focused_mind"), (10, "consistency"),
+        (25, "dedicated_student"), (50, "focus_master"),
+    ):
+        if session_count >= threshold:
+            eligible.add(achievement_id)
+    for threshold, achievement_id in (
+        (2, "two_day_streak"), (3, "three_day_streak"), (7, "seven_day_streak"),
+        (14, "fourteen_day_streak"), (30, "thirty_day_streak"),
+    ):
+        if session_streak >= threshold:
+            eligible.add(achievement_id)
+    if posture_alerts == 0:
+        eligible.add("posture_pro")
+    if sum(item.get("posture_alerts", 0) == 0 for item in completed_sessions) >= 3:
+        eligible.add("sit_smart")
+    if distance_alerts == 0:
+        eligible.add("perfect_distance")
+    if session_data.get("looking_away_detection_available") is True and looking_away_alerts == 0:
+        eligible.add("eyes_forward")
+    if posture_alerts == 0 and distance_alerts == 0:
+        eligible.add("steady_session")
+    if all(value == 0 for value in (posture_alerts, distance_alerts, looking_away_alerts, fatigue_signals)):
+        eligible.add("clean_session")
+    if current_is_first and focus_score >= 90:
+        eligible.add("sharp_start")
+    if prior_score is not None and focus_score > prior_score:
+        eligible.add("level_up")
+    if prior_best is None or focus_score > prior_best:
+        eligible.add("personal_best")
+    if focus_score == 100:
+        eligible.add("perfect_estimate")
+    if len(prior_scores) >= 2 and prior_scores[-1] < prior_scores[-2] < focus_score:
+        eligible.add("comeback")
+    if len(last_three) == 3 and last_three[0] < last_three[1] < last_three[2]:
+        eligible.add("getting_better")
+    if week_session_count >= 5:
+        eligible.add("focused_week")
+    if session_count >= 10 and len(session_dates) >= 2:
+        eligible.add("study_routine")
+    for threshold, achievement_id in (
+        (2 * 3600, "persistence"), (5 * 3600, "time_builder"),
+        (10 * 3600, "study_veteran"), (20 * 3600, "twenty_hour_club"),
+        (50 * 3600, "fifty_hour_club"),
+    ):
+        if total_study_seconds >= threshold:
+            eligible.add(achievement_id)
+    if current_seconds >= 10 * 60 and focus_score >= 85:
+        eligible.add("quick_focus")
+    if current_seconds >= 45 * 60:
+        eligible.add("long_haul")
+    if len(completed_sessions) >= 5 and all(
+        not item.get("abandoned", False) for item in completed_sessions[-5:]
+    ):
+        eligible.add("keep_going")
+    if len(completed_sessions) >= 3 and all(
+        not item.get("abandoned", False) for item in completed_sessions[-3:]
+    ):
+        eligible.add("no_quit")
+    start_value = session_data.get("session_started_at")
+    try:
+        start_time = datetime.fromisoformat(str(start_value)) if start_value else end_time
+    except (TypeError, ValueError):
+        start_time = end_time
+    if start_time.hour < 12:
+        eligible.add("early_focus")
+    if start_time.hour >= 18:
+        eligible.add("evening_focus")
+    if study_days >= 7:
+        eligible.add("routine_builder")
+    for threshold, achievement_id in (
+        (500, "xp_collector"), (1000, "xp_hunter"), (5000, "xp_champion"),
+    ):
+        if profile["total_xp"] >= threshold:
+            eligible.add(achievement_id)
+    if goal and goal.casefold() not in goals_seen:
+        eligible.add("explorer")
+    if goal:
+        eligible.add("goal_getter")
+    earned_ids = achievement_earned_ids(profile)
+    if len(earned_ids.intersection(ACHIEVEMENTS_BY_ID) - {"focusmate_legend"}) >= 20:
+        eligible.add("focusmate_legend")
+    return eligible - earned_ids
+
+
+def apply_completed_session_rewards(session_data):
+    if not isinstance(session_data, dict) or not session_data.get("session_completed"):
+        return session_data
+    session_id = str(session_data.get("session_id") or "")
+    if not session_id:
+        return session_data
+
+    profile = load_profile()
+    history_entry = next(
+        (
+            item for item in profile["session_history"]
+            if str(item.get("session_id") or "") == session_id
+        ),
+        None,
+    )
+    if history_entry is None or history_entry.get("game_rewards_applied"):
+        return session_data
+
+    plan = profile.get("active_session_plan") or {}
+    seconds = bounded_int(session_data.get("session_seconds"), 0, 0, 86_400)
+    good_posture_seconds = bounded_int(
+        session_data.get("good_posture_seconds"), 0, 0, seconds
+    )
+    challenge_count = seconds // FOCUS_CHALLENGE_SECONDS
+    challenge_xp = challenge_count * FOCUS_CHALLENGE_XP
+    history_entry.update({
+        "subject": str(plan.get("subject") or "Other"),
+        "goal": str(plan.get("goal") or "")[:200],
+        "task_id": str(plan.get("task_id") or ""),
+        "task_text": str(plan.get("task_text") or "")[:120],
+        "focus_score": round(safe_session_number(session_data.get("focus_score"), 0, 0, 100), 1),
+        "session_started_at": session_data.get("session_started_at"),
+        "posture_alerts": bounded_int(session_data.get("posture_alerts"), 0, 0, 100_000),
+        "distance_alerts": bounded_int(session_data.get("distance_alerts"), 0, 0, 100_000),
+        "looking_away_alerts": bounded_int(session_data.get("looking_away_alerts"), 0, 0, 100_000),
+        "looking_away_detection_available": session_data.get("looking_away_detection_available") is True,
+        "fatigue_signals": bounded_int(session_data.get("fatigue_signals"), 0, 0, 100_000),
+        "focus_challenge_xp": challenge_xp,
+        "challenge_count": challenge_count,
+        "good_posture_seconds": good_posture_seconds,
+        "game_rewards_applied": True,
+    })
+    profile["total_xp"] = min(
+        2**63 - 1,
+        profile["total_xp"] + challenge_xp,
+    )
+
+    unlocked_records = []
+    while True:
+        eligible = completed_achievement_ids(profile, session_data, history_entry, plan)
+        if not eligible:
+            break
+        newly_unlocked = award_achievement_ids(profile, eligible)
+        if not newly_unlocked:
+            break
+        unlocked_records.extend(newly_unlocked)
+    achievement_xp = sum(item["xp"] for item in unlocked_records)
+    history_entry["achievements_unlocked"] = [item["id"] for item in unlocked_records]
+    history_entry["achievement_xp"] = achievement_xp
+    history_entry["xp"] = min(
+        2**31 - 1,
+        max(0, bounded_int(history_entry.get("xp"), 0, 0, 2**31 - 1))
+        + challenge_xp
+        + achievement_xp,
+    )
+    profile["active_session_plan"] = {}
+    save_profile(profile)
+
+    session_data.update({
+        "study_subject": history_entry["subject"],
+        "study_goal": history_entry["goal"],
+        "linked_task_id": history_entry["task_id"],
+        "linked_task": history_entry["task_text"],
+        "goal_outcome": history_entry.get("goal_outcome"),
+        "focus_challenge_xp": challenge_xp,
+        "achievements_unlocked": unlocked_records,
+    })
+    session_path = user_data_file("session_data.json")
+    temporary_path = session_path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as file:
+        json.dump(session_data, file, indent=2)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(temporary_path, session_path)
+    return session_data
+
+
+# ---------------------------------------------------------------------------
+# Focus timer helpers
+# ---------------------------------------------------------------------------
+
+def record_focus_timer_seconds(seconds):
+    credited_seconds = bounded_int(seconds, 0, 0, 86400)
+    if credited_seconds == 0:
+        return None
+    profile = load_profile()
+    profile["focus_timer_seconds_today"] = min(
+        86400,
+        profile["focus_timer_seconds_today"] + credited_seconds,
+    )
+    profile["focus_timer_total_seconds"] = min(
+        2**63 - 1,
+        profile["focus_timer_total_seconds"] + credited_seconds,
+    )
+    today = date.today().isoformat()
+    today_entry = next(
+        (item for item in profile["focus_timer_history"] if item.get("date") == today),
+        None,
+    )
+    if today_entry is None:
+        profile["focus_timer_history"].append({"date": today, "seconds": credited_seconds})
+    else:
+        today_entry["seconds"] = min(
+            86400,
+            bounded_int(today_entry.get("seconds"), 0, 0, 86400) + credited_seconds,
+        )
+    save_profile(profile)
+    return profile["focus_timer_seconds_today"]
+
+
+def credit_active_focus_timer_segment(profile=None):
+    started_at = st.session_state.get("focus_segment_started_at")
+    if started_at is None:
+        return
+    segment_duration = max(0, int(st.session_state.get("focus_segment_duration", 0)))
+    elapsed = min(segment_duration, max(0, int(time.time() - started_at)))
+    if not st.session_state.get("focus_segment_camera_active", False):
+        total_seconds = record_focus_timer_seconds(elapsed)
+        if profile is not None and total_seconds is not None:
+            profile["focus_timer_seconds_today"] = total_seconds
+    st.session_state.focus_segment_started_at = None
+    st.session_state.focus_segment_duration = 0
+    st.session_state.focus_segment_camera_active = False
+
+
+def advance_focus_timer(profile):
+    if not st.session_state.get("focus_running"):
+        return
+    if webcam_session_active():
+        st.session_state.focus_segment_camera_active = True
+    remaining = max(0, int(st.session_state.focus_deadline - time.time()))
+    st.session_state.focus_remaining = remaining
+    if remaining > 0:
+        return
+
+    credit_active_focus_timer_segment(profile)
+    st.session_state.focus_running = False
+    st.session_state.focus_deadline = None
+    st.session_state.focus_finished = True
+    if profile.get("session_preferences", {}).get("session_chimes", False):
+        st.session_state.pending_session_chime = "complete"
+    st.toast("Focus block complete. Take a little break—you earned it.")
+
+
+# ---------------------------------------------------------------------------
+# Live session data and reflections
+# ---------------------------------------------------------------------------
 
 def load_live_data():
     username = normalize_username(st.session_state.get("active_username"))
@@ -282,6 +884,199 @@ def load_live_data():
             path = SESSION_FILE
     data = read_json(path, {})
     return data if isinstance(data, dict) else {}
+
+
+def safe_session_number(value, default=0.0, minimum=0.0, maximum=1_000_000.0):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def build_session_reflection_stats(session_data):
+    duration_seconds = safe_session_number(
+        session_data.get("session_seconds"),
+        safe_session_number(session_data.get("session_minutes"), 0.0) * 60,
+        0,
+        86_400,
+    )
+    focus_history = []
+    history = session_data.get("history", [])
+    if isinstance(history, list):
+        for point in history[-24:]:
+            if not isinstance(point, dict):
+                continue
+            focus_history.append({
+                "minute": round(safe_session_number(point.get("minute"), 0, 0, 1440), 1),
+                "focus_score": round(safe_session_number(point.get("focus_score"), 0, 0, 100), 1),
+            })
+
+    allowed_statuses = {
+        "posture": {"Good", "Slouching", "Unknown"},
+        "distance": {"Good", "Too Far", "Unknown"},
+    }
+    posture = str(session_data.get("posture") or "Unknown")
+    distance_status = str(session_data.get("distance_status") or "Unknown")
+    return {
+        "focus_score": round(safe_session_number(session_data.get("focus_score"), 0, 0, 100), 1),
+        "duration_minutes": round(duration_seconds / 60, 1),
+        "alert_counts": {
+            "posture": bounded_int(session_data.get("posture_alerts"), 0, 0, 100_000),
+            "screen_distance": bounded_int(session_data.get("distance_alerts"), 0, 0, 100_000),
+            "looking_away": bounded_int(session_data.get("looking_away_alerts"), 0, 0, 100_000),
+            "fatigue_related": bounded_int(session_data.get("fatigue_signals"), 0, 0, 100_000),
+        },
+        "final_signals": {
+            "posture": posture if posture in allowed_statuses["posture"] else "Unknown",
+            "screen_distance": distance_status if distance_status in allowed_statuses["distance"] else "Unknown",
+            "looking_away": bool(session_data.get("looking_away", False)),
+            "eyes_closed": bool(session_data.get("eyes_closed", False)),
+            "face_detected": bool(session_data.get("face_detected", False)),
+        },
+        "focus_history": focus_history,
+    }
+
+
+def fallback_session_reflection(stats):
+    score = stats["focus_score"]
+    minutes = stats["duration_minutes"]
+    alerts = stats["alert_counts"]
+    signals = stats["final_signals"]
+    if score >= 80:
+        summary = f"You maintained a strong focus estimate of {score:g}/100 during this {minutes:g}-minute session."
+    elif score >= 60:
+        summary = f"Your focus estimate was generally steady at {score:g}/100 during this {minutes:g}-minute session, with some interruptions."
+    else:
+        summary = f"This {minutes:g}-minute session had several attention-related interruptions, with a focus estimate of {score:g}/100."
+
+    went_well = [f"You completed {minutes:g} minutes of study time."]
+    if signals["posture"] == "Good":
+        went_well.append("Your final posture signal was good.")
+    elif alerts["posture"] == 0:
+        went_well.append("No posture alerts were recorded.")
+    elif alerts["looking_away"] == 0:
+        went_well.append("No looking-away alerts were recorded.")
+
+    improvement_options = [
+        ("posture", "Try a quick posture check when you change tasks."),
+        ("screen_distance", "Adjust your seat or screen to keep a comfortable distance."),
+        ("looking_away", "Before the next block, choose one small task and reduce nearby distractions."),
+        ("fatigue_related", "If you notice tiredness, try a short break before your next focus block."),
+    ]
+    highest_count = max((alerts[key] for key, _ in improvement_options), default=0)
+    if highest_count:
+        try_next = [next(text for key, text in improvement_options if alerts[key] == highest_count)]
+    else:
+        try_next = ["Keep the setup that worked for you and take a short break before your next block."]
+    return {
+        "summary": summary,
+        "what_went_well": went_well[:2],
+        "try_next": try_next,
+    }
+
+
+def request_ai_session_reflection(stats):
+    api_key = os.environ.get("FOCUSMATE_AI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    endpoint = os.environ.get(
+        "FOCUSMATE_AI_ENDPOINT",
+        "https://api.openai.com/v1/chat/completions",
+    )
+    model = os.environ.get("FOCUSMATE_AI_MODEL", "gpt-4o-mini")
+    request_body = {
+        "model": model,
+        "temperature": 0.7,
+        "max_tokens": 280,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Write a brief, supportive study-session reflection using only the supplied statistics. "
+                    "Do not invent events, diagnose, shame, insult, or judge the student. Treat fatigue values "
+                    "only as fatigue-related signals. Return JSON with summary (one or two sentences), "
+                    "what_went_well (one or two short strings), and try_next (one practical short string)."
+                ),
+            },
+            {"role": "user", "content": json.dumps(stats, separators=(",", ":"))},
+        ],
+    }
+    request = Request(
+        endpoint,
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            response_data = json.loads(response.read(64_000).decode("utf-8"))
+        content = response_data["choices"][0]["message"]["content"]
+        reflection = json.loads(content)
+        summary = reflection.get("summary")
+        went_well = reflection.get("what_went_well")
+        try_next = reflection.get("try_next")
+        if isinstance(try_next, str):
+            try_next = [try_next]
+        if isinstance(went_well, str):
+            went_well = [went_well]
+        if not isinstance(summary, str) or not isinstance(went_well, list) or not isinstance(try_next, list):
+            return None
+        clean_went_well = [item.strip()[:180] for item in went_well if isinstance(item, str) and item.strip()][:2]
+        clean_try_next = [item.strip()[:180] for item in try_next if isinstance(item, str) and item.strip()][:2]
+        if not clean_went_well or not clean_try_next:
+            return None
+        return {
+            "summary": summary.strip()[:500],
+            "what_went_well": clean_went_well,
+            "try_next": clean_try_next,
+        }
+    except Exception:
+        return None
+
+
+def create_session_reflection_if_needed(session_data=None):
+    session_data = session_data if isinstance(session_data, dict) else load_live_data()
+    session_id = str(session_data.get("session_id") or "")
+    if not session_id or not session_data.get("session_completed"):
+        return None
+
+    profile = load_profile()
+    reflections = profile["session_reflections"]
+    existing = next(
+        (item for item in reversed(reflections) if item.get("session_id") == session_id),
+        None,
+    )
+    if existing:
+        if existing.get("source") == "AI-generated":
+            award_profile_achievements({"ai_reflection"})
+        return existing
+
+    stats = build_session_reflection_stats(session_data)
+    reflection = request_ai_session_reflection(stats)
+    source = "AI-generated" if reflection else "Fallback"
+    if reflection is None:
+        reflection = fallback_session_reflection(stats)
+    saved_reflection = {
+        "session_id": session_id,
+        "generated_at": datetime.now().isoformat(),
+        "source": source,
+        **reflection,
+        "stats": stats,
+    }
+    reflections.append(saved_reflection)
+    profile["session_reflections"] = reflections[-100:]
+    save_profile(profile)
+    if source == "AI-generated":
+        award_profile_achievements({"ai_reflection"})
+    return saved_reflection
 
 
 def mark_session_closed(marker_path=None):
@@ -317,12 +1112,20 @@ def consume_session_reset_marker():
     if isinstance(live, dict) and bool(live.get("session_active")):
         return False
 
+    if isinstance(live, dict) and live.get("session_completed"):
+        live = apply_completed_session_rewards(live)
+        create_session_reflection_if_needed(live)
+
     try:
         os.remove(marker_path)
     except OSError:
         pass
     return True
 
+
+# ---------------------------------------------------------------------------
+# Webcam session management
+# ---------------------------------------------------------------------------
 
 def webcam_is_running():
     process = st.session_state.get("webcam_process")
@@ -354,49 +1157,251 @@ def webcam_session_active():
     return bool(live.get("session_active")) and live_snapshot_is_fresh(live)
 
 
-def ensure_stop_server():
-    global SESSION_STOP_SERVER
-    if SESSION_STOP_SERVER is not None:
-        return SESSION_STOP_SERVER
+def _browser_camera_document(frame_url):
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ margin: 0; background: #101820; color: #e6f1ef; font: 14px sans-serif; }}
+        .camera {{ overflow: hidden; border-radius: 8px; background: #0a1015; }}
+        video {{ display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }}
+        .controls {{ display: flex; align-items: center; gap: 12px; padding: 10px 12px; }}
+        button {{ border: 0; border-radius: 6px; padding: 8px 12px; background: #a8f0d0; color: #10201b; font-weight: 700; cursor: pointer; }}
+        #status {{ color: #c4d4d2; }}
+    </style>
+</head>
+<body>
+    <div class="camera">
+        <video id="camera" autoplay playsinline muted></video>
+        <div class="controls">
+            <button id="allow-camera" type="button">Allow camera</button>
+            <span id="status">Your browser will ask for camera permission.</span>
+        </div>
+    </div>
+    <script>
+        const frameUrl = {json.dumps(frame_url)};
+        const camera = document.getElementById("camera");
+        const status = document.getElementById("status");
+        const allowButton = document.getElementById("allow-camera");
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        let cameraStream = null;
+        let uploadTimer = null;
+        let uploading = false;
+
+        function stopCamera() {{
+            if (uploadTimer !== null) window.clearInterval(uploadTimer);
+            uploadTimer = null;
+            if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+            cameraStream = null;
+        }}
+
+        async function uploadFrame() {{
+            if (!cameraStream || uploading || !camera.videoWidth) return;
+            uploading = true;
+            const scale = Math.min(1, 640 / camera.videoWidth);
+            canvas.width = Math.round(camera.videoWidth * scale);
+            canvas.height = Math.round(camera.videoHeight * scale);
+            context.drawImage(camera, 0, 0, canvas.width, canvas.height);
+            try {{
+                const image = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.65));
+                if (!image) throw new Error("Could not encode camera frame");
+                const response = await fetch(frameUrl, {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "image/jpeg" }},
+                    body: image
+                }});
+                if (response.status === 403) {{
+                    stopCamera();
+                    status.textContent = "This camera session has ended.";
+                    return;
+                }}
+                if (!response.ok) throw new Error("Frame upload failed");
+            }} catch (error) {{
+                status.textContent = "Camera is on, but analysis is not connected.";
+            }} finally {{
+                uploading = false;
+            }}
+        }}
+
+        allowButton.addEventListener("click", async () => {{
+            allowButton.disabled = true;
+            status.textContent = "Waiting for camera permission...";
+            try {{
+                cameraStream = await navigator.mediaDevices.getUserMedia({{
+                    video: {{ width: {{ ideal: 640 }}, height: {{ ideal: 360 }}, frameRate: {{ ideal: 30 }} }},
+                    audio: false
+                }});
+                camera.srcObject = cameraStream;
+                await camera.play();
+                status.textContent = "Camera connected · live preview";
+                allowButton.textContent = "Camera enabled";
+                uploadTimer = window.setInterval(uploadFrame, 125);
+            }} catch (error) {{
+                allowButton.disabled = false;
+                status.textContent = error.name === "NotAllowedError"
+                    ? "Camera permission was denied. Allow it in your browser's site settings and try again."
+                    : "Could not start the camera: " + error.message;
+            }}
+        }});
+
+        window.addEventListener("pagehide", stopCamera);
+    </script>
+</body>
+</html>"""
+
+
+@st.cache_resource(show_spinner=False)
+def _camera_hub():
+    """One HTTP server + shared token/frame stores for the whole Streamlit process."""
+    tokens, frames = {}, {}
 
     class StopHandler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            prefix = "/focusmate-stop/"
-            request_path = self.path.partition("?")[0]
-            key = request_path.removeprefix(prefix)
-            if request_path.startswith(prefix) and re.fullmatch(r"[a-f0-9]{32}", key):
-                data_directory = os.path.join(PROFILE_DIR, key)
-                try:
-                    os.makedirs(data_directory, exist_ok=True)
-                    stop_path = os.path.join(data_directory, "stop_session.request")
-                    with open(stop_path, "w", encoding="utf-8") as file:
-                        file.write("stop")
-                    mark_session_closed(os.path.join(data_directory, "session_closed.marker"))
-                except Exception:
-                    try:
-                        mark_session_closed()
-                    except Exception:
-                        pass
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+        def _authorized(self, key, query):
+            supplied = query.get("token", [""])[0]
+            expected = tokens.get(key, "")
+            return bool(
+                re.fullmatch(r"[a-f0-9]{32}", key)
+                and expected
+                and secrets.compare_digest(supplied, expected)
+            )
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
+
+        def do_GET(self):
+            parsed = urlsplit(self.path)
+            camera_prefix = "/focusmate-camera/"
+            if parsed.path.startswith(camera_prefix):
+                key = parsed.path.removeprefix(camera_prefix)
+                query = parse_qs(parsed.query)
+                if not self._authorized(key, query):
+                    self.send_response(403)
+                    self._cors()
+                    self.end_headers()
+                    return
+                token = query.get("token", [""])[0]
+                frame_url = (
+                    f"http://127.0.0.1:{self.server.server_address[1]}"
+                    f"/focusmate-frame/{key}?token={token}"
+                )
+                document = _browser_camera_document(frame_url).encode("utf-8")
                 self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(document)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(document)
+                return
+
+            prefix = "/focusmate-frame/"
+            key = parsed.path.removeprefix(prefix)
+            if not parsed.path.startswith(prefix) or not self._authorized(key, parse_qs(parsed.query)):
+                self.send_response(403)
+                self._cors()
+                self.end_headers()
+                return
+            latest = frames.get(key)
+            version = str(latest[0]) if latest else ""
+            if not latest or self.headers.get("If-None-Match", "").strip('"') == version:
+                self.send_response(204)
+                self._cors()
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(latest[1])))
+            self.send_header("ETag", f'"{version}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(latest[1])
+
+        def do_POST(self):
+            parsed = urlsplit(self.path)
+            path = parsed.path
+            if path.startswith("/focusmate-frame/"):
+                key = path.removeprefix("/focusmate-frame/")
+                if not self._authorized(key, parse_qs(parsed.query)):
+                    self.send_response(403)
+                    self._cors()
+                    self.end_headers()
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = 0
+                if (
+                    length < 4
+                    or length > 1_500_000
+                    or not self.headers.get("Content-Type", "").startswith("image/jpeg")
+                ):
+                    self.send_response(413)
+                    self._cors()
+                    self.end_headers()
+                    return
+                data = self.rfile.read(length)
+                if not data.startswith(b"\xff\xd8"):
+                    self.send_response(400)
+                    self._cors()
+                    self.end_headers()
+                    return
+                frames[key] = (time.monotonic_ns(), data)
+                self.send_response(204)
+                self._cors()
+                self.end_headers()
+                return
+
+            key = path.removeprefix("/focusmate-stop/")
+            if path.startswith("/focusmate-stop/") and re.fullmatch(r"[a-f0-9]{32}", key):
+                tokens.pop(key, None)
+                frames.pop(key, None)
+                directory = os.path.join(PROFILE_DIR, key)
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                    with open(os.path.join(directory, "stop_session.request"), "w", encoding="utf-8") as file:
+                        file.write("stop")
+                    mark_session_closed(os.path.join(directory, "session_closed.marker"))
+                except Exception:
+                    pass
+                self.send_response(200)
+                self._cors()
                 self.end_headers()
                 self.wfile.write(b"ok")
                 return
             self.send_response(404)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._cors()
             self.end_headers()
 
-        def log_message(self, format, *args):
+        def log_message(self, *args):
             return
 
-    server = HTTPServer(("127.0.0.1", SESSION_STOP_PORT), StopHandler)
-    SESSION_STOP_SERVER = server
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server
+    server = ThreadingHTTPServer(("127.0.0.1", 0), StopHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return {"server": server, "port": server.server_address[1], "tokens": tokens, "frames": frames}
 
 
-def start_webcam():
+def ensure_stop_server():
+    global SESSION_STOP_PORT, SESSION_STOP_SERVER, SESSION_CAMERA_TOKENS, SESSION_CAMERA_FRAMES
+    hub = _camera_hub()
+    SESSION_STOP_PORT = hub["port"]
+    SESSION_STOP_SERVER = hub["server"]
+    SESSION_CAMERA_TOKENS = hub["tokens"]
+    SESSION_CAMERA_FRAMES = hub["frames"]
+    return hub["server"]
+
+
+def start_webcam(session_plan=None):
     if webcam_is_running() or webcam_session_active():
         return True, "Your study session is already running."
     if not load_profile().get("session_preferences", {}).get("focus_monitoring", True):
@@ -430,22 +1435,41 @@ def start_webcam():
             os.remove(stop_path)
         except OSError as error:
             return False, f"Could not clear the previous stop request: {error}"
+    camera_key = None
     try:
+        ensure_stop_server()
+        camera_key = os.path.basename(user_data_directory())
+        camera_token = secrets.token_urlsafe(24)
+        SESSION_CAMERA_TOKENS[camera_key] = camera_token
+        st.session_state.pop("focusmate_latest_reflection_id", None)
         worker_env = os.environ.copy()
         worker_env["FOCUSMATE_SESSION_FILE"] = user_data_file("session_data.json")
         worker_env["FOCUSMATE_PROFILE_FILE"] = profile_file()
         worker_env["FOCUSMATE_FRAME_FILE"] = user_data_file("latest_frame.jpg")
         worker_env["FOCUSMATE_STOP_FILE"] = stop_path
+        worker_env["FOCUSMATE_CAMERA_FRAME_URL"] = (
+            f"http://127.0.0.1:{SESSION_STOP_PORT}/focusmate-frame/{camera_key}"
+        )
+        worker_env["FOCUSMATE_CAMERA_TOKEN"] = camera_token
+        st.session_state["webcam_previous_session_id"] = load_live_data().get("session_id")
         st.session_state.webcam_process = subprocess.Popen(
             [WEBCAM_PYTHON, WEBCAM_FILE], cwd=WEBCAM_DIR, env=worker_env
         )
         st.session_state.webcam_start_time = datetime.now()
+        st.session_state.browser_camera_token = camera_token
+        latest_profile = load_profile()
+        latest_profile["active_session_plan"] = session_plan if isinstance(session_plan, dict) else {}
+        save_profile(latest_profile)
+        st.session_state["active_session_plan"] = latest_profile["active_session_plan"]
     except OSError as error:
+        if camera_key:
+            SESSION_CAMERA_TOKENS.pop(camera_key, None)
         return False, f"Could not start the webcam detector: {error}"
     return True, "Your webcam study session has started."
 
 
 def stop_webcam():
+    ensure_stop_server()
     process = st.session_state.get("webcam_process")
     process_running = process is not None and process.poll() is None
     session_active = webcam_session_active()
@@ -453,6 +1477,7 @@ def stop_webcam():
         return False, "There is no running webcam session to stop."
 
     try:
+        os.makedirs(user_data_directory(), exist_ok=True)
         with open(user_data_file("stop_session.request"), "w", encoding="utf-8") as file:
             file.write("stop")
     except OSError as error:
@@ -477,6 +1502,20 @@ def stop_webcam():
                 process.kill()
                 process.wait(timeout=5)
 
+    final_session_data = load_live_data()
+    if not process_running:
+        wait_deadline = time.monotonic() + 5
+        while final_session_data.get("session_active") and time.monotonic() < wait_deadline:
+            time.sleep(0.1)
+            final_session_data = load_live_data()
+    previous_session_id = st.session_state.pop("webcam_previous_session_id", None)
+    reflection = None
+    if final_session_data.get("session_id") != previous_session_id:
+        final_session_data = apply_completed_session_rewards(final_session_data)
+        reflection = create_session_reflection_if_needed(final_session_data)
+    if reflection:
+        st.session_state["focusmate_latest_reflection_id"] = reflection["session_id"]
+
     st.session_state.webcam_process = None
     st.session_state.webcam_start_time = None
     frame_path = user_data_file("latest_frame.jpg")
@@ -485,6 +1524,10 @@ def stop_webcam():
             os.remove(frame_path)
         except OSError:
             pass
+    camera_key = os.path.basename(user_data_directory())
+    SESSION_CAMERA_TOKENS.pop(camera_key, None)
+    SESSION_CAMERA_FRAMES.pop(camera_key, None)
+    st.session_state.pop("browser_camera_token", None)
     stop_path = user_data_file("stop_session.request")
     if process is not None and os.path.exists(stop_path):
         try:
@@ -496,32 +1539,30 @@ def stop_webcam():
 
 def inject_exit_handler():
     ensure_stop_server()
-    stop_url = f"http://127.0.0.1:{SESSION_STOP_PORT}/focusmate-stop/{hashlib.sha256(normalize_username(st.session_state.get('active_username')).encode('utf-8')).hexdigest()[:32]}"
-    st.markdown(
-        """
+    key = hashlib.sha256(
+        normalize_username(st.session_state.get("active_username")).encode("utf-8")
+    ).hexdigest()[:32]
+    stop_url = f"http://127.0.0.1:{SESSION_STOP_PORT}/focusmate-stop/{key}"
+    components.html(
+        f"""
         <script>
-        const stopUrl = '__STOP_URL__';
-        let stopSent = false;
-        const triggerStop = () => {
-          if (stopSent) return;
-          stopSent = true;
-          try {
-            const payload = 'stop';
-            if (navigator.sendBeacon) {
-              navigator.sendBeacon(stopUrl, payload);
-              return;
-            }
-            fetch(stopUrl, { method: 'POST', mode: 'no-cors', keepalive: true, body: payload });
-          } catch (error) {
-            // ignore page-close cleanup errors
-          }
-        };
-        window.addEventListener('pagehide', triggerStop);
+          const w = window.parent;
+          w.__focusmateStopUrl = {json.dumps(stop_url)};
+          if (!w.__focusmateStopBound) {{
+            w.__focusmateStopBound = true;
+            w.addEventListener('pagehide', () => {{
+              try {{ navigator.sendBeacon(w.__focusmateStopUrl, 'stop'); }} catch (e) {{}}
+            }});
+          }}
         </script>
-        """.replace("__STOP_URL__", stop_url),
-        unsafe_allow_html=True,
+        """,
+        height=0,
     )
 
+
+# ---------------------------------------------------------------------------
+# Styling
+# ---------------------------------------------------------------------------
 
 def inject_styles():
     st.markdown(
@@ -770,6 +1811,10 @@ def inject_styles():
     )
 
 
+# ---------------------------------------------------------------------------
+# Welcome flow and shared UI pieces
+# ---------------------------------------------------------------------------
+
 def welcome_intro_form():
     generation = int(st.session_state.get("login_form_generation", 0))
     st.markdown(
@@ -936,13 +1981,17 @@ def hero(name, xp_to_next):
     )
 
 
+CAMERA_OFF_HTML = (
+    '<div style="height:240px;display:flex;align-items:center;justify-content:center;'
+    'border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);'
+    'color:#aab7c7;font-weight:600;">Camera off</div>'
+)
+
+
 def render_live_camera_preview():
     frame_path = user_data_file("latest_frame.jpg")
     if not os.path.exists(frame_path):
-        st.markdown(
-            '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(CAMERA_OFF_HTML, unsafe_allow_html=True)
         return
     try:
         from PIL import Image
@@ -952,10 +2001,69 @@ def render_live_camera_preview():
         try:
             st.image(frame_path, use_container_width=True)
         except Exception:
-            st.markdown(
-                '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
-                unsafe_allow_html=True,
+            st.markdown(CAMERA_OFF_HTML, unsafe_allow_html=True)
+
+
+def render_browser_camera_preview(token, height=330):
+    ensure_stop_server()
+    camera_key = os.path.basename(user_data_directory())
+    camera_url = (
+        f"http://127.0.0.1:{SESSION_STOP_PORT}/focusmate-camera/"
+        f"{camera_key}?token={token}"
+    )
+    st.iframe(camera_url, height=height)
+
+
+def render_shared_camera_panel(live):
+    camera_token = st.session_state.get("browser_camera_token")
+    if not camera_token:
+        return
+
+    st.markdown("### Live study session")
+    st.caption("Camera preview and current signals stay here while you move between pages.")
+    preview_column, signals_column = st.columns([1.05, 1.4], gap="large", vertical_alignment="top")
+    with preview_column:
+        render_browser_camera_preview(camera_token, height=330)
+    with signals_column:
+        if live_snapshot_is_fresh(live, max_age=20):
+            focus_score = bounded_int(live.get("focus_score"), 0, 0, 100)
+            focus_label = "Good" if focus_score >= 80 else "Average" if focus_score >= 60 else "Several interruptions"
+            posture = str(live.get("posture") or "Unknown").strip()
+            distance_status = str(live.get("distance_status") or "Unknown").strip()
+            face_detected = bool(live.get("face_detected"))
+            eyes = "Not detected" if not face_detected else "Closed" if live.get("eyes_closed") else "Open"
+            face = "Detected" if face_detected else "Not detected"
+            first_row = st.columns(3, gap="small")
+            for column, (label, value) in zip(
+                first_row,
+                (
+                    ("Focus estimate", focus_label),
+                    ("Posture now", posture if posture != "Unknown" else "Not detected"),
+                    ("Screen distance now", "Too far" if distance_status == "Too Far" else distance_status),
+                ),
+            ):
+                with column:
+                    st.metric(label, value)
+            second_row = st.columns(2, gap="small")
+            for column, (label, value) in zip(
+                second_row,
+                (("Eyes now", eyes), ("Face now", face)),
+            ):
+                with column:
+                    st.metric(label, value)
+
+            session_seconds = bounded_int(live.get("session_seconds"), 0, 0, 86_400)
+            challenge_minutes = session_seconds % FOCUS_CHALLENGE_SECONDS // 60
+            completed_challenges = session_seconds // FOCUS_CHALLENGE_SECONDS
+            st.markdown("**🎯 Focus challenge**")
+            st.progress(
+                (session_seconds % FOCUS_CHALLENGE_SECONDS) / FOCUS_CHALLENGE_SECONDS,
+                text=f"{challenge_minutes} / 10 minutes · {completed_challenges} completed",
             )
+            st.caption(f"+{FOCUS_CHALLENGE_XP} XP per completed challenge")
+        else:
+            st.warning("Waiting for fresh camera statistics. Keep this page open while the camera connects.")
+    st.divider()
 
 
 def mood_prompt_required(profile):
@@ -966,12 +2074,34 @@ def mood_prompt_required(profile):
     return wellbeing.get("mood_checkin_date") != date.today().isoformat()
 
 
+def mood_motivation(selected_mood):
+    messages = {
+        "Calm": "Steady pace, clear mind — you’re ready to move with intention.",
+        "Focused": "Nice focus — keep that momentum going and trust your flow.",
+        "Okay": "A solid 'okay' day still counts. One small step is enough to build momentum.",
+        "Tired": "You do not need to force it all. Take it gently and keep the session light.",
+        "Stressed": "Pause, breathe, and take it one task at a time. You’ve got this.",
+    }
+    return messages.get(selected_mood, "Small progress still counts — today is a good day to start where you are.")
+
+
+def progressive_nudge(signal, occurrence_count, rotation=0):
+    messages = NUDGE_MESSAGES.get(signal)
+    if not messages:
+        return None
+    occurrence_count = max(1, int(occurrence_count))
+    tier = 1 if occurrence_count == 1 else 2 if occurrence_count <= 3 else 3
+    tier_start = 1 if tier == 1 else 2 if tier == 2 else 4
+    variants = messages[tier - 1]
+    message_index = (occurrence_count - tier_start + max(0, int(rotation))) % len(variants)
+    return tier, variants[message_index]
+
+
 def render_webcam_controls(live, profile):
     running = webcam_is_running()
     active = webcam_session_active()
     fresh = live_snapshot_is_fresh(live, max_age=20)
     prefs = {**fresh_profile()["session_preferences"], **profile.get("session_preferences", {})}
-    wellbeing = profile.get("session_wellbeing") or {}
     mood_prompt = mood_prompt_required(profile)
     selected_mood = "Choose a mood"
     if not running and not active:
@@ -981,18 +2111,50 @@ def render_webcam_controls(live, profile):
             return
 
         st.info("Ready when you are. The camera only starts when you choose.")
+        username = normalize_username(profile.get("username"))
+        subject_options = ["Mathematics", "Science", "Coding", "Assignment", "Other"]
+        subject = st.selectbox(
+            "What are you working on?",
+            subject_options,
+            key=f"session_subject_{username}",
+        )
+        if subject == "Other":
+            subject = st.text_input(
+                "Study subject",
+                max_chars=40,
+                placeholder="What are you studying?",
+                key=f"session_subject_other_{username}",
+            ).strip() or "Other"
+        session_goal = st.text_input(
+            "Session goal",
+            max_chars=200,
+            placeholder="e.g. Complete Chapter 4 exercises",
+            key=f"session_goal_{username}",
+        ).strip()
+        task_by_id = {
+            str(task.get("id")): task
+            for task in profile.get("tasks", [])
+            if not task.get("done") and task.get("id")
+        }
+        task_id = st.selectbox(
+            "Link a task (optional)",
+            [""] + list(task_by_id),
+            format_func=lambda value: "No linked task" if not value else str(task_by_id[value].get("text", "Task")),
+            key=f"session_task_{username}",
+        )
         if mood_prompt:
             selected_mood = st.selectbox(
                 "How are you feeling before this session?",
                 ["Choose a mood", "Calm", "Focused", "Okay", "Tired", "Stressed"],
-                key=f"mood_checkin_{normalize_username(profile.get('username'))}_{date.today().isoformat()}",
+                key=f"mood_checkin_{username}_{date.today().isoformat()}",
             )
-        cam_button_label = "📷 Start camera"
+            if selected_mood != "Choose a mood":
+                st.caption(f"💬 {mood_motivation(selected_mood)}")
         if st.button(
-            cam_button_label,
+            "📷 Start camera",
             type="primary",
             width="stretch",
-            disabled=mood_prompt and selected_mood == "Choose a mood",
+            disabled=not session_goal or (mood_prompt and selected_mood == "Choose a mood"),
         ):
             if mood_prompt:
                 latest = load_profile()
@@ -1004,15 +2166,17 @@ def render_webcam_controls(live, profile):
                 })
                 latest["session_wellbeing"] = latest_wellbeing
                 save_profile(latest)
-            ok, message = start_webcam()
+            task = task_by_id.get(task_id, {})
+            session_plan = {
+                "subject": subject,
+                "goal": session_goal,
+                "task_id": task_id,
+                "task_text": str(task.get("text") or ""),
+            }
+            ok, message = start_webcam(session_plan)
             (st.success if ok else st.error)(message)
             st.rerun()
-        if active and fresh:
-            st.success("Live connection · your study buddy is checking in.")
-        elif active:
-            st.warning("The latest camera update is delayed. Check that the detector is still running.")
-        else:
-            st.caption("No active camera session. Your focus timer works independently.")
+        st.caption("No active camera session. Your focus timer works independently.")
         render_live_camera_preview()
         return
 
@@ -1020,54 +2184,106 @@ def render_webcam_controls(live, profile):
     if st.button("🛑 Stop camera", type="primary", width="stretch"):
         ok, message = stop_webcam()
         (st.success if ok else st.warning)(message)
+        if ok and st.session_state.get("focusmate_latest_reflection_id"):
+            st.session_state["focusmate_open_session_results"] = True
         st.rerun()
 
-    if not os.path.exists(user_data_file("latest_frame.jpg")):
-        st.markdown(
-            '<div style="height:240px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(193,217,220,.12);border-radius:18px;background:rgba(17,25,34,.65);color:#aab7c7;font-weight:600;">Camera off</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        render_live_camera_preview()
+    st.caption("The live camera preview stays in the sidebar while you move between pages.")
 
-    attention = bounded_int(live.get("focus_score"), 0, 0, 100)
-    distraction = max(0, 100 - attention)
-    posture_value = 100 if str(live.get("posture") or "Unknown").strip() == "Good" else 0 if str(live.get("posture") or "Unknown").strip() == "Slouching" else 50
-    face_value = 100 if bool(live.get("face_detected")) else 0
-    bars = [
-        ("Attention", attention),
-        ("Distraction", distraction),
-        ("Posture", posture_value),
-        ("Face detected", face_value),
+    focus_estimate = bounded_int(live.get("focus_score"), 0, 0, 100)
+    posture = str(live.get("posture") or "Unknown").strip()
+    distance_status = str(live.get("distance_status") or "Unknown").strip()
+    face_detected = bool(live.get("face_detected"))
+    eyes_closed = bool(live.get("eyes_closed"))
+    focus_label = "Good" if focus_estimate >= 80 else "Average" if focus_estimate >= 60 else "Several interruptions"
+    posture_label = {
+        "Good": "Good",
+        "Slouching": "Slouching",
+    }.get(posture, "Not detected")
+    distance_label = {
+        "Good": "Good",
+        "Too Far": "Too far",
+    }.get(distance_status, "Not measured")
+    eyes_label = "Not detected" if not face_detected else "Closed" if eyes_closed else "Open"
+    face_label = "Detected" if face_detected else "Not detected"
+    signals = [
+        ("Focus estimate", focus_label),
+        ("Posture now", posture_label),
+        ("Screen distance now", distance_label),
+        ("Eyes now", eyes_label),
+        ("Face now", face_label),
     ]
-    for label, value in bars:
-        st.progress(min(100, max(0, value)) / 100.0, text=f"{label}: {value}%")
+    with st.container():
+        first_row = st.columns(3)
+        for column, (label, value) in zip(first_row, signals[:3]):
+            with column:
+                st.metric(label, value)
+        second_row = st.columns(2)
+        for column, (label, value) in zip(second_row, signals[3:]):
+            with column:
+                st.metric(label, value)
+    st.caption(
+        "Focus estimate uses detected eye-closure, face-missing, posture, and distance time "
+        "relative to this session. Looking-away detection is not currently available. "
+        "Posture, distance, eyes, and face describe the latest detected state."
+    )
 
     if active and fresh:
         st.success("Live connection · your study buddy is checking in.")
-        if prefs.get("posture_alerts", True) and str(live.get("posture") or "Unknown").strip() == "Slouching":
-            st.warning("Your posture looks uncomfortable. Try relaxing your shoulders or adjusting your seat.")
+        active_nudges = []
+        looking_away_count = bounded_int(live.get("looking_away_alerts"), 0, 0, 100_000)
+        posture_alert_count = bounded_int(live.get("posture_alerts"), 0, 0, 100_000)
+        fatigue_signal_count = bounded_int(live.get("fatigue_signals"), 0, 0, 100_000)
+        if bool(live.get("looking_away")):
+            active_nudges.append(("looking_away", looking_away_count + 1))
+        if prefs.get("posture_alerts", True) and posture == "Slouching":
+            active_nudges.append(("posture", posture_alert_count + 1))
+        if eyes_closed:
+            active_nudges.append(("fatigue", fatigue_signal_count + 1))
+
+        if active_nudges:
+            signal, occurrence_count = max(active_nudges, key=lambda item: item[1])
+            rotation = bounded_int(profile.get("sessions_completed"), 0, 0, 2**31 - 1)
+            nudge = progressive_nudge(signal, occurrence_count, rotation)
+            if nudge:
+                st.info(nudge[1])
+        else:
+            completed_sessions = bounded_int(profile.get("sessions_completed"), 0, 0, 2**31 - 1)
+            st.caption(MOTIVATIONAL_MESSAGES[completed_sessions % len(MOTIVATIONAL_MESSAGES)])
     elif active:
         st.warning("The latest camera update is delayed. Check that the detector is still running.")
     else:
         st.caption("No active camera session. Your focus timer works independently.")
 
 
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
 def render_overview(profile, live):
     xp = max(0, int(profile.get("total_xp", 0) or 0))
     level = xp // LEVEL_STEP + 1
     xp_into_level = xp % LEVEL_STEP
     xp_to_next = LEVEL_STEP - xp_into_level
-    minutes = max(0, int(profile.get("total_study_seconds", 0) or 0)) // 60
+    total_study_seconds = max(0, int(profile.get("total_study_seconds", 0) or 0))
+    total_study_seconds += max(0, int(profile.get("focus_timer_total_seconds", 0) or 0))
+    minutes = total_study_seconds // 60
     history = profile["session_history"]
     water_today = int(profile.get("water_glasses_today", 0) or 0)
-    hero(str(profile.get("player_name") or "Focus friend").strip(), xp_to_next)
+    player_name = str(profile.get("player_name") or "Focus friend").strip()
+    hour = datetime.now().hour
+    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+    st.markdown(f'<div class="eyebrow">{greeting.upper()}</div>', unsafe_allow_html=True)
+    hero(player_name, xp_to_next)
+    if st.button("🎯 Start a focus session", type="primary", key="overview_start_focus"):
+        st.session_state["focusmate_open_focus_room"] = True
+        st.rerun()
 
     a, b, c, d, e = st.columns(5, gap="small")
     with a:
         stat_card("Your level", f"Level {level}", f"{xp_into_level} / {LEVEL_STEP} XP")
     with b:
-        stat_card("Lifetime XP", f"{xp:,}", "From study & quests")
+        stat_card("Lifetime XP", f"{xp:,}", "From study, posture & quests")
     with c:
         stat_card("Study time", f"{minutes // 60}h {minutes % 60:02d}m", "Across sessions")
     with d:
@@ -1082,6 +2298,17 @@ def render_overview(profile, live):
         for item in normalized_history(profile)
         if item["date"] == date.today()
     )
+    today_seconds += int(profile.get("focus_timer_seconds_today", 0) or 0)
+    if st.session_state.get("focus_running") and not st.session_state.get(
+        "focus_segment_camera_active", False
+    ):
+        segment_started_at = st.session_state.get("focus_segment_started_at")
+        segment_duration = max(0, int(st.session_state.get("focus_segment_duration", 0)))
+        if segment_started_at is not None:
+            today_seconds += min(
+                segment_duration,
+                max(0, int(time.time() - segment_started_at)),
+            )
     if live.get("session_active") and live_snapshot_is_fresh(live):
         try:
             today_seconds += max(0, int(float(live.get("session_seconds", 0) or 0)))
@@ -1091,6 +2318,7 @@ def render_overview(profile, live):
         min(1.0, today_seconds / daily_goal_seconds),
         text=f"Today's goal · {today_seconds // 60} of {daily_goal_seconds // 60} minutes",
     )
+    st.metric("Study streak", f"{current_session_streak(profile)} days")
     water_row = st.columns([1, 2])
     with water_row[0]:
         if st.button("+ Glass of water", use_container_width=True):
@@ -1164,23 +2392,15 @@ def render_overview(profile, live):
         )
 
 
-def render_pending_session_chime(profile):
-    kind = st.session_state.pop("pending_session_chime", None)
-    if kind not in {"start", "complete"}:
-        return
-    if not profile.get("session_preferences", {}).get("session_chimes", False):
-        return
-
+def _build_chime_wav(notes, note_duration, amplitude, release):
     sample_rate = 22050
-    note_duration = 0.18
-    notes = (587.33, 783.99) if kind == "start" else (783.99, 587.33)
     frames = bytearray()
     for index in range(int(sample_rate * note_duration * len(notes))):
         elapsed = index / sample_rate
         note_index = min(int(elapsed / note_duration), len(notes) - 1)
         note_time = elapsed - note_index * note_duration
-        envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / 0.035)
-        sample = int(5000 * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
+        envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / release)
+        sample = int(amplitude * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
         frames.extend(struct.pack("<h", sample))
 
     audio = io.BytesIO()
@@ -1188,8 +2408,19 @@ def render_pending_session_chime(profile):
         output.setnchannels(1)
         output.setsampwidth(2)
         output.setframerate(sample_rate)
-        output.writeframes(frames)
-    st.audio(audio.getvalue(), format="audio/wav", autoplay=True, width="content")
+        output.writeframes(bytes(frames))
+    return audio.getvalue()
+
+
+def render_pending_session_chime(profile):
+    kind = st.session_state.pop("pending_session_chime", None)
+    if kind not in {"start", "complete"}:
+        return
+    if not profile.get("session_preferences", {}).get("session_chimes", False):
+        return
+    notes = (587.33, 783.99) if kind == "start" else (783.99, 587.33)
+    wav = _build_chime_wav(notes, 0.18, 5000, 0.035)
+    st.audio(wav, format="audio/wav", autoplay=True, width="content")
 
 
 def render_pending_posture_beep(profile, live):
@@ -1202,26 +2433,8 @@ def render_pending_posture_beep(profile, live):
     if last_token == token:
         return
     st.session_state.last_posture_beep_token = token
-
-    sample_rate = 22050
-    note_duration = 0.22
-    notes = (220.0, 180.0)
-    frames = bytearray()
-    for index in range(int(sample_rate * note_duration * len(notes))):
-        elapsed = index / sample_rate
-        note_index = min(int(elapsed / note_duration), len(notes) - 1)
-        note_time = elapsed - note_index * note_duration
-        envelope = min(1.0, note_time / 0.01, (note_duration - note_time) / 0.04)
-        sample = int(7000 * max(0.0, envelope) * math.sin(2 * math.pi * notes[note_index] * note_time))
-        frames.extend(struct.pack("<h", sample))
-
-    audio = io.BytesIO()
-    with wave.open(audio, "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(sample_rate)
-        output.writeframes(frames)
-    st.audio(audio.getvalue(), format="audio/wav", autoplay=True, width="content")
+    wav = _build_chime_wav((220.0, 180.0), 0.22, 7000, 0.04)
+    st.audio(wav, format="audio/wav", autoplay=True, width="content")
 
 
 def timer_controls(profile):
@@ -1238,6 +2451,9 @@ def timer_controls(profile):
         st.session_state.focus_running = False
         st.session_state.focus_finished = False
         st.session_state.focus_preference_seen = default_duration
+        st.session_state.focus_segment_started_at = None
+        st.session_state.focus_segment_duration = 0
+        st.session_state.focus_segment_camera_active = False
     elif (
         not st.session_state.focus_running
         and st.session_state.get("focus_preference_seen") != default_duration
@@ -1262,18 +2478,7 @@ def timer_controls(profile):
         st.session_state.focus_remaining = selected_duration * 60
         st.session_state.focus_finished = False
 
-    if st.session_state.focus_running:
-        remaining = max(0, int(st.session_state.focus_deadline - time.time()))
-        st.session_state.focus_remaining = remaining
-        if remaining == 0:
-            st.session_state.focus_running = False
-            st.session_state.focus_deadline = None
-            st.session_state.focus_finished = True
-            if preferences.get("session_chimes", False):
-                st.session_state.pending_session_chime = "complete"
-            st.toast("Focus block complete. Take a little break—you earned it.")
-    else:
-        remaining = int(st.session_state.focus_remaining)
+    remaining = int(st.session_state.focus_remaining)
     minutes, seconds = divmod(remaining, 60)
     timer_state = " running" if st.session_state.focus_running else ""
     st.markdown(
@@ -1295,6 +2500,9 @@ def timer_controls(profile):
             st.session_state.focus_deadline = time.time() + remaining
             st.session_state.focus_running = True
             st.session_state.focus_finished = False
+            st.session_state.focus_segment_started_at = time.time()
+            st.session_state.focus_segment_duration = remaining
+            st.session_state.focus_segment_camera_active = webcam_session_active()
             if preferences.get("session_chimes", False):
                 st.session_state.pending_session_chime = "start"
             st.rerun()
@@ -1303,11 +2511,14 @@ def timer_controls(profile):
             st.session_state.focus_remaining = max(
                 0, int(st.session_state.focus_deadline - time.time())
             )
+            credit_active_focus_timer_segment(profile)
             st.session_state.focus_running = False
             st.session_state.focus_deadline = None
             st.rerun()
     with reset_col:
         if st.button("Reset", width="stretch"):
+            if st.session_state.focus_running:
+                credit_active_focus_timer_segment(profile)
             st.session_state.focus_running = False
             st.session_state.focus_deadline = None
             st.session_state.focus_remaining = st.session_state.focus_duration * 60
@@ -1355,11 +2566,26 @@ def render_tasks(profile):
         )
         if checked != bool(task.get("done", False)):
             latest = load_profile()
+            earned_task_xp = 0
             for saved_task in latest["tasks"]:
                 if str(saved_task.get("id")) == task_id:
                     saved_task["done"] = checked
+                    if checked and not saved_task.get("xp_awarded"):
+                        earned_task_xp = 10
+                        saved_task["xp_awarded"] = True
+                        saved_task["completed_at"] = datetime.now().isoformat()
                     break
+            if earned_task_xp:
+                latest["total_xp"] = min(
+                    2**63 - 1,
+                    max(0, int(latest.get("total_xp", 0) or 0)) + earned_task_xp,
+                )
             save_profile(latest)
+            unlocked = award_profile_achievements(set()) if earned_task_xp else []
+            if earned_task_xp:
+                st.toast(f"Task complete · +{earned_task_xp} XP")
+            if unlocked:
+                st.toast(f"Achievement unlocked · {unlocked[0]['title']}")
             st.rerun()
     if st.button("Clear completed tasks"):
         latest = load_profile()
@@ -1403,70 +2629,99 @@ def normalized_history(profile):
             when = datetime.fromisoformat(str(entry.get("date", ""))).date()
             seconds = max(0, int(entry.get("seconds", 0)))
             xp = max(0, int(entry.get("xp", 0)))
+            posture_xp = max(0, int(entry.get("posture_xp", 0)))
+            good_posture_seconds = max(0, int(entry.get("good_posture_seconds", 0)))
         except (TypeError, ValueError):
             continue
-        rows.append({"date": when, "seconds": seconds, "xp": xp})
+        raw_focus = entry.get("focus_score")
+        focus_score = (
+            round(safe_session_number(raw_focus, 0, 0, 100), 1)
+            if raw_focus is not None
+            else None
+        )
+        rows.append({
+            "date": when,
+            "seconds": seconds,
+            "xp": xp,
+            "posture_xp": posture_xp,
+            "good_posture_seconds": good_posture_seconds,
+            "focus_score": focus_score,
+            "subject": str(entry.get("subject") or ""),
+            "goal": str(entry.get("goal") or ""),
+            "task_text": str(entry.get("task_text") or ""),
+            "goal_outcome": str(entry.get("goal_outcome") or ""),
+            "focus_challenge_xp": max(0, int(entry.get("focus_challenge_xp", 0) or 0)),
+        })
     return rows
 
 
 def render_insights(profile, live):
     page_header(
-        "YOUR JOURNEY",
-        "Progress you can feel good about.",
-        "A gentle look back at time spent showing up—not a scorecard.",
+        "MY PROGRESS",
+        "See how you’re building your rhythm.",
+        "Your focus estimates, study time, and streaks across completed sessions.",
     )
     rows = normalized_history(profile)
     total_sessions = int(profile.get("sessions_completed", 0) or 0)
-    average = (
-        sum(item["seconds"] for item in rows) / len(rows) / 60 if rows else 0
+    focus_rows = [item for item in rows if item["focus_score"] is not None]
+    average_focus = (
+        sum(item["focus_score"] for item in focus_rows) / len(focus_rows)
+        if focus_rows else None
     )
-    a, b, c = st.columns(3)
-    a.metric("Sessions saved", total_sessions)
-    b.metric("Average session", f"{average:.0f} min")
-    c.metric("This week", f"{sum(item['seconds'] for item in rows if item['date'] >= date.today() - timedelta(days=6)) // 60} min")
+    total_seconds = int(profile.get("total_study_seconds", 0) or 0)
+    total_seconds += int(profile.get("focus_timer_total_seconds", 0) or 0)
+    streak = current_session_streak(profile)
+    a, b, c, d = st.columns(4)
+    a.metric("Average focus estimate", f"{average_focus:.0f} / 100" if average_focus is not None else "Not yet available")
+    b.metric("Sessions", total_sessions)
+    c.metric("Total study time", f"{total_seconds // 3600}h {(total_seconds % 3600) // 60:02d}m")
+    d.metric("Study-day streak", f"{streak} days")
 
     st.write("")
-    chart_col, signal_col = st.columns([1.2, .8], gap="large")
+    chart_col, week_col = st.columns([1.15, .85], gap="large")
     with chart_col:
-        st.subheader("Study minutes · last 7 days")
+        st.subheader("Focus trend · recent sessions")
+        if focus_rows:
+            trend = pd.DataFrame(
+                {"Focus estimate": [item["focus_score"] for item in focus_rows[-20:]]},
+                index=[item["date"].strftime("%b %d") for item in focus_rows[-20:]],
+            )
+            st.line_chart(trend, color="#d6f58a", width="stretch")
+            if len(focus_rows) >= 4:
+                earlier = [item["focus_score"] for item in focus_rows[:-3]]
+                recent = [item["focus_score"] for item in focus_rows[-3:]]
+                difference = sum(recent) / len(recent) - sum(earlier) / len(earlier)
+                if difference >= 5:
+                    st.success(f"Your last three scored sessions averaged {difference:.0f} points higher than earlier recorded sessions.")
+                elif difference <= -5:
+                    st.info(f"Your recent focus estimates were {abs(difference):.0f} points lower on average. A smaller, clearer goal may help next time.")
+                else:
+                    st.caption("Your recent focus estimates are broadly in line with earlier sessions.")
+        else:
+            st.info("Focus trends will appear after your next completed webcam session. Older sessions without saved focus scores remain unchanged.")
+        st.caption("Focus estimates are heuristic study signals, not a direct measurement of attention.")
+
+    with week_col:
+        st.subheader("Study time · last 7 days")
         start = date.today() - timedelta(days=6)
         daily = {start + timedelta(days=offset): 0 for offset in range(7)}
         for item in rows:
             if item["date"] in daily:
                 daily[item["date"]] += item["seconds"]
-        daily = {day: seconds // 60 for day, seconds in daily.items()}
+        for item in profile.get("focus_timer_history", []):
+            try:
+                timer_day = date.fromisoformat(item["date"])
+                if timer_day in daily:
+                    daily[timer_day] += bounded_int(item.get("seconds"), 0, 0, 86400)
+            except (TypeError, ValueError):
+                continue
+        daily_minutes = {day: seconds // 60 for day, seconds in daily.items()}
         chart_data = pd.DataFrame(
-            {"Study minutes": list(daily.values())},
-            index=[day.strftime("%a") for day in daily],
+            {"Study minutes": list(daily_minutes.values())},
+            index=[day.strftime("%a") for day in daily_minutes],
         )
         st.bar_chart(chart_data, color="#a8f0d0", width="stretch")
-    with signal_col:
-        st.subheader("Current session")
-        live_history = live.get("history", [])
-        if isinstance(live_history, list) and live_history:
-            points = []
-            for item in live_history:
-                if isinstance(item, dict):
-                    try:
-                        points.append(
-                            {
-                                "Minute": float(item.get("minute", 0)),
-                                "Focus estimate": float(item.get("focus_score", 0)),
-                            }
-                        )
-                    except (TypeError, ValueError):
-                        continue
-            if points:
-                st.line_chart(
-                    pd.DataFrame(points).set_index("Minute"),
-                    color="#d6f58a",
-                    width="stretch",
-                )
-            else:
-                st.info("Focus estimates will appear here during a webcam session.")
-        else:
-            st.info("Start an optional webcam session to see gentle, live focus estimates.")
-        st.caption("Focus estimates fluctuate and can be inaccurate. They are not a grade.")
+        st.caption(f"{sum(daily_minutes.values())} minutes this week · webcam sessions and timer-only study")
 
     st.write("")
     st.subheader("Your saved sessions")
@@ -1482,7 +2737,14 @@ def render_insights(profile, live):
         display_rows.append(
             {
                 "Date": item["date"].strftime("%b %d, %Y"),
+                "Subject": item["subject"],
+                "Goal": item["goal"],
+                "Task": item["task_text"],
+                "Goal outcome": item["goal_outcome"],
                 "Study time": f"{item['seconds'] // 60} min",
+                "Focus estimate": item["focus_score"] if item["focus_score"] is not None else "—",
+                "Good posture": f"{item['good_posture_seconds'] // 60} min",
+                "Challenge XP": item["focus_challenge_xp"],
                 "XP earned": item["xp"],
             }
         )
@@ -1496,6 +2758,158 @@ def render_insights(profile, live):
     )
 
 
+def replace_with_retry(temporary_path, target_path):
+    last_permission_error = None
+    for attempt in range(5):
+        try:
+            os.replace(temporary_path, target_path)
+            return
+        except PermissionError as error:
+            last_permission_error = error
+            if attempt < 4:
+                time.sleep(0.05 * (2 ** attempt))
+
+    with open(temporary_path, "rb") as source:
+        contents = source.read()
+    try:
+        with open(target_path, "wb") as target:
+            target.write(contents)
+            target.flush()
+            os.fsync(target.fileno())
+    except OSError as error:
+        raise PermissionError(f"Could not save session data at {target_path}") from (
+            last_permission_error or error
+        )
+
+
+def save_session_goal_outcome(session_data, outcome):
+    if outcome not in {"Yes", "Partially", "Not yet"}:
+        return False
+    session_id = str(session_data.get("session_id") or "")
+    if not session_id or not session_data.get("session_completed"):
+        return False
+
+    profile = load_profile()
+    entry = next(
+        (item for item in profile["session_history"] if str(item.get("session_id") or "") == session_id),
+        None,
+    )
+    if entry is None:
+        return False
+
+    session_data["goal_outcome"] = outcome
+    session_path = user_data_file("session_data.json")
+    temporary_path = session_path + ".tmp"
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as file:
+            json.dump(session_data, file, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        replace_with_retry(temporary_path, session_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+
+    entry["goal_outcome"] = outcome
+    save_profile(profile)
+    return True
+
+
+def save_goal_outcome_from_widget(session_id, widget_key):
+    session_data = load_live_data()
+    outcome = st.session_state.get(widget_key)
+    if save_session_goal_outcome(session_data, outcome):
+        st.session_state[f"saved_goal_outcome_{session_id}"] = outcome
+    else:
+        st.session_state[f"saved_goal_outcome_{session_id}"] = ""
+
+
+def render_session_results(profile):
+    page_header(
+        "SESSION RESULTS",
+        "A reflection on your session.",
+        "A short review based only on the final statistics recorded by FocusMate.",
+    )
+    if webcam_session_active():
+        st.info("Your session is still running. The reflection will be available after it ends.")
+        return
+
+    session_data = load_live_data()
+    reflection = create_session_reflection_if_needed(session_data)
+    if reflection is None:
+        st.info("Finish a webcam session to see its reflection here. No camera frames are sent for analysis.")
+        return
+
+    newly_earned = award_profile_achievements({"self_aware"})
+    if any(item["id"] == "self_aware" for item in newly_earned):
+        st.toast("Achievement unlocked · Self-Aware")
+
+    if reflection["source"] == "AI-generated":
+        st.success("AI-generated reflection")
+    else:
+        st.info("Local fallback reflection · the AI service was unavailable")
+    st.markdown("### AI Session Reflection")
+    st.write(reflection["summary"])
+
+    went_well_col, try_next_col = st.columns(2, gap="large")
+    with went_well_col:
+        st.subheader("What went well")
+        for item in reflection["what_went_well"]:
+            st.markdown(f"- {item}")
+    with try_next_col:
+        st.subheader("Try next time")
+        for item in reflection["try_next"]:
+            st.markdown(f"- {item}")
+
+    stats = reflection["stats"]
+    st.write("")
+    first, second, third = st.columns(3)
+    first.metric("Focus estimate", f"{stats['focus_score']:g} / 100")
+    second.metric("Session duration", f"{stats['duration_minutes']:g} min")
+    total_alerts = sum(stats["alert_counts"].values())
+    third.metric("Recorded signals", total_alerts)
+    st.caption("Supportive study observations only. This is not a medical assessment.")
+    challenge_xp = bounded_int(session_data.get("focus_challenge_xp"), 0, 0, 100_000)
+    unlocked_achievements = session_data.get("achievements_unlocked", [])
+    if challenge_xp:
+        st.success(f"🎯 Focus challenge complete · +{challenge_xp} XP")
+    if isinstance(unlocked_achievements, list) and unlocked_achievements:
+        names = [
+            str(item.get("title"))
+            for item in unlocked_achievements
+            if isinstance(item, dict) and item.get("title")
+        ]
+        if names:
+            st.markdown("**Achievements unlocked:** " + " · ".join(names))
+
+    session_id = str(session_data.get("session_id") or "")
+    session_goal = str(session_data.get("study_goal") or "").strip()
+    if session_goal and session_id:
+        st.divider()
+        st.subheader("Your session goal")
+        st.write(session_goal)
+        if session_data.get("study_subject"):
+            st.caption(f"Subject: {session_data['study_subject']}")
+        if session_data.get("linked_task"):
+            st.caption(f"Task: {session_data['linked_task']}")
+
+        saved_outcome = str(session_data.get("goal_outcome") or "")
+        outcome_options = ["Choose one", "Yes", "Partially", "Not yet"]
+        outcome_index = outcome_options.index(saved_outcome) if saved_outcome in outcome_options else 0
+        widget_key = f"goal_outcome_{session_id}"
+        st.selectbox(
+            "Goal completed?",
+            outcome_options,
+            index=outcome_index,
+            key=widget_key,
+            on_change=save_goal_outcome_from_widget,
+            args=(session_id, widget_key),
+        )
+        saved_outcome = st.session_state.get(f"saved_goal_outcome_{session_id}") or session_data.get("goal_outcome")
+        if saved_outcome in {"Yes", "Partially", "Not yet"}:
+            st.success(f"Goal check-in saved: {saved_outcome}")
+
+
 def quest_is_claimed(profile, quest_id):
     today = date.today().isoformat()
     return any(
@@ -1507,19 +2921,23 @@ def quest_is_claimed(profile, quest_id):
 
 
 def sprint_is_unlocked(profile, live):
-    live_seconds = live.get("session_seconds", 0)
     try:
-        live_seconds = int(float(live_seconds or 0))
+        live_seconds = int(float(live.get("session_seconds", 0) or 0))
     except (TypeError, ValueError):
         live_seconds = 0
-    live_sprint_complete = (
+    live_ok = (
         bool(live.get("session_active"))
         and live_snapshot_is_fresh(live)
         and live_seconds >= 900
     )
-    return live_sprint_complete or any(
-        item["seconds"] >= 900 for item in normalized_history(profile)
+    today = date.today()
+    history_ok = any(
+        item["seconds"] >= 900
+        for item in normalized_history(profile)
+        if item["date"] == today
     )
+    timer_ok = int(profile.get("focus_timer_seconds_today", 0) or 0) >= 900
+    return live_ok or history_ok or timer_ok
 
 
 def render_quests(profile, live):
@@ -1567,14 +2985,80 @@ def render_quests(profile, live):
                 latest["quest_claims"] = claims[-1000:]
                 save_profile(latest)
                 st.toast(f"Quest complete · +{quest['reward']} XP")
+                unlocked = award_profile_achievements(set())
+                if unlocked:
+                    st.toast(f"Achievement unlocked · {unlocked[0]['title']}")
                 st.rerun()
     st.caption("Self-care quests are self-reported. Take breaks because they feel right for you—not for a reward.")
 
 
+def render_achievements(profile):
+    page_header(
+        "ACHIEVEMENTS",
+        "Small wins add up.",
+        "Earn badges for showing up, building routines, and reaching your own study milestones.",
+    )
+    earned_ids = achievement_earned_ids(profile)
+    earned_count = sum(item["id"] in earned_ids for item in ACHIEVEMENT_DEFINITIONS)
+    st.progress(earned_count / len(ACHIEVEMENT_DEFINITIONS), text=f"{earned_count} of {len(ACHIEVEMENT_DEFINITIONS)} achievements unlocked")
+    unlocked_at = {
+        LEGACY_ACHIEVEMENT_IDS.get(str(item.get("id")), str(item.get("id"))): item.get("earned_at")
+        for item in profile.get("achievements", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    groups = {
+        "Sessions & focus": {
+            "first_step", "locked_in", "time_keeper", "half_hour_hero", "hour_of_focus",
+            "getting_started", "focused_mind", "consistency", "dedicated_student", "focus_master",
+            "sharp_start", "level_up", "personal_best", "ninety_club", "perfect_estimate",
+            "comeback", "getting_better", "quick_focus", "long_haul", "keep_going", "no_quit",
+        },
+        "Streaks & routines": {
+            "two_day_streak", "three_day_streak", "seven_day_streak", "fourteen_day_streak",
+            "thirty_day_streak", "focused_week", "study_routine", "routine_builder",
+        },
+        "Study habits": {
+            "posture_pro", "sit_smart", "perfect_distance", "eyes_forward", "steady_session", "clean_session",
+        },
+        "Study time & XP": {
+            "persistence", "time_builder", "study_veteran", "twenty_hour_club", "fifty_hour_club",
+            "xp_collector", "xp_hunter", "xp_champion",
+        },
+        "Goals & reflection": {
+            "explorer", "goal_getter", "self_aware", "ai_reflection", "focusmate_legend",
+        },
+    }
+    for group_name, achievement_ids in groups.items():
+        entries = [item for item in ACHIEVEMENT_DEFINITIONS if item["id"] in achievement_ids]
+        group_earned = sum(item["id"] in earned_ids for item in entries)
+        with st.expander(f"{group_name} · {group_earned}/{len(entries)}", expanded=group_name == "Sessions & focus"):
+            for start in range(0, len(entries), 2):
+                columns = st.columns(2, gap="small")
+                for column, item in zip(columns, entries[start:start + 2]):
+                    is_earned = item["id"] in earned_ids
+                    with column:
+                        with st.container(border=True):
+                            st.markdown(f"**{'🏆' if is_earned else '🔒'} {item['title']}**")
+                            st.caption(item["description"])
+                            if is_earned:
+                                st.caption(f"Unlocked · +{item['xp']} XP")
+                            else:
+                                st.caption(f"Reward · +{item['xp']} XP")
+                            if item["id"] == "eyes_forward" and not any(
+                                    entry.get("looking_away_detection_available") is True
+                                    for entry in profile.get("session_history", [])
+                                    if isinstance(entry, dict)
+                            ):
+                                st.caption("Locked until looking-away detection is available.")
+                            elif is_earned and unlocked_at.get(item["id"]):
+                                st.caption(f"Earned {str(unlocked_at[item['id']])[:10]}")
+
+
 def render_session_preferences(profile):
-    prefs = profile.get("session_preferences") or {}
     default_prefs = fresh_profile()["session_preferences"]
-    prefs = {**default_prefs, **prefs}
+    stored_prefs = {**default_prefs, **(profile.get("session_preferences") or {})}
+    prefs = dict(stored_prefs)
+    username_key = normalize_username(profile.get("username"))
 
     st.markdown(
         """
@@ -1596,43 +3080,57 @@ def render_session_preferences(profile):
         with panel:
             st.markdown('<div class="settings-panel"><h3>Monitoring & reminders</h3>', unsafe_allow_html=True)
             rows = [
-                ("Focus monitoring", "Use the webcam locally to detect attention", "focus_monitoring"),
+                ("Focus monitoring", "Use the webcam locally for face, eye, posture, and distance signals", "focus_monitoring"),
                 ("Posture alerts", "Show a gentle reminder when the detector reports slouching", "posture_alerts"),
-                ("Mood check-ins", "Ask how I feel before each first session", "mood_checkins"),
-                ("Session chimes", "Soft tone at start and end of a block", "session_chimes"),
+                ("Mood check-ins", "Ask how I feel before my first webcam session each day", "mood_checkins"),
+                ("Session chimes", "Play a soft tone at the start and end of a focus block", "session_chimes"),
             ]
             for label, caption, key_name in rows:
                 c1, c2 = st.columns([5, 1])
                 with c1:
-                    st.markdown(f'<div class="settings-label">{html.escape(label)}<span class="settings-caption">{html.escape(caption)}</span></div>', unsafe_allow_html=True)
-                with c2:
-                    enabled = st.toggle(
-                        "",
-                        value=bool(prefs.get(key_name, default_prefs.get(key_name, False))),
-                        key=f"pref_{normalize_username(profile.get('username'))}_{key_name}",
+                    st.markdown(
+                        f'<div class="settings-label">{html.escape(label)}'
+                        f'<span class="settings-caption">{html.escape(caption)}</span></div>',
+                        unsafe_allow_html=True,
                     )
-                    prefs[key_name] = enabled
-            prefs["session_length_minutes"] = st.number_input(
+                with c2:
+                    prefs[key_name] = st.toggle(
+                        label,
+                        value=bool(stored_prefs.get(key_name, default_prefs.get(key_name, False))),
+                        key=f"pref_{username_key}_{key_name}",
+                        label_visibility="collapsed",
+                    )
+            prefs["session_length_minutes"] = int(st.number_input(
                 "Default focus block (minutes)",
                 min_value=15,
                 max_value=120,
                 step=5,
-                value=int(prefs.get("session_length_minutes", 25) or 25),
-                key=f"pref_{normalize_username(profile.get('username'))}_session_length_minutes",
-            )
-            prefs["daily_goal_minutes"] = st.number_input(
+                value=int(stored_prefs.get("session_length_minutes", 25) or 25),
+                key=f"pref_{username_key}_session_length_minutes",
+            ))
+            prefs["daily_goal_minutes"] = int(st.number_input(
                 "Daily study goal (minutes)",
                 min_value=30,
                 max_value=720,
                 step=15,
-                value=int(prefs.get("daily_goal_minutes", 180) or 180),
-                key=f"pref_{normalize_username(profile.get('username'))}_daily_goal_minutes",
-            )
+                value=int(stored_prefs.get("daily_goal_minutes", 180) or 180),
+                key=f"pref_{username_key}_daily_goal_minutes",
+            ))
             st.markdown('</div>', unsafe_allow_html=True)
 
-        latest = load_profile()
-        latest["session_preferences"] = prefs
-        save_profile(latest)
+        monitoring_was_enabled = bool(stored_prefs.get("focus_monitoring", True))
+        if prefs != stored_prefs:
+            latest = load_profile()
+            latest["session_preferences"] = prefs
+            save_profile(latest)
+        if monitoring_was_enabled and not prefs["focus_monitoring"] and webcam_session_active():
+            stopped, message = stop_webcam()
+            (st.success if stopped else st.warning)(
+                "Focus monitoring turned off. " + message
+                if stopped
+                else "Focus monitoring is off, but the camera could not be stopped: " + message
+            )
+            st.rerun()
 
     with right:
         st.markdown(
@@ -1656,7 +3154,8 @@ def render_session_preferences(profile):
         ]
         for key, value in profile_rows:
             st.markdown(
-                f'<div class="profile-line"><div class="profile-key">{html.escape(key)}</div><div class="profile-value">{html.escape(str(value))}</div></div>',
+                f'<div class="profile-line"><div class="profile-key">{html.escape(key)}</div>'
+                f'<div class="profile-value">{html.escape(str(value))}</div></div>',
                 unsafe_allow_html=True,
             )
 
@@ -1678,7 +3177,7 @@ def render_profile(profile):
                 max_chars=40,
                 key=f"profile_name_{username_key}",
             )
-            username = st.text_input(
+            st.text_input(
                 "Username",
                 value=str(profile.get("username") or "focusfriend"),
                 max_chars=32,
@@ -1733,6 +3232,8 @@ def render_profile(profile):
                 "updated_at": datetime.now().isoformat(),
             })
             latest["session_wellbeing"] = saved_wellbeing
+            latest["water_glasses_today"] = int(water)
+            latest["water_glasses_last_reset"] = date.today().isoformat()
             save_profile(latest)
             st.success("Your check-in has been saved.")
             st.rerun()
@@ -1741,7 +3242,7 @@ def render_profile(profile):
         st.subheader("Your data, your choice")
         st.markdown(
             "FocusMate stores your profile and completed-session history as local JSON files "
-            "inside the dashboard folder. The live webcam snapshot is separate."
+            "inside the dashboard folder. Live camera frames are processed locally and are not saved."
         )
         st.download_button(
             "Export profile as JSON",
@@ -1757,6 +3258,10 @@ def render_profile(profile):
             unsafe_allow_html=True,
         )
 
+
+# ---------------------------------------------------------------------------
+# App entry point
+# ---------------------------------------------------------------------------
 
 def run_app():
     st.set_page_config(
@@ -1790,6 +3295,7 @@ def run_app():
 
     profile = load_profile(username)
     live = load_live_data()
+    advance_focus_timer(profile)
     if "welcome_name" not in st.session_state:
         st.session_state.welcome_name = str(profile.get("player_name") or "").strip() or "Focus friend"
     if "welcome_username" not in st.session_state:
@@ -1808,6 +3314,7 @@ def run_app():
 
     inject_exit_handler()
     render_brand(profile)
+    render_shared_camera_panel(live)
     pages = {
         "Your space": [
             st.Page(
@@ -1825,12 +3332,24 @@ def run_app():
             ),
             st.Page(
                 lambda: render_insights(profile, live),
-                title="Insights",
+                title="My Progress",
                 icon=":material/monitoring:",
                 url_path="insights",
             ),
+            st.Page(
+                lambda: render_session_results(profile),
+                title="Session results",
+                icon=":material/auto_awesome:",
+                url_path="session-results",
+            ),
         ],
         "Build good habits": [
+            st.Page(
+                lambda: render_achievements(profile),
+                title="Achievements",
+                icon=":material/emoji_events:",
+                url_path="achievements",
+            ),
             st.Page(
                 lambda: render_quests(profile, live),
                 title="Daily quests",
@@ -1851,7 +3370,13 @@ def run_app():
             ),
         ],
     }
+    session_results_page = pages["Your space"][3]
+    focus_room_page = pages["Your space"][1]
     page = st.navigation(pages, position="sidebar")
+    if st.session_state.pop("focusmate_open_session_results", False):
+        st.switch_page(session_results_page)
+    if st.session_state.pop("focusmate_open_focus_room", False):
+        st.switch_page(focus_room_page)
     page.run()
     render_pending_session_chime(profile)
     render_pending_posture_beep(profile, live)
