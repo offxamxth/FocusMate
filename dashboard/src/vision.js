@@ -9,6 +9,11 @@ const WASM_URL =
 const LEFT_EYE = [33, 160, 158, 133, 153, 144];
 const RIGHT_EYE = [362, 385, 387, 263, 373, 380];
 const HEAD_TURN_THRESHOLD = 0.24;
+const SHOULDER_VISIBILITY = 0.4;
+const SHOULDER_TILT_ACTIVATE_DEGREES = 17;
+const SHOULDER_TILT_CLEAR_DEGREES = 12;
+const SLOUCH_ANGLE_DEGREES = 52;
+const postureSignals = new WeakMap();
 
 export async function createVisionLandmarkers() {
   const files = await FilesetResolver.forVisionTasks(WASM_URL);
@@ -50,6 +55,29 @@ function eyeAspectRatio(landmarks, indices, width, height) {
   );
 }
 
+function visible(point, threshold = SHOULDER_VISIBILITY) {
+  return Boolean(
+    point &&
+      (point.visibility == null || point.visibility >= threshold) &&
+      (point.presence == null || point.presence >= threshold),
+  );
+}
+
+function stableSignal(state, name, active, frames = 2) {
+  const signal = state[name] || { active: false, onFrames: 0, offFrames: 0 };
+  if (active) {
+    signal.onFrames += 1;
+    signal.offFrames = 0;
+    if (signal.onFrames >= frames) signal.active = true;
+  } else {
+    signal.offFrames += 1;
+    signal.onFrames = 0;
+    if (signal.offFrames >= frames) signal.active = false;
+  }
+  state[name] = signal;
+  return signal.active;
+}
+
 export function estimateHeadTurn(landmarks) {
   const nose = landmarks[1];
   const leftCheek = landmarks[234];
@@ -78,31 +106,49 @@ export function detectMetrics(detectors, video, timestamp) {
 
   const poseResult = detectors.pose.detectForVideo(video, timestamp);
   const pose = poseResult.poseLandmarks?.[0];
+  const leftShoulder = pose?.[11];
+  const rightShoulder = pose?.[12];
+  const shouldersVisible = visible(leftShoulder) && visible(rightShoulder);
+  let shoulderTilt = null;
+  if (shouldersVisible) {
+    const horizontal = Math.abs(leftShoulder.x - rightShoulder.x) * width;
+    const vertical = Math.abs(leftShoulder.y - rightShoulder.y) * height;
+    if (horizontal >= width * 0.08) {
+      shoulderTilt = (Math.atan2(vertical, horizontal) * 180) / Math.PI;
+    }
+  }
+
   let posture = "Unknown";
   let postureAngle = null;
-  const visible = (point) =>
-    point &&
-    (point.visibility == null || point.visibility >= 0.5) &&
-    (point.presence == null || point.presence >= 0.5);
-  const shoulderEarPairs = [
-    [7, 11],
-    [8, 12],
-  ].filter(
-    ([ear, shoulder]) => visible(pose?.[ear]) && visible(pose?.[shoulder]),
-  );
-  if (shoulderEarPairs.length) {
+  const shoulderEarPairs = shouldersVisible
+    ? [[7, 11], [8, 12]].filter(([ear]) => visible(pose?.[ear]))
+    : [];
+  let postureState = postureSignals.get(detectors);
+  if (!postureState) {
+    postureState = {};
+    postureSignals.set(detectors, postureState);
+  }
+  const shoulderMisaligned = shouldersVisible && shoulderTilt !== null &&
+    shoulderTilt > (postureState.shoulders?.active ? SHOULDER_TILT_CLEAR_DEGREES : SHOULDER_TILT_ACTIVATE_DEGREES);
+  const stableShoulderMisalignment = stableSignal(postureState, "shoulders", shoulderMisaligned);
+  if (shoulderEarPairs.length === 2) {
     const angles = shoulderEarPairs.map(
       ([ear, shoulder]) =>
         (Math.atan2(
-          Math.abs(pose[ear].y - pose[shoulder].y),
-          Math.abs(pose[ear].x - pose[shoulder].x),
+          Math.abs(pose[ear].y - pose[shoulder].y) * height,
+          Math.abs(pose[ear].x - pose[shoulder].x) * width,
         ) *
           180) /
         Math.PI,
     );
     postureAngle =
       angles.reduce((total, angle) => total + angle, 0) / angles.length;
-    posture = postureAngle < 60 ? "Slouching" : "Good";
+    const likelySlouching = angles.every((angle) => angle < SLOUCH_ANGLE_DEGREES);
+    posture = stableSignal(postureState, "slouching", likelySlouching)
+      ? "Slouching"
+      : "Good";
+  } else {
+    stableSignal(postureState, "slouching", false);
   }
 
   let distanceStatus = "Unknown";
@@ -111,8 +157,10 @@ export function detectMetrics(detectors, video, timestamp) {
       landmarkDistance(face[234], face[454]) < 0.12 ? "Too Far" : "Good";
   const status = !faceDetected
     ? "Face Not Detected"
-    : !shoulderEarPairs.length
+    : !shouldersVisible
       ? "Reframe to include shoulders"
+      : stableShoulderMisalignment
+        ? "Reframe to align shoulders"
       : lookingAway
         ? "Head Turn Detected"
         : eyesClosed
@@ -127,7 +175,7 @@ export function detectMetrics(detectors, video, timestamp) {
     face_detected: faceDetected,
     eyes_closed: eyesClosed,
     looking_away: lookingAway,
-    pose_detected: Boolean(shoulderEarPairs.length),
+    pose_detected: shouldersVisible,
     ear: ear === null ? null : Math.round(ear * 1000) / 1000,
     posture,
     posture_angle:

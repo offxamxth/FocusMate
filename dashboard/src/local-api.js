@@ -9,6 +9,16 @@ function normalizeUsername(value) {
   return /^[a-z0-9_.-]{1,32}$/.test(username) ? username : '';
 }
 
+function profileStorageKey(username) {
+  const canonicalKey = `${PROFILE_PREFIX}${username}`;
+  if (localStorage.getItem(canonicalKey) !== null) return canonicalKey;
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(PROFILE_PREFIX) && normalizeUsername(key.slice(PROFILE_PREFIX.length)) === username) return key;
+  }
+  return null;
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -55,7 +65,7 @@ function read(key, fallback) {
 
 function readProfile(username) {
   const defaults = freshProfile(username);
-  const profile = { ...defaults, ...read(`${PROFILE_PREFIX}${username}`, {}) };
+  const profile = { ...defaults, ...read(profileStorageKey(username) || `${PROFILE_PREFIX}${username}`, {}), username };
   profile.session_preferences = { ...defaults.session_preferences, ...profile.session_preferences };
   profile.session_wellbeing = { ...defaults.session_wellbeing, ...profile.session_wellbeing };
   for (const key of ['session_history', 'session_reflections', 'achievements', 'quest_claims', 'tasks', 'focus_timer_history']) {
@@ -279,11 +289,15 @@ export async function api(path, options = {}) {
   const url = new URL(path, window.location.origin);
   const method = options.method || 'GET';
   const body = parseBody(options);
+  if (url.pathname === '/api/username' && method === 'GET') {
+    const username = normalizeUsername(url.searchParams.get('username'));
+    return { valid: Boolean(username), exists: Boolean(username && profileStorageKey(username)) };
+  }
   if (url.pathname === '/api/login' && method === 'POST') {
     const username = normalizeUsername(body.username);
     const name = String(body.name || '').trim().slice(0, 80);
     if (!username) throw new Error('Enter a username using letters, numbers, dots, dashes, or underscores.');
-    const existing = Boolean(localStorage.getItem(`${PROFILE_PREFIX}${username}`));
+    const existing = Boolean(profileStorageKey(username));
     if (!existing && !name) throw new Error('Enter your name to create a new profile.');
     const profile = existing ? readProfile(username) : writeProfile(username, freshProfile(username, name));
     return { profile, live: readLive(username), existing };

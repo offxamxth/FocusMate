@@ -8,7 +8,7 @@ import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, LockKeyhole, LogOut, Moon,
   Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles, Sun, Timer, Trophy,
-  MoreHorizontal, UserRound, Video, VideoOff, X,
+  UserRound, Video, VideoOff, X,
 } from 'lucide-react';
 import './style.css';
 
@@ -54,9 +54,9 @@ function App() {
   const [camera, setCamera] = useState(null);
   const [stream, setStream] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
-  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('focusmate-theme') || 'dark');
   const videoRef = useRef(null);
+  const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
   const postureNoticeRef = useRef('');
 
@@ -95,6 +95,7 @@ function App() {
 
   useEffect(() => {
     if (videoRef.current && stream) videoRef.current.srcObject = stream;
+    if (miniVideoRef.current && stream) miniVideoRef.current.srcObject = stream;
   }, [stream, page]);
 
   useEffect(() => {
@@ -216,7 +217,6 @@ function App() {
   const focusActive = Boolean(live.session_active);
   const changePage = (id) => {
     setPage(id);
-    setMobileMoreOpen(false);
     window.history.replaceState({}, '', id === 'contact' ? '/contact' : `/#${id}`);
   };
 
@@ -224,12 +224,12 @@ function App() {
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="sidebar-top">
-          <a className="brand-lockup" href="#overview" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a>
+          <a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a>
           <div className="sidebar-actions">
             <button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
             </button>
-            <button className="icon-button collapse-button" aria-label="Collapse navigation" onClick={() => setCollapsed(!collapsed)}><ChevronDown size={17} /></button>
+            <button className="icon-button collapse-button" aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} title={collapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setCollapsed((value) => !value)}><ChevronDown size={17} /></button>
           </div>
         </div>
         <div className="user-block">
@@ -247,19 +247,19 @@ function App() {
             <span className="nav-label">{group}</span>
             {pages.filter((item) => item.group === group).map((item) => {
               const Icon = item.icon;
-              return <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => changePage(item.id)} title={item.label}><Icon size={18} /><span>{item.label}</span>{item.id === 'focus-room' && focusActive && <i className="live-dot" />}</button>;
+              return <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => changePage(item.id)} title={item.label} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined}><Icon size={18} /><span>{item.label}</span>{item.id === 'focus-room' && focusActive && <i className="live-dot" />}</button>;
             })}
           </nav>
         ))}
         <div className="sidebar-bottom">
-          {stream && <div className="camera-mini"><video ref={videoRef} autoPlay muted playsInline /><div><span className="live-dot" /> CAMERA ON</div></div>}
+          {stream && <div className="camera-mini"><video ref={miniVideoRef} autoPlay muted playsInline /><div><span className="live-dot" /> CAMERA ON</div></div>}
           <p>Progress, not perfection.<br />Take care of yourself.</p>
           <button className="switch-profile" onClick={logout}><LogOut size={15} /> Switch profile</button>
         </div>
       </aside>
 
       <main className="main-area">
-        <header className="mobile-header"><a className="brand-lockup" href="#overview" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label="Switch profile"><LogOut size={18} /></button></div></header>
+        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label="Switch profile"><LogOut size={18} /></button></div></header>
         <PageHeading page={current} profile={profile} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} onNavigate={changePage} onWater={() => updateProfile({ water_glasses_today: Number(profile.water_glasses_today || 0) + 1 })} />}
@@ -275,8 +275,7 @@ function App() {
         {page === 'contact' && <ContactPage username={username} />}
         <footer className="page-footer">FocusMate <span>·</span> Progress, not perfection. Be kind to yourself.</footer>
       </main>
-      {mobileMoreOpen && <nav className="mobile-more-menu" aria-label="More pages">{pages.slice(4).map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => changePage(item.id)}><Icon size={17} /><span>{item.label}</span></button>; })}</nav>}
-      <div className="mobile-nav" aria-label="Quick navigation">{pages.slice(0, 4).map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={item.label}><Icon size={19} /><small>{item.label === 'My Progress' ? 'Progress' : item.label.replace(' room', '')}</small></button>; })}<button className={mobileMoreOpen || pages.slice(4).some((item) => item.id === page) ? 'active' : ''} aria-expanded={mobileMoreOpen} onClick={() => setMobileMoreOpen((open) => !open)} aria-label="More pages"><MoreHorizontal size={19} /><small>More</small></button></div>
+      <nav className="mobile-nav" aria-label="Primary navigation">{pages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} title={item.label}><Icon size={19} /><small>{item.label === 'My Progress' ? 'Progress' : item.label.replace(' room', '')}</small></button>; })}</nav>
     </div>
   );
 }
@@ -285,11 +284,46 @@ function Welcome({ onLogin, notice }) {
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [error, setError] = useState(notice || '');
+  const [usernameStatus, setUsernameStatus] = useState('idle');
+
+  useEffect(() => {
+    const username = handle.trim();
+    if (!username) {
+      setUsernameStatus('idle');
+      return undefined;
+    }
+    let current = true;
+    setUsernameStatus('checking');
+    const timer = window.setTimeout(() => {
+      api(`/api/username?username=${encodeURIComponent(username)}`)
+        .then((result) => {
+          if (current) setUsernameStatus(!result.valid ? 'invalid' : result.exists ? 'existing' : 'available');
+        })
+        .catch((exception) => {
+          if (current) {
+            setUsernameStatus('error');
+            setError(exception.message);
+          }
+        });
+    }, 150);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [handle]);
+
   const submit = async (event) => {
     event.preventDefault(); setError('');
-    try { await onLogin(name, handle); } catch (exception) { setError(exception.message); }
+    if (usernameStatus === 'checking' || usernameStatus === 'idle' || usernameStatus === 'invalid' || usernameStatus === 'error') return;
+    if (usernameStatus === 'available' && !name.trim()) {
+      setError('Enter your name to create a new profile.');
+      return;
+    }
+    try { await onLogin(usernameStatus === 'existing' ? '' : name, handle); } catch (exception) { setError(exception.message); }
   };
-  return <main className="welcome-page"><div className="welcome-art"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span><div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div><p>A quieter place to do your best work.</p><div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>YOUR STUDY SPACE</span></div></div><form className="welcome-form" onSubmit={submit}><div className="welcome-kicker">A FRESH START, AT YOUR PACE</div><h1>Make room for<br />your best work.</h1><p>Settle in, pick one task, and let the next focused session begin.</p><label>Your name<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" required /></label><label>Username<input autoComplete="username" maxLength="32" value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="letters, numbers, . _ -" required /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button" type="submit">Continue <ArrowUpRight size={17} /></button><small className="privacy-note"><LockKeyhole size={14} /> Your profile stays on this computer.</small></form></main>;
+  const checking = usernameStatus === 'checking';
+  const canSubmit = usernameStatus === 'existing' || (usernameStatus === 'available' && Boolean(name.trim()));
+  return <main className="welcome-page"><div className="welcome-art"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span><div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div><p>A quieter place to do your best work.</p><div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>YOUR STUDY SPACE</span></div></div><form className="welcome-form" onSubmit={submit}><div className="welcome-kicker">A FRESH START, AT YOUR PACE</div><h1>Make room for<br />your best work.</h1><p>Sign in with your username, or create a new local profile.</p><label>Username<input autoComplete="username" maxLength="33" value={handle} onChange={(event) => { setHandle(event.target.value); setError(''); }} placeholder="letters, numbers, . _ -" required /></label><div className="username-feedback" aria-live="polite">{checking ? 'Checking username…' : usernameStatus === 'existing' ? 'Welcome back. Your saved profile will be opened.' : usernameStatus === 'available' ? 'This username is available. Add your name to create a profile.' : usernameStatus === 'invalid' ? 'Use 1–32 letters, numbers, dots, dashes, or underscores.' : ''}</div>{usernameStatus === 'available' && <label>Your name<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<button className="primary-button" type="submit" disabled={!canSubmit}>{usernameStatus === 'existing' ? 'Sign in to your profile' : 'Create profile'} <ArrowUpRight size={17} /></button><small className="privacy-note"><LockKeyhole size={14} /> Your profile stays on this computer.</small></form></main>;
 }
 
 function PageHeading({ page, profile }) {
