@@ -1,11 +1,5 @@
 {
-  "installCommand": "npm install --prefix dashboard",
-  "buildCommand": "npm --prefix dashboard run build",
-  "outputDirectory": "dashboard/dist",
-  "rewrites": [
-    {
-      "source": "/contact",
-      "destination": "/"
-    }
-  ]
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist"
 }
