@@ -1,6 +1,6 @@
 # FocusMate
 
-FocusMate is a local-first study space with a React dashboard and optional in-browser webcam estimates. It deploys to Vercel as a static app without a separate API server.
+FocusMate is a local-first study space with a React dashboard and optional in-browser webcam estimates. It deploys to Vercel as a static app with a small optional serverless endpoint for support submissions.
 
 ## Project structure
 
@@ -8,6 +8,7 @@ FocusMate is a local-first study space with a React dashboard and optional in-br
 - `dashboard/src/` – React interface and page components
 - `dashboard/src/local-api.js` – browser-local profile, session, timer, and quest storage
 - `dashboard/src/vision.js` – in-browser MediaPipe face and posture estimates
+- `api/support-submissions.js` – validated Vercel support-email endpoint
 - `dashboard/public/models/` – face and pose models served with the app
 
 ## Requirements
@@ -42,6 +43,37 @@ automatically imported from older JSON profile files. Camera frames are
 processed in the browser; the landmark models are served by the app and the
 MediaPipe WASM runtime is loaded from jsDelivr. Webcam access requires HTTPS,
 which Vercel provides.
+
+## Contact and support submissions
+
+The Contact Us page is available at `/contact`. Its Vercel serverless endpoint
+validates contact messages, bug reports, and feedback, then forwards accepted
+submissions to `support.focusmate@gmail.com` using Resend. The support inbox is
+the team’s access point; FocusMate does not keep a separate contact database.
+Resend and the receiving email provider handle delivery and retention under
+their own policies. A success message is shown only after Resend accepts the
+email. Without the server-side configuration below, submissions return an
+error and users are directed to the technical support email instead.
+
+To enable online submissions, configure these **private** environment variables
+in the Vercel project settings for the relevant deployment environments:
+
+- `RESEND_API_KEY` — a Resend API key with permission to send email.
+- `SUPPORT_FROM_EMAIL` — a sender address or sender identity verified with
+  Resend (for example, `FocusMate Support <support@your-verified-domain>`).
+
+The endpoint always sends to the FocusMate support inbox; neither value is
+exposed to the browser. Do not prefix these variables with `VITE_`. The API
+accepts optional PNG, JPG/JPEG, or WEBP screenshots up to 1 MB, validates the file signature server-side, and
+attaches the image to the support email. The Python app server and local Vite
+preview do not run Vercel functions; use the Vercel development environment
+with server-side variables to exercise actual email delivery.
+
+Run the support endpoint validation tests with:
+
+```bash
+npm --prefix dashboard test
+```
 
 The dashboard includes an overview, a focus room with a Pomodoro timer and task
 list, session insights, session reflections, daily quests, achievements, and

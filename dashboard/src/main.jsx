@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { api } from './local-api.js';
 import { achievementCatalog } from './achievement-data.js';
 import { createVisionLandmarkers, detectMetrics } from './vision.js';
+import ContactPage from './ContactPage.jsx';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, LockKeyhole, LogOut, Moon,
@@ -20,6 +21,7 @@ const pages = [
   { id: 'quests', label: 'Daily quests', group: 'Build good habits', icon: Award },
   { id: 'session-preferences', label: 'Session preferences', group: 'Build good habits', icon: Settings2 },
   { id: 'profile', label: 'Profile & wellbeing', group: 'Build good habits', icon: UserRound },
+  { id: 'contact', label: 'Contact Us', group: 'Build good habits', icon: CircleHelp },
 ];
 
 const quests = [
@@ -31,6 +33,11 @@ const quests = [
 
 const achievements = achievementCatalog;
 
+function pageFromLocation() {
+  if (window.location.pathname.replace(/\/+$/, '') === '/contact') return 'contact';
+  return pages.find((item) => item.id === window.location.hash.slice(1))?.id || 'overview';
+}
+
 function saveProfile(username, profile) {
   return api(`/api/state?username=${encodeURIComponent(username)}`, {
     method: 'PUT', body: JSON.stringify({ profile }),
@@ -41,7 +48,7 @@ function App() {
   const [username, setUsername] = useState(localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
   const [live, setLive] = useState({});
-  const [page, setPage] = useState(() => pages.find((item) => item.id === window.location.hash.slice(1))?.id || 'overview');
+  const [page, setPage] = useState(pageFromLocation);
   const [loading, setLoading] = useState(Boolean(username));
   const [notice, setNotice] = useState('');
   const [camera, setCamera] = useState(null);
@@ -57,6 +64,16 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('focusmate-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    const syncPage = () => setPage(pageFromLocation());
+    window.addEventListener('popstate', syncPage);
+    window.addEventListener('hashchange', syncPage);
+    return () => {
+      window.removeEventListener('popstate', syncPage);
+      window.removeEventListener('hashchange', syncPage);
+    };
+  }, []);
 
   useEffect(() => {
     if (!username) return;
@@ -153,7 +170,9 @@ function App() {
     localStorage.setItem('focusmate-user', data.profile.username);
     setProfile(data.profile);
     setLive(data.live);
-    setPage('overview');
+    const destination = window.location.pathname.replace(/\/+$/, '') === '/contact' ? 'contact' : 'overview';
+    setPage(destination);
+    window.history.replaceState({}, '', destination === 'contact' ? '/contact' : '/#overview');
   };
 
   const logout = () => {
@@ -195,7 +214,11 @@ function App() {
   const xp = Number(profile.total_xp || 0);
   const level = Math.floor(xp / 100) + 1;
   const focusActive = Boolean(live.session_active);
-  const changePage = (id) => { setPage(id); setMobileMoreOpen(false); window.history.replaceState({}, '', `#${id}`); };
+  const changePage = (id) => {
+    setPage(id);
+    setMobileMoreOpen(false);
+    window.history.replaceState({}, '', id === 'contact' ? '/contact' : `/#${id}`);
+  };
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
@@ -240,13 +263,16 @@ function App() {
         <PageHeading page={current} profile={profile} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} onNavigate={changePage} onWater={() => updateProfile({ water_glasses_today: Number(profile.water_glasses_today || 0) + 1 })} />}
-        {page === 'focus-room' && <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} />}
+        <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} />
+        </div>
         {page === 'insights' && <Insights profile={profile} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} />}
         {page === 'quests' && <Quests profile={profile} onClaim={async (id) => { const data = await api(`/api/quests/claim?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ quest_id: id }) }); setProfile(data.profile); }} />}
         {page === 'session-preferences' && <Preferences profile={profile} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} onSave={updateProfile} onExport={() => downloadProfile(profile)} />}
+        {page === 'contact' && <ContactPage username={username} />}
         <footer className="page-footer">FocusMate <span>·</span> Progress, not perfection. Be kind to yourself.</footer>
       </main>
       {mobileMoreOpen && <nav className="mobile-more-menu" aria-label="More pages">{pages.slice(4).map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => changePage(item.id)}><Icon size={17} /><span>{item.label}</span></button>; })}</nav>}
@@ -276,6 +302,7 @@ function PageHeading({ page, profile }) {
     quests: ['DAILY QUESTS', 'Tiny wins count.', 'Optional, kind-to-yourself challenges. Claim a quest once per day for a little bonus XP.'],
     'session-preferences': ['SESSION PREFERENCES', 'Set your session up your way.', 'Choose how FocusMate monitors, reminds, and supports your study time.'],
     profile: ['YOUR SPACE', 'Make it yours.', 'Your name, wellbeing notes, and saved progress stay in your local FocusMate profile.'],
+    contact: ['HELP & SUPPORT', 'Need help? We’re here.', 'Get help with technical problems, report bugs, or share feedback with the FocusMate team.'],
   }[page.id];
   if (page.id === 'overview') return null;
   return <header className="page-heading"><span className="eyebrow">{content[0]}</span><h1>{content[1]}</h1><p>{content[2]}</p></header>;
@@ -435,6 +462,7 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
+  useEffect(() => setTasks(profile.tasks || []), [profile.tasks]);
   const addTask = (event) => { event.preventDefault(); if (!newTask.trim()) return; const next = [...tasks, { id: String(Date.now()), text: newTask.trim(), done: false }].slice(-100); setTasks(next); onUpdateProfile({ tasks: next }); setNewTask(''); };
   const toggleTask = (id) => { const next = tasks.map((task) => task.id === id ? { ...task, done: !task.done } : task); setTasks(next); onUpdateProfile({ tasks: next }); };
   const removeTask = (id) => { const next = tasks.filter((task) => task.id !== id); setTasks(next); onUpdateProfile({ tasks: next }); };
