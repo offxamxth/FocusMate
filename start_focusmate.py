@@ -1,157 +1,98 @@
-"""
-FocusMate launcher.
-
-Starts the Streamlit dashboard. Webcam detection is started on demand
-from the FocusMate dashboard.
-"""
+"""Start the React dashboard for local development."""
 
 import os
+import shutil
+import socket
+import subprocess
 import sys
 import time
-import subprocess
+import urllib.error
+import urllib.request
 import webbrowser
 
 
-# =========================================================
-# PATHS
-# =========================================================
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-DASHBOARD_DIR = os.path.join(
-    BASE_DIR,
-    "dashboard"
-)
-
-DASHBOARD_FILE = os.path.join(
-    DASHBOARD_DIR,
-    "step7_analytics.py"
-)
-
-# Override either interpreter when the project uses a custom environment.
-DASHBOARD_PYTHON = os.environ.get(
-    "FOCUSMATE_DASHBOARD_PYTHON",
-    os.path.join(DASHBOARD_DIR, "venv", "Scripts", "python.exe")
-)
-DEFAULT_WEBCAM_PYTHON = os.path.join(os.path.expanduser("~"), "focusmate-webcam-venv", "Scripts", "python.exe")
-if not os.path.exists(DEFAULT_WEBCAM_PYTHON):
-    DEFAULT_WEBCAM_PYTHON = sys.executable
-WEBCAM_PYTHON = os.environ.get("FOCUSMATE_WEBCAM_PYTHON", DEFAULT_WEBCAM_PYTHON)
+DASHBOARD_DIR = os.path.join(BASE_DIR, "dashboard")
+NODE_MODULES = os.path.join(DASHBOARD_DIR, "node_modules")
 
 
-# =========================================================
-# CHECK FILES
-# =========================================================
-
-print("=" * 60)
-print("                 FOCUSMATE")
-print("             Automatic Launcher")
-print("=" * 60)
-
-print()
-
-if not os.path.exists(DASHBOARD_FILE):
-
-    print("ERROR: Dashboard file not found:")
-    print(DASHBOARD_FILE)
-    input("\nPress Enter to exit...")
-    sys.exit(1)
+def available_port(start):
+    for port in range(start, start + 100):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f"No available local port near {start}.")
 
 
-if not os.path.exists(DASHBOARD_PYTHON):
-
-    print("ERROR: Dashboard virtual environment not found:")
-    print(DASHBOARD_PYTHON)
-    print()
-    print("Make sure the dashboard venv exists.")
-    input("\nPress Enter to exit...")
-    sys.exit(1)
-
-
-# =========================================================
-# START DASHBOARD
-# =========================================================
-
-print("Starting FocusMate dashboard...")
-print()
-
-dashboard_process = subprocess.Popen(
-    [
-        DASHBOARD_PYTHON,
-        "-m",
-        "streamlit",
-        "run",
-        DASHBOARD_FILE,
-    ],
-    cwd=DASHBOARD_DIR,
-    env={**os.environ, "FOCUSMATE_WEBCAM_PYTHON": WEBCAM_PYTHON},
-)
+def wait_for(url, processes, seconds=35):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if any(process.poll() is not None for process in processes):
+            return False
+        try:
+            with urllib.request.urlopen(url, timeout=1):
+                return True
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.25)
+    return False
 
 
-# =========================================================
-# WAIT FOR DASHBOARD
-# =========================================================
-
-time.sleep(4)
-
-
-# =========================================================
-# OPEN BROWSER
-# =========================================================
-
-print("Opening FocusMate dashboard...")
-
-webbrowser.open(
-    "http://localhost:8501"
-)
+def stop_process(process):
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
 
 
-# =========================================================
-# RUN UNTIL CLOSED
-# =========================================================
+def main():
+    print("=" * 54)
+    print("                 FOCUSMATE")
+    print("              React dashboard")
+    print("=" * 54)
 
-print()
-print("=" * 60)
-print("             FOCUSMATE IS RUNNING")
-print("=" * 60)
-print()
-print("Dashboard:     RUNNING")
-print("Webcam AI:     starts only when requested in the dashboard")
-print()
-print("Dashboard:")
-print("http://localhost:8501")
-print()
-print("Close this launcher to stop FocusMate.")
-print("=" * 60)
+    if not os.path.isdir(NODE_MODULES):
+        raise FileNotFoundError("React dependencies are missing. Run `npm install --prefix dashboard` first.")
+    npm = shutil.which("npm.cmd") or shutil.which("npm")
+    if not npm:
+        raise FileNotFoundError("npm was not found. Install Node.js 20.19+ and run `npm install --prefix dashboard`.")
+
+    web_port = available_port(5173)
+    environment = {**os.environ, "FOCUSMATE_WEB_PORT": str(web_port)}
+    web_process = None
+    try:
+        web_process = subprocess.Popen(
+            [npm, "run", "dev"],
+            cwd=DASHBOARD_DIR,
+            env=environment,
+            shell=False,
+        )
+        url = f"http://127.0.0.1:{web_port}"
+        if not wait_for(url, [web_process]):
+            raise RuntimeError("The React dashboard did not start.")
+
+        print(f"\nDashboard: {url}")
+        print("Webcam analysis runs locally in your browser when requested.")
+        print("Close this launcher to stop FocusMate.")
+        webbrowser.open(url)
+        while web_process.poll() is None:
+            time.sleep(0.5)
+        print("\nFocusMate has stopped.")
+    except KeyboardInterrupt:
+        print("\nStopping FocusMate...")
+    finally:
+        stop_process(web_process)
+        print("FocusMate closed.")
 
 
-try:
-
-    while True:
-
-        # If dashboard closes unexpectedly
-        if dashboard_process.poll() is not None:
-
-            print()
-            print("⚠️ Dashboard has stopped.")
-
-            break
-
-        time.sleep(1)
-
-
-except KeyboardInterrupt:
-
-    print()
-    print("Stopping FocusMate...")
-
-
-# =========================================================
-# CLEAN SHUTDOWN
-# =========================================================
-
-print("Stopping dashboard...")
-dashboard_process.terminate()
-
-print()
-print("FocusMate closed.")
+if __name__ == "__main__":
+    try:
+        main()
+    except (FileNotFoundError, RuntimeError) as error:
+        print(f"ERROR: {error}")
+        sys.exit(1)

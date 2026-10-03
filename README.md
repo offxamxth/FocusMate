@@ -1,33 +1,22 @@
 # FocusMate
 
-FocusMate is a desktop-like productivity assistant that combines optional webcam-based attention monitoring with a multi-page Streamlit study space.
+FocusMate is a local-first study space with a React dashboard and optional in-browser webcam estimates. It deploys to Vercel as a static app without a separate API server.
 
 ## Project structure
 
-- `start_focusmate.py` – launches the webcam detector and the dashboard together
-- `dashboard/` – animated multi-page Streamlit app, profile, and session data
-- `webcam_detection/` – Mediapipe-based camera monitoring and event detection
+- `start_focusmate.py` – launches the React dashboard locally
+- `dashboard/src/` – React interface and page components
+- `dashboard/src/local-api.js` – browser-local profile, session, timer, and quest storage
+- `dashboard/src/vision.js` – in-browser MediaPipe face and posture estimates
+- `dashboard/public/models/` – face and pose models served with the app
 
 ## Requirements
 
-Create the dashboard environment and install its dependencies:
+Install Node.js 20.19 or newer, then install the dashboard dependencies:
 
 ```bash
-python -m venv dashboard/venv
-dashboard\venv\Scripts\python.exe -m pip install -r dashboard/requirements.txt
+npm install --prefix dashboard
 ```
-
-The dashboard runs on Python 3.14. The webcam detector requires Python 3.12 or
-3.13 because MediaPipe does not currently provide a compatible Python 3.14
-package. Install its additional dependencies with:
-
-```bash
-py -3.13 -m pip install -r webcam_detection/requirements.txt
-```
-
-The launcher uses `dashboard/venv` by default. To use another dashboard or
-webcam Python installation, set `FOCUSMATE_DASHBOARD_PYTHON` or
-`FOCUSMATE_WEBCAM_PYTHON` before starting the app.
 
 ## Run the app
 
@@ -37,38 +26,44 @@ From the project root:
 python start_focusmate.py
 ```
 
-To open only the dashboard:
+This starts the React dashboard in one terminal and opens it in your browser.
+The optional camera analysis runs in the browser after you grant camera access.
+You can also start it with `npm --prefix dashboard run dev`.
 
-```bash
-dashboard\venv\Scripts\python.exe -m streamlit run dashboard\step7_analytics.py
-```
+## Deploy to Vercel
 
-This opens the dashboard. Webcam detection remains off until you start a
-session from the Focus room or Overview page:
+Import the repository into Vercel and leave the project root set to the
+repository root. The root `vercel.json` installs the dashboard dependencies,
+builds the Vite app, and publishes `dashboard/dist`.
 
-1. the Streamlit dashboard in your browser
-2. optional webcam AI detection, started only when requested in the dashboard
+Profiles and progress are stored in browser local storage. They are available
+in that browser and on that device, are not synced between devices, and are not
+automatically imported from older JSON profile files. Camera frames are
+processed in the browser; the landmark models are served by the app and the
+MediaPipe WASM runtime is loaded from jsDelivr. Webcam access requires HTTPS,
+which Vercel provides.
 
 The dashboard includes an overview, a focus room with a Pomodoro timer and task
-list, session insights, daily quests, and profile/wellbeing settings. The webcam
-is optional; the timer and task list work without it. Use the sidebar to switch
-between pages.
+list, session insights, session reflections, daily quests, achievements, and
+profile/wellbeing settings. The webcam is optional; the timer and task list work
+without it. Use the sidebar to switch between pages.
+
+Camera signals are heuristic estimates from face and pose landmarks. The
+looking-away indicator uses head-turn asymmetry as a proxy; it does not track
+eye gaze. The estimated behavioral score does not measure concentration,
+intelligence, fatigue, or mental state and is not medical or scientific advice.
 
 At startup, enter a username to reopen its saved local profile or create a new
-one. Profiles and webcam session data are stored separately under
-`dashboard/profiles/`. Usernames select local data; they are not passwords or
-secure authentication.
+one. Usernames select browser-local data; they are not passwords or secure
+authentication.
 
 ## Notes
 
-- The project expects the model files in `webcam_detection/`:
+- The dashboard serves its model files from `dashboard/public/models/`:
   - `face_landmarker.task`
   - `pose_landmarker.task`
-- The local virtual environment folder should not be committed to GitHub.
-- `dashboard/session_data.json` and `dashboard/player_profile.json` are local
-  runtime files and are ignored by Git.
-- `dashboard/profiles/` contains per-username profiles, webcam snapshots, and
-  session data; it is local runtime data and is ignored by Git.
+- `dashboard/node_modules/` and `dashboard/dist/` are generated and should not be committed.
+- The legacy Python API and webcam detector are not required for the Vercel deployment.
 
 ## GitHub upload
 

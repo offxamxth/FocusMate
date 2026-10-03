@@ -1,0 +1,5 @@
+{
+  "installCommand": "npm install --prefix dashboard",
+  "buildCommand": "npm --prefix dashboard run build",
+  "outputDirectory": "dashboard/dist"
+}

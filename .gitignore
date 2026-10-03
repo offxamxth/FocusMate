@@ -22,3 +22,5 @@ dashboard/session_data.json
 dashboard/player_profile.json
 dashboard/stop_session.request
 dashboard/profiles/
+dashboard/node_modules/
+dashboard/dist/
