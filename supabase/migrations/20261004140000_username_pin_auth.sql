@@ -110,7 +110,7 @@ security definer
 set search_path = ''
 as $$
 declare
-  key_hash text;
+  v_key_hash text;
   started_at timestamptz;
   attempt_count integer;
   allowed boolean := true;
@@ -126,13 +126,13 @@ begin
   delete from private.pin_login_limits
     where window_started_at + interval '1 day' <= now();
 
-  foreach key_hash in array p_key_hashes loop
-    if key_hash !~ '^[a-f0-9]{64}$' then
+  foreach v_key_hash in array p_key_hashes loop
+    if v_key_hash !~ '^[a-f0-9]{64}$' then
       raise exception 'Invalid rate-limit key';
     end if;
 
     insert into private.pin_login_limits (key_hash, window_started_at, attempts)
-    values (key_hash, now(), 1)
+    values (v_key_hash, now(), 1)
     on conflict (key_hash) do update
       set window_started_at = case
             when private.pin_login_limits.window_started_at
@@ -150,7 +150,7 @@ begin
     select limits.window_started_at, limits.attempts
       into started_at, attempt_count
       from private.pin_login_limits as limits
-      where limits.key_hash = key_hash;
+      where limits.key_hash = v_key_hash;
 
     if started_at + make_interval(secs => p_window_seconds) > now()
       and attempt_count > p_max_attempts then

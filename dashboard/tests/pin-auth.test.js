@@ -153,6 +153,9 @@ test('PIN migration database objects are inaccessible to browser roles', async (
   assert.match(sql, /revoke all on function public\.register_focusmate_pin[\s\S]*?from public, anon, authenticated/i);
   assert.match(sql, /grant execute on function public\.register_focusmate_pin[\s\S]*?to service_role/i);
   assert.match(sql, /check \(jsonb_typeof\(app_data\) = 'object'\)/i);
+  assert.match(sql, /foreach v_key_hash in array p_key_hashes/i);
+  assert.match(sql, /where limits\.key_hash = v_key_hash/i);
+  assert.doesNotMatch(sql, /where limits\.key_hash = key_hash/i);
 });
 
 test('Focus Score UI has been removed while local legacy-data sanitizing stays private to storage', async () => {
