@@ -167,6 +167,16 @@ test('cloud profile migration adds owner-bound data fields and preserves RLS iso
   assert.doesNotMatch(sql, /\bsb_secret_[A-Za-z0-9_-]{12,}|\bservice[_ -]?role\s*key/i);
 });
 
+test('username/PIN service role has only the profile columns needed for account migration', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261004180000_username_pin_profile_access.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /grant select \(id, username, display_name, session_preferences, preferences\)\s+on table public\.profiles to service_role/i);
+  assert.match(sql, /grant update \(username, display_name, session_preferences, preferences\)\s+on table public\.profiles to service_role/i);
+  assert.doesNotMatch(sql, /grant all|using\s*\(\s*true\s*\)/i);
+});
+
 test('timer completion guard permits one completion and safely ignores blocked audio', async () => {
   const state = { current: false };
   assert.equal(claimTimerCompletion(state), true);

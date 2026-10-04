@@ -158,6 +158,26 @@ test('PIN migration database objects are inaccessible to browser roles', async (
   assert.doesNotMatch(sql, /where limits\.key_hash = key_hash/i);
 });
 
+test('username/PIN function logs sanitized error details and missing setting names only', async () => {
+  const source = await readFile(
+    new URL('../../supabase/functions/username-pin/index.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /function logSafeRequestError\(error: unknown, sensitiveValues: string\[\]\)/);
+  assert.match(source, /replaceAll\(sensitiveValue, "\[REDACTED\]"\)/);
+  assert.match(source, /errorMessage: safeMessage/);
+  assert.match(source, /missingEnvironmentVariables/);
+  assert.match(source, /"https:\/\/getfocusmate\.vercel\.app"/);
+  assert.match(source, /"Access-Control-Allow-Methods": "POST, OPTIONS"/);
+  assert.match(source, /"Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"/);
+  assert.match(source, /new Response\("ok", \{ status: 200, headers: corsHeadersFor\(request\) \}\)/);
+  assert.doesNotMatch(source, /"Access-Control-Allow-Origin":\s*"\*"/);
+  assert.doesNotMatch(
+    source,
+    /console\.error\(\s*(?:body|pin|currentPassword|serviceRoleKey|publishableKey|pinPepper)\b/i,
+  );
+});
+
 test('Focus Score UI has been removed while local legacy-data sanitizing stays private to storage', async () => {
   const main = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
   const contact = await readFile(new URL('../src/ContactPage.jsx', import.meta.url), 'utf8');
