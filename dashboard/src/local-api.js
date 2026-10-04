@@ -2,6 +2,7 @@ import { awardEligibleAchievements } from './achievement-data.js';
 
 const PROFILE_PREFIX = 'focusmate-profile:';
 const LIVE_PREFIX = 'focusmate-live:';
+const PROFILE_SCHEMA_VERSION = 1;
 const cameraSessions = new Map();
 
 function normalizeUsername(value) {
@@ -25,6 +26,7 @@ function today() {
 
 function freshProfile(username, name = 'Focus friend') {
   return {
+    schema_version: PROFILE_SCHEMA_VERSION,
     username,
     player_name: name,
     total_xp: 0,
@@ -57,20 +59,50 @@ function freshProfile(username, name = 'Focus friend') {
 function read(key, fallback) {
   try {
     const value = JSON.parse(localStorage.getItem(key));
-    return value && typeof value === 'object' ? value : fallback;
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
   } catch {
     return fallback;
   }
 }
 
+function normalizeXp(value) {
+  const xp = Number(value);
+  return Number.isFinite(xp) && xp > 0 ? Math.floor(xp) : 0;
+}
+
+export function levelForXp(value) {
+  return Math.floor(normalizeXp(value) / 100) + 1;
+}
+
 function readProfile(username) {
   const defaults = freshProfile(username);
-  const profile = { ...defaults, ...read(profileStorageKey(username) || `${PROFILE_PREFIX}${username}`, {}), username };
+  const profile = {
+    ...defaults,
+    ...read(profileStorageKey(username) || `${PROFILE_PREFIX}${username}`, {}),
+    schema_version: PROFILE_SCHEMA_VERSION,
+    username,
+  };
+  profile.total_xp = normalizeXp(profile.total_xp);
+  profile.sessions_completed = normalizeXp(profile.sessions_completed);
+  profile.total_study_seconds = normalizeXp(profile.total_study_seconds);
   profile.session_preferences = { ...defaults.session_preferences, ...profile.session_preferences };
   profile.session_wellbeing = { ...defaults.session_wellbeing, ...profile.session_wellbeing };
   for (const key of ['session_history', 'session_reflections', 'achievements', 'quest_claims', 'tasks', 'focus_timer_history']) {
     if (!Array.isArray(profile[key])) profile[key] = [];
   }
+  const achievementIds = new Set();
+  profile.achievements = profile.achievements.filter((item) => {
+    if (typeof item === 'string') {
+      if (achievementIds.has(item)) return false;
+      achievementIds.add(item);
+      return true;
+    }
+    if (!item || typeof item !== 'object') return false;
+    if (typeof item.id !== 'string') return true;
+    if (achievementIds.has(item.id)) return false;
+    achievementIds.add(item.id);
+    return true;
+  });
   profile.session_history = profile.session_history.filter((item) => item && typeof item === 'object').map((item) => {
     const clean = { ...item };
     delete clean.focus_score;
@@ -92,7 +124,12 @@ function readProfile(username) {
 }
 
 function writeProfile(username, profile) {
-  const value = { ...profile, username };
+  const value = {
+    ...profile,
+    schema_version: PROFILE_SCHEMA_VERSION,
+    total_xp: normalizeXp(profile.total_xp),
+    username,
+  };
   localStorage.setItem(`${PROFILE_PREFIX}${username}`, JSON.stringify(value));
   return value;
 }
@@ -184,6 +221,7 @@ function finishCameraSession(username) {
     looking_away_alerts: live.looking_away_alerts,
     fatigue_signals: live.fatigue_signals,
     pose_detected: live.pose_detected,
+    pose_detection_status: live.pose_detection_status || (live.pose_detected ? 'detected' : 'checking'),
     face_detected: live.face_detected,
     subject: plan.subject || 'Other',
     goal: plan.goal || '',
@@ -261,6 +299,8 @@ function applyTelemetry(username, metrics) {
     fatigue_signals: runtime.counts.eyes_closed,
     posture: metrics.posture || 'Unknown',
     pose_detected: Boolean(metrics.pose_detected),
+    pose_detection_status: metrics.pose_detection_status ||
+      (metrics.pose_detected ? 'detected' : 'checking'),
     posture_alert_pending: runtime.postureAlertPending,
     distance_status: metrics.distance_status || 'Unknown',
     face_detected: Boolean(metrics.face_detected),
@@ -299,7 +339,9 @@ export async function api(path, options = {}) {
     if (!username) throw new Error('Enter a username using letters, numbers, dots, dashes, or underscores.');
     const existing = Boolean(profileStorageKey(username));
     if (!existing && !name) throw new Error('Enter your name to create a new profile.');
-    const profile = existing ? readProfile(username) : writeProfile(username, freshProfile(username, name));
+    const profile = existing
+      ? writeProfile(username, readProfile(username))
+      : writeProfile(username, freshProfile(username, name));
     return { profile, live: readLive(username), existing };
   }
 
@@ -366,9 +408,9 @@ export async function api(path, options = {}) {
     profile.active_session_plan = { subject: String(body.subject || 'Other').slice(0, 40), goal: String(body.goal || '').slice(0, 200) };
     if (body.mood) profile.session_wellbeing = { ...profile.session_wellbeing, mood: String(body.mood), mood_checkin_date: today(), mood_updated_at: new Date(now).toISOString() };
     writeProfile(username, profile);
-    writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: 0, distance_alerts: 0, looking_away_alerts: 0, fatigue_signals: 0, history: [], status: 'Waiting for camera signals', posture: 'Unknown', pose_detected: false, distance_status: 'Unknown', face_detected: false });
+    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: 0, distance_alerts: 0, looking_away_alerts: 0, fatigue_signals: 0, history: [], status: 'Waiting for camera signals', posture: 'Unknown', pose_detected: false, pose_detection_status: 'checking', distance_status: 'Unknown', face_detected: false });
     cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
-    return { ok: true, message: 'Your study session has started.' };
+    return { ok: true, message: 'Your study session has started.', live };
   }
   if (url.pathname === '/api/camera/telemetry' && method === 'POST') return applyTelemetry(username, body);
   if (url.pathname === '/api/webcam/stop' && method === 'POST') return finishCameraSession(username);

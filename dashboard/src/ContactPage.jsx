@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
 import { version as appVersion } from '../package.json';
+import { submitSupportForm } from './support-submissions.js';
 import {
   AlertTriangle, ArrowUpRight, Bug, CheckCircle2, CircleHelp, Lightbulb,
   Mail, MessageSquareText, Send, ShieldAlert, Upload,
 } from 'lucide-react';
 
 const SUPPORT_EMAIL = 'support.focusmate@gmail.com';
-const MAX_SCREENSHOT_BYTES = 1024 * 1024;
 const ISSUE_OPTIONS = [
   'General Question',
   'Technical Problem',
@@ -31,30 +31,6 @@ function environmentDetails() {
   return { browser, device };
 }
 
-function screenshotError(file) {
-  if (!file) return '';
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-    return 'Choose a PNG, JPG, or WEBP image.';
-  }
-  if (file.size <= 0) return 'The selected image is empty.';
-  if (file.size > MAX_SCREENSHOT_BYTES) return 'Screenshots must be 1 MB or smaller.';
-  return '';
-}
-
-function readScreenshot(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('The screenshot could not be read. Please choose it again.'));
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      const data = result.slice(result.indexOf(',') + 1);
-      if (!data) reject(new Error('The screenshot could not be read. Please choose it again.'));
-      else resolve({ name: file.name, type: file.type, size: file.size, data });
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 function AlertMessage({ message }) {
   if (!message) return null;
   const SuccessIcon = message.kind === 'success' ? CheckCircle2 : AlertTriangle;
@@ -67,27 +43,24 @@ function AlertMessage({ message }) {
 }
 
 function ScreenshotField({ id, file, onChange, disabled }) {
-  const [error, setError] = useState('');
   const chooseFile = (event) => {
     const nextFile = event.target.files?.[0] || null;
     onChange(nextFile);
-    setError(screenshotError(nextFile));
   };
 
   return (
     <div className="contact-field screenshot-field">
-      <label htmlFor={id}>Screenshot <span>(optional, PNG/JPG/WEBP · max 1 MB)</span></label>
+      <label htmlFor={id}>Screenshot <span>(optional; not sent with this form)</span></label>
       <input
         id={id}
         type="file"
         accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
         onChange={chooseFile}
         disabled={disabled}
-        aria-describedby={`${id}-hint${error ? ` ${id}-error` : ''}`}
+        aria-describedby={`${id}-hint`}
       />
-      <small id={`${id}-hint`} className="field-hint">The image is attached to the support email; it is not saved in this browser.</small>
-      {file && !error && <small className="field-hint selected-file"><Upload size={13} /> {file.name} · {file.size < 1024 ? `${file.size} bytes` : `${(file.size / 1024).toFixed(1)} KB`}</small>}
-      {error && <small id={`${id}-error`} className="field-error" role="alert">{error}</small>}
+      <small id={`${id}-hint`} className="field-hint">Web3Forms does not send this selected image. To share it, attach it to an email to {SUPPORT_EMAIL}.</small>
+      {file && <small className="field-hint selected-file"><Upload size={13} /> Selected locally: {file.name}</small>}
     </div>
   );
 }
@@ -96,7 +69,7 @@ function Honeypot({ value, onChange }) {
   return (
     <label className="contact-honeypot" aria-hidden="true">
       Leave this field empty
-      <input name="website" tabIndex={-1} autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} />
+      <input name="botcheck" tabIndex={-1} autoComplete="off" value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
@@ -125,10 +98,8 @@ export default function ContactPage({ username }) {
     event.preventDefault();
     if (submissionLock.current) return;
 
-    const screenshot = values.screenshot;
-    const fileError = screenshotError(screenshot);
-    if (fileError) {
-      setMessages((current) => ({ ...current, [type]: { kind: 'error', text: fileError } }));
+    if (honeypot) {
+      setMessages((current) => ({ ...current, [type]: { kind: 'error', text: 'We couldn’t submit your message. Please try again or use Technical Support.' } }));
       return;
     }
 
@@ -138,43 +109,23 @@ export default function ContactPage({ username }) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 18000);
     try {
-      const attachment = screenshot ? await readScreenshot(screenshot) : undefined;
       const { browser, device } = environmentDetails();
-      const response = await fetch('/api/support-submissions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await submitSupportForm({
+        ...values,
+        username: usernameValue,
+        browser,
+        device,
+        appVersion,
+        botcheck: honeypot,
+      }, {
+        accessKey: import.meta.env.VITE_WEB3FORMS_ACCESS_KEY,
         signal: controller.signal,
-        body: JSON.stringify({
-          ...values,
-          screenshot: attachment,
-          username: usernameValue,
-          browser,
-          device,
-          website: honeypot,
-        }),
       });
-
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.toLowerCase().includes('application/json')) {
-        throw new Error('The support form isn’t available in this local preview. Use the deployed support service or email Technical Support.');
-      }
-      let result;
-      try {
-        result = await response.json();
-      } catch {
-        throw new Error('The support service returned an unexpected response. Please try again or use Technical Support.');
-      }
-      if (!response.ok) {
-        throw new Error(result?.error || 'We couldn’t submit your message. Please try again or use Technical Support.');
-      }
-      if (result?.ok !== true || typeof result.id !== 'string' || !result.id) {
-        throw new Error('The support service returned an unexpected confirmation. Please try again or use Technical Support.');
-      }
 
       reset();
       setMessages((current) => ({
         ...current,
-        [type]: { kind: 'success', text: 'The support email service accepted your message for delivery to FocusMate Support. Thank you for helping us improve.' },
+        [type]: { kind: 'success', text: 'Web3Forms accepted your message for delivery to FocusMate Support. Thank you for helping us improve.' },
       }));
     } catch (error) {
       const text = error.name === 'AbortError'
@@ -356,7 +307,7 @@ export default function ContactPage({ username }) {
 
       <aside className="contact-privacy-note">
         <ShieldAlert size={17} aria-hidden="true" />
-        <p><strong>Before you send:</strong> Please don’t include passwords, payment information, or other sensitive details. When online support is configured, messages and optional screenshots are sent to the FocusMate support inbox through Resend. FocusMate does not save submissions in your browser or in a FocusMate database. If the service is unavailable, the form will show an error; email support remains available above.</p>
+        <p><strong>Before you send:</strong> Please don’t include passwords, payment information, or other sensitive details. When online support is configured, form messages are sent through Web3Forms to the inbox associated with the access key. Screenshots selected here are not sent; attach them to an email to {SUPPORT_EMAIL}. FocusMate does not save submissions in a FocusMate database. If the service is unavailable, the form will show an error; email support remains available above.</p>
       </aside>
 
       <section className="contact-faq" aria-labelledby="faq-title">

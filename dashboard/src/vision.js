@@ -10,6 +10,8 @@ const LEFT_EYE = [33, 160, 158, 133, 153, 144];
 const RIGHT_EYE = [362, 385, 387, 263, 373, 380];
 const HEAD_TURN_THRESHOLD = 0.24;
 const SHOULDER_VISIBILITY = 0.4;
+const SHOULDER_DETECT_FRAMES = 2;
+const SHOULDER_LOSS_FRAMES = 3;
 const SHOULDER_TILT_ACTIVATE_DEGREES = 17;
 const SHOULDER_TILT_CLEAR_DEGREES = 12;
 const SLOUCH_ANGLE_DEGREES = 52;
@@ -58,9 +60,40 @@ function eyeAspectRatio(landmarks, indices, width, height) {
 function visible(point, threshold = SHOULDER_VISIBILITY) {
   return Boolean(
     point &&
+      Number.isFinite(point.x) &&
+      Number.isFinite(point.y) &&
+      point.x >= 0 &&
+      point.x <= 1 &&
+      point.y >= 0 &&
+      point.y <= 1 &&
       (point.visibility == null || point.visibility >= threshold) &&
       (point.presence == null || point.presence >= threshold),
   );
+}
+
+function stableShoulderAvailability(state, currentlyVisible) {
+  const availability = state.shoulderAvailability || {
+    status: "checking",
+    detectedFrames: 0,
+    missingFrames: 0,
+  };
+
+  if (currentlyVisible) {
+    availability.detectedFrames += 1;
+    availability.missingFrames = 0;
+    if (availability.detectedFrames >= SHOULDER_DETECT_FRAMES) {
+      availability.status = "detected";
+    }
+  } else {
+    availability.missingFrames += 1;
+    availability.detectedFrames = 0;
+    if (availability.missingFrames >= SHOULDER_LOSS_FRAMES) {
+      availability.status = "missing";
+    }
+  }
+
+  state.shoulderAvailability = availability;
+  return availability;
 }
 
 function stableSignal(state, name, active, frames = 2) {
@@ -128,9 +161,19 @@ export function detectMetrics(detectors, video, timestamp) {
     postureState = {};
     postureSignals.set(detectors, postureState);
   }
+  const shoulderAvailability = stableShoulderAvailability(
+    postureState,
+    shouldersVisible,
+  );
+  const poseDetected = shoulderAvailability.status === "detected";
+  const poseDetectionStatus = poseDetected && !shouldersVisible
+    ? "temporarily-missing"
+    : shoulderAvailability.status;
   const shoulderMisaligned = shouldersVisible && shoulderTilt !== null &&
-    shoulderTilt > (postureState.shoulders?.active ? SHOULDER_TILT_CLEAR_DEGREES : SHOULDER_TILT_ACTIVATE_DEGREES);
-  const stableShoulderMisalignment = stableSignal(postureState, "shoulders", shoulderMisaligned);
+    shoulderTilt > (postureState.shoulderTilt?.active ? SHOULDER_TILT_CLEAR_DEGREES : SHOULDER_TILT_ACTIVATE_DEGREES);
+  const stableShoulderMisalignment = shouldersVisible && shoulderTilt !== null
+    ? stableSignal(postureState, "shoulderTilt", shoulderMisaligned)
+    : Boolean(postureState.shoulderTilt?.active);
   if (shoulderEarPairs.length === 2) {
     const angles = shoulderEarPairs.map(
       ([ear, shoulder]) =>
@@ -147,8 +190,14 @@ export function detectMetrics(detectors, video, timestamp) {
     posture = stableSignal(postureState, "slouching", likelySlouching)
       ? "Slouching"
       : "Good";
+    postureState.lastPosture = posture;
+    postureState.lastPostureAngle = postureAngle;
   } else {
     stableSignal(postureState, "slouching", false);
+    if (!shouldersVisible && poseDetected && postureState.lastPosture) {
+      posture = postureState.lastPosture;
+      postureAngle = postureState.lastPostureAngle;
+    }
   }
 
   let distanceStatus = "Unknown";
@@ -157,8 +206,12 @@ export function detectMetrics(detectors, video, timestamp) {
       landmarkDistance(face[234], face[454]) < 0.12 ? "Too Far" : "Good";
   const status = !faceDetected
     ? "Face Not Detected"
-    : !shouldersVisible
+    : shoulderAvailability.status === "checking"
+      ? "Checking for shoulders"
+      : shoulderAvailability.status === "missing"
       ? "Reframe to include shoulders"
+      : !shouldersVisible
+        ? "Shoulders temporarily not detected"
       : stableShoulderMisalignment
         ? "Reframe to align shoulders"
       : lookingAway
@@ -175,7 +228,8 @@ export function detectMetrics(detectors, video, timestamp) {
     face_detected: faceDetected,
     eyes_closed: eyesClosed,
     looking_away: lookingAway,
-    pose_detected: shouldersVisible,
+    pose_detected: poseDetected,
+    pose_detection_status: poseDetectionStatus,
     ear: ear === null ? null : Math.round(ear * 1000) / 1000,
     posture,
     posture_angle:

@@ -15,11 +15,17 @@ ENV/
 .DS_Store
 Thumbs.db
 .vscode/
+.vercel/
 
 # Local runtime data
 *.log
+npm-debug.log*
+.env
+.env.*
+!.env.example
 dashboard/session_data.json
 dashboard/player_profile.json
+dashboard/latest_frame.jpg
 dashboard/stop_session.request
 dashboard/profiles/
 dashboard/node_modules/

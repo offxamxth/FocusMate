@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api } from './local-api.js';
+import { api, levelForXp } from './local-api.js';
 import { achievementCatalog } from './achievement-data.js';
 import { createVisionLandmarkers, detectMetrics } from './vision.js';
 import ContactPage from './ContactPage.jsx';
@@ -44,6 +44,38 @@ function saveProfile(username, profile) {
   });
 }
 
+function cameraStatusText(state, live) {
+  if (state === 'unavailable') return 'Camera unavailable';
+  if (state === 'permission-denied') return 'Camera permission denied';
+  if (state === 'starting') return 'Camera starting';
+  if (state === 'analysis-error') return 'Camera active · Analysis unavailable';
+  if (state === 'analysis-unavailable') return 'Camera analysis unavailable';
+  if (state !== 'active') return 'Camera off';
+  if (!live.last_updated) return 'Camera active · Waiting for camera signals';
+  if (!live.face_detected) return 'Camera active · Face not detected';
+  if (live.pose_detection_status === 'temporarily-missing') return 'Camera active · Shoulders temporarily not detected';
+  if (live.pose_detection_status === 'checking') return 'Camera active · Checking for shoulders';
+  if (live.pose_detection_status === 'missing') return 'Camera active · Reframe to include shoulders';
+  if (live.pose_detection_status === 'detected') {
+    const detail = live.status && live.status !== 'No alert signals' ? ` · ${live.status}` : '';
+    return `Camera active · Shoulders detected${detail}`;
+  }
+  return `Camera active · ${live.status || 'Analyzing camera signals'}`;
+}
+
+function postureStatusText(state, live) {
+  if (state === 'starting') return 'Camera starting';
+  if (state === 'permission-denied') return 'Unavailable · Camera permission denied';
+  if (state === 'unavailable') return 'Unavailable · Camera not available';
+  if (state === 'analysis-error') return 'Unavailable · Camera analysis error';
+  if (state === 'analysis-unavailable') return 'Unavailable · Camera analysis could not start';
+  if (state !== 'active' || !live.last_updated) return 'Waiting for camera signals';
+  if (live.pose_detection_status === 'temporarily-missing') return 'Shoulders temporarily not detected';
+  if (live.pose_detection_status === 'checking') return 'Checking for shoulders';
+  if (live.pose_detection_status === 'missing') return 'Reframe to include shoulders';
+  return live.pose_detected ? live.posture || 'Unknown' : 'Checking for shoulders';
+}
+
 function App() {
   const [username, setUsername] = useState(localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
@@ -52,6 +84,10 @@ function App() {
   const [loading, setLoading] = useState(Boolean(username));
   const [notice, setNotice] = useState('');
   const [camera, setCamera] = useState(null);
+  const [cameraState, setCameraState] = useState(
+    () => navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable',
+  );
+  const [cameraError, setCameraError] = useState('');
   const [stream, setStream] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('focusmate-theme') || 'dark');
@@ -76,21 +112,34 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!username) return;
+    if (!username) {
+      setProfile(null);
+      setLive({});
+      setLoading(false);
+      return undefined;
+    }
+    let current = true;
+    setLoading(true);
     api(`/api/state?username=${encodeURIComponent(username)}`)
-      .then((data) => { setProfile(data.profile); setLive(data.live); })
-      .catch((error) => { setNotice(error.message); setUsername(''); localStorage.removeItem('focusmate-user'); })
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (current) { setProfile(data.profile); setLive(data.live); }
+      })
+      .catch((error) => {
+        if (current) { setNotice(error.message); setUsername(''); localStorage.removeItem('focusmate-user'); }
+      })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
   }, [username]);
 
   useEffect(() => {
     if (!username) return undefined;
+    let current = true;
     const timer = window.setInterval(() => {
       api(`/api/state?username=${encodeURIComponent(username)}`)
-        .then((data) => { setLive(data.live); setProfile(data.profile); })
+        .then((data) => { if (current) { setLive(data.live); setProfile(data.profile); } })
         .catch(() => {});
     }, 2200);
-    return () => window.clearInterval(timer);
+    return () => { current = false; window.clearInterval(timer); };
   }, [username]);
 
   useEffect(() => {
@@ -102,6 +151,7 @@ function App() {
     if (!stream || !camera) return undefined;
     let stopped = false;
     let busy = false;
+    let analysisFailed = false;
     let detectors = visionRef.current;
     let timeout;
     const analyze = async () => {
@@ -115,9 +165,21 @@ function App() {
       try {
         const metrics = detectMetrics(detectors, video, performance.now());
         const data = await api(`/api/camera/telemetry?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(metrics) });
-        if (!stopped) setLive(data.live);
+        if (!stopped) {
+          setLive(data.live);
+          if (analysisFailed) {
+            analysisFailed = false;
+            setCameraState('active');
+            setCameraError('');
+          }
+        }
       } catch (error) {
-        if (!stopped) inform(error.message || 'Webcam analysis stopped unexpectedly.');
+        if (!stopped && !analysisFailed) {
+          analysisFailed = true;
+          setCameraState('analysis-error');
+          setCameraError(error.message || 'Webcam analysis stopped unexpectedly.');
+          inform(error.message || 'Webcam analysis stopped unexpectedly.');
+        }
       } finally {
         busy = false;
         if (!stopped) timeout = window.setTimeout(analyze, 1400);
@@ -131,7 +193,11 @@ function App() {
         }
         if (!stopped) analyze();
       } catch (error) {
-        if (!stopped) inform(`Could not load webcam analysis: ${error.message}`);
+        if (!stopped) {
+          setCameraState('analysis-error');
+          setCameraError(error.message || 'Webcam analysis could not be loaded.');
+          inform(`Could not load webcam analysis: ${error.message}`);
+        }
       }
     };
     loadAndAnalyze();
@@ -145,11 +211,9 @@ function App() {
   }, [stream, camera, username]);
 
   const updateProfile = async (change) => {
-    const next = { ...profile, ...change };
-    setProfile(next);
+    setProfile((current) => current ? { ...current, ...change } : current);
     try {
-      const saved = await saveProfile(username, next);
-      setProfile(saved.profile);
+      await saveProfile(username, change);
     } catch (error) { setNotice(error.message); }
   };
 
@@ -179,22 +243,35 @@ function App() {
   const logout = () => {
     if (stream) stream.getTracks().forEach((track) => track.stop());
     setStream(null); setCamera(null); setProfile(null); setUsername('');
+    setCameraState(navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable');
+    setCameraError('');
     localStorage.removeItem('focusmate-user');
   };
 
   const startCamera = async (plan) => {
     let nextStream;
     let detectors;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraState('unavailable');
+      setCameraError('This browser does not provide webcam access. Use a supported browser on HTTPS or localhost.');
+      return;
+    }
+    setCameraState('starting');
+    setCameraError('');
     try {
       nextStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       detectors = await createVisionLandmarkers();
       const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(plan) });
       visionRef.current = detectors;
-      setCamera(data); setStream(nextStream); inform(data.message);
+      setCameraState('active');
+      setCamera(data); setLive(data.live); setStream(nextStream); inform(data.message);
     } catch (error) {
       detectors?.face.close();
       detectors?.pose.close();
       nextStream?.getTracks().forEach((track) => track.stop());
+      const permissionDenied = !nextStream && ['NotAllowedError', 'SecurityError'].includes(error.name);
+      setCameraState(permissionDenied ? 'permission-denied' : nextStream ? 'analysis-unavailable' : 'unavailable');
+      setCameraError(error.message || 'The camera could not be started.');
       inform(error.message || 'Camera permission was denied.');
     }
   };
@@ -206,6 +283,8 @@ function App() {
     } catch (error) { inform(error.message); }
     stream?.getTracks().forEach((track) => track.stop());
     setStream(null); setCamera(null);
+    setCameraState(navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable');
+    setCameraError('');
   };
 
   if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>Opening your study space</span></div>;
@@ -213,7 +292,7 @@ function App() {
 
   const current = pages.find((item) => item.id === page) || pages[0];
   const xp = Number(profile.total_xp || 0);
-  const level = Math.floor(xp / 100) + 1;
+  const level = levelForXp(xp);
   const focusActive = Boolean(live.session_active);
   const changePage = (id) => {
     setPage(id);
@@ -348,7 +427,7 @@ function Stat({ label, value, note, icon: Icon }) {
 
 function Overview({ profile, live, onNavigate, onWater }) {
   const xp = Number(profile.total_xp || 0);
-  const level = Math.floor(xp / 100) + 1;
+  const level = levelForXp(xp);
   const todayTotal = Number(profile.focus_timer_seconds_today || 0) + Number(live.session_seconds || 0);
   const target = Number(profile.session_preferences?.daily_goal_minutes || 180) * 60;
   const nextGoal = profile.session_preferences?.daily_goal_minutes || 180;
@@ -505,8 +584,9 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
     <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} />
       <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">OPTIONAL CAMERA SESSION</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? 'Live' : 'Camera off'}</span></div><h3>Study buddy</h3><p className="panel-copy">Turn on webcam tracking only if it feels useful. You can use the focus timer and task list without enabling the camera.</p>
         {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> CAMERA ACTIVE</div><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> Stop camera</button></div> : <div className="camera-placeholder"><Video size={25} /><span>Camera preview appears here</span><small>Frames are processed locally and are not saved.</small></div>}
-        {!stream && <><div className="form-grid"><label>What are you working on?<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item}>{item}</option>)}</select></label><label>Session goal<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="e.g. Complete Chapter 4 exercises" /></label>{moodNeeded && <label>How are you feeling?<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">Choose a mood</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item}>{item}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood)} onClick={() => onStartCamera({ subject, goal, mood })}><Video size={17} /> Start camera</button></>}
-        {stream && <div className="camera-signals"><div><small>CAMERA STATUS</small><strong>{live.status || 'Waiting for camera signals'}</strong></div><div><small>POSTURE</small><strong>{live.pose_detected ? live.posture : 'Reframe to include shoulders'}</strong></div><div><small>HEAD TURN PROXY</small><strong>{!live.face_detected ? 'Waiting for face' : live.looking_away ? 'Turn detected' : 'No turn detected'}</strong></div><div><small>FACE</small><strong>{live.face_detected ? 'Detected' : 'Not detected'}</strong></div><p>These are visible camera signals, not a score or a measure of concentration or mental state. Head turn is only a rough proxy for looking away. Video frames stay on this device.</p></div>}
+        {!stream && <><div className="form-grid"><label>What are you working on?<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item}>{item}</option>)}</select></label><label>Session goal<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="e.g. Complete Chapter 4 exercises" /></label>{moodNeeded && <label>How are you feeling?<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">Choose a mood</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item}>{item}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood })}><Video size={17} /> {cameraState === 'starting' ? 'Starting camera…' : 'Start camera'}</button></>}
+        {stream && <div className="camera-signals"><div><small>CAMERA STATUS</small><strong>{cameraStatusText(cameraState, live)}</strong></div><div><small>POSTURE</small><strong>{postureStatusText(cameraState, live)}</strong></div><div><small>HEAD TURN PROXY</small><strong>{!live.face_detected ? 'Waiting for face' : live.looking_away ? 'Turn detected' : 'No turn detected'}</strong></div><div><small>FACE</small><strong>{live.face_detected ? 'Detected' : 'Not detected'}</strong></div><p>These are visible camera signals, not a score or a measure of concentration or mental state. Head turn is only a rough proxy for looking away. Video frames stay on this device.</p></div>}
+        {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>CAMERA STATUS</small><strong>{cameraStatusText(cameraState, live)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
       </section>
     </div>
     <section className="task-section"><div className="task-heading"><div><span className="eyebrow">KEEP IT LIGHT</span><h3>Your small-step list</h3><p>A few clear next steps are plenty.</p></div><span className="task-count">{tasks.filter((task) => task.done).length}/{tasks.length} done</span></div><form className="task-form" onSubmit={addTask}><input maxLength="120" value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="Add one small next step…" /><button className="outline-button" type="submit"><Plus size={16} /> Add task</button></form><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'done' : ''}`} key={task.id}><button className="check-button" onClick={() => toggleTask(task.id)} aria-label={task.done ? 'Mark task incomplete' : 'Complete task'}>{task.done && <Check size={14} />}</button><span>{task.text}</span><button className="icon-button task-remove" onClick={() => removeTask(task.id)} aria-label="Remove task"><X size={15} /></button></div>) : <div className="empty-state">Your list is clear. Add one small next step when you’re ready.</div>}</div></section>
@@ -567,7 +647,7 @@ function SessionResults({ live, profile, username, onProfile, onGoal }) {
     <div className="page-content">
       {!completed ? <div className="surface-panel reflection-empty"><span className="reflection-icon"><Sparkles size={22} /></span><h3>Your reflection is waiting.</h3><p>Finish a camera session to review the visible signals recorded by FocusMate. Video frames are analyzed in your browser and are not saved.</p></div> : <>
         <div className="reflection-banner"><span className="reflection-icon"><Sparkles size={22} /></span><div><span className="eyebrow">SESSION REFLECTION</span><h2>A little more insight, a little more room.</h2><p>{reflection?.summary || `FocusMate recorded ${totalAlerts} visible-signal alerts. This is not a measure of concentration or mental state.`}</p></div><span className="local-badge"><ShieldCheck size={14} /> Local summary</span></div>
-        <div className="stats-grid result-stats"><Stat label="Session duration" value={`${Math.round(Number(live.session_seconds || 0) / 60)} min`} note="Time with your study buddy" icon={Clock3} /><Stat label="Recorded camera alerts" value={totalAlerts} note="Counts for visible camera signals" icon={Activity} /><Stat label="Posture signal" value={live.pose_detected ? live.posture || 'Unknown' : 'Not available'} note={live.pose_detected ? 'From visible ear and shoulder landmarks' : 'Reframe to include your shoulders'} icon={UserRound} /></div>
+        <div className="stats-grid result-stats"><Stat label="Session duration" value={`${Math.round(Number(live.session_seconds || 0) / 60)} min`} note="Time with your study buddy" icon={Clock3} /><Stat label="Recorded camera alerts" value={totalAlerts} note="Counts for visible camera signals" icon={Activity} /><Stat label="Posture signal" value={live.pose_detected ? live.posture || 'Unknown' : 'Not available'} note={live.pose_detected ? 'From visible ear and shoulder landmarks' : live.pose_detection_status === 'missing' ? 'Shoulders were not reliably detected during the session' : 'Shoulder detection was unavailable for this session'} icon={UserRound} /></div>
         <div className="content-columns"><section className="surface-panel reflection-list"><span className="eyebrow">WHAT WENT WELL</span><h3>Give yourself credit.</h3>{(reflection?.what_went_well || [`You completed ${Math.round(Number(live.session_seconds || 0) / 60)} minutes of study time.`, 'Camera signals describe visible landmarks only.']).map((item) => <p key={item}>{item}</p>)}</section><section className="surface-panel reflection-list"><span className="eyebrow">TRY NEXT TIME</span><h3>One small idea.</h3>{(reflection?.try_next || ['Choose a clear, achievable goal before you begin, then make room for a brief break afterward.']).map((item) => <p key={item}>{item}</p>)}</section></div>
         {live.study_goal && <section className="goal-checkin surface-panel"><span className="eyebrow">YOUR SESSION GOAL</span><h3>{live.study_goal}</h3><label>How did it go?<select value={outcome} onChange={(event) => saveOutcome(event.target.value)}><option value="">Choose one</option><option>Yes</option><option>Partially</option><option>Not yet</option></select></label>{outcome && <small className="saved-note"><Check size={14} /> Goal check-in saved: {outcome}</small>}</section>}
       </>}
@@ -599,7 +679,7 @@ function Preferences({ profile, onSave }) {
   const set = (key, value) => setPreferences((current) => ({ ...current, [key]: value }));
   const save = async () => { await onSave({ session_preferences: preferences }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
   const rows = [['focus_monitoring', 'Focus monitoring', 'Enable optional in-browser face, eye, posture, and distance estimates'], ['posture_alerts', 'Posture alerts', 'Show one gentle reminder after two minutes of slouching'], ['mood_checkins', 'Mood check-ins', 'Ask how I feel before my first camera session each day'], ['session_chimes', 'Session chimes', 'Play a soft tone when the focus timer starts and completes']];
-  return <div className="page-content settings-layout"><section className="surface-panel settings-panel"><div className="settings-heading"><span className="eyebrow">MONITORING & REMINDERS</span><h3>Support that feels right.</h3><p>These choices stay with your local profile and can be changed at any time.</p></div>{rows.map(([key, title, description]) => <label className="setting-row" key={key}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} /><i className="toggle-track" /></label>)}<div className="number-settings"><label>Default focus block <span><input type="number" min="15" max="120" step="5" value={preferences.session_length_minutes} onChange={(event) => set('session_length_minutes', Number(event.target.value))} /> min</span></label><label>Daily study goal <span><input type="number" min="30" max="720" step="15" value={preferences.daily_goal_minutes} onChange={(event) => set('daily_goal_minutes', Number(event.target.value))} /> min</span></label></div><button className="primary-button" onClick={save}><Check size={16} /> {saved ? 'Saved' : 'Save preferences'}</button></section><section className="surface-panel profile-summary"><span className="eyebrow">YOUR PROFILE</span><div className="summary-person"><div className="avatar">{(profile.player_name || 'F')[0].toUpperCase()}</div><div><strong>{profile.player_name}</strong><small>@{profile.username}</small></div></div><dl><div><dt>Rank</dt><dd>Level {Math.floor(Number(profile.total_xp || 0) / 100) + 1}</dd></div><div><dt>Session length</dt><dd>{preferences.session_length_minutes} minutes</dd></div><div><dt>Daily goal</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div></dl></section></div>;
+  return <div className="page-content settings-layout"><section className="surface-panel settings-panel"><div className="settings-heading"><span className="eyebrow">MONITORING & REMINDERS</span><h3>Support that feels right.</h3><p>These choices stay with your local profile and can be changed at any time.</p></div>{rows.map(([key, title, description]) => <label className="setting-row" key={key}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} /><i className="toggle-track" /></label>)}<div className="number-settings"><label>Default focus block <span><input type="number" min="15" max="120" step="5" value={preferences.session_length_minutes} onChange={(event) => set('session_length_minutes', Number(event.target.value))} /> min</span></label><label>Daily study goal <span><input type="number" min="30" max="720" step="15" value={preferences.daily_goal_minutes} onChange={(event) => set('daily_goal_minutes', Number(event.target.value))} /> min</span></label></div><button className="primary-button" onClick={save}><Check size={16} /> {saved ? 'Saved' : 'Save preferences'}</button></section><section className="surface-panel profile-summary"><span className="eyebrow">YOUR PROFILE</span><div className="summary-person"><div className="avatar">{(profile.player_name || 'F')[0].toUpperCase()}</div><div><strong>{profile.player_name}</strong><small>@{profile.username}</small></div></div><dl><div><dt>Rank</dt><dd>Level {levelForXp(profile.total_xp)}</dd></div><div><dt>Session length</dt><dd>{preferences.session_length_minutes} minutes</dd></div><div><dt>Daily goal</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div></dl></section></div>;
 }
 
 function Profile({ profile, onSave, onExport }) {

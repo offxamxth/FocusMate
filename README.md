@@ -8,12 +8,14 @@ FocusMate is a local-first study space with a React dashboard and optional in-br
 - `dashboard/src/` – React interface and page components
 - `dashboard/src/local-api.js` – browser-local profile, session, timer, and quest storage
 - `dashboard/src/vision.js` – in-browser MediaPipe face and posture estimates
-- `api/support-submissions.js` – validated Vercel support-email endpoint
+- `dashboard/src/ContactPage.jsx` – Contact Us, Bug Report, and Feedback forms
 - `dashboard/public/models/` – face and pose models served with the app
+- `focus_detector.py` and `webcam_detection/` – legacy standalone Python webcam tools; not used by the React dashboard or Vercel
 
 ## Requirements
 
-Install Node.js 20.19 or newer, then install the dashboard dependencies:
+Install Node.js 20.19 or newer (or 22.12 or newer; Vite 8 does not support
+Node.js 21), then install the dashboard dependencies:
 
 ```bash
 npm install --prefix dashboard
@@ -30,6 +32,8 @@ python start_focusmate.py
 This starts the React dashboard in one terminal and opens it in your browser.
 The optional camera analysis runs in the browser after you grant camera access.
 You can also start it with `npm --prefix dashboard run dev`.
+Run a production build with `npm --prefix dashboard run build`, or preview the
+generated build with `npm --prefix dashboard run preview`.
 
 ## Deploy to Vercel
 
@@ -37,39 +41,41 @@ Import the repository into Vercel and leave the project root set to the
 repository root. The root `vercel.json` installs the dashboard dependencies,
 builds the Vite app, and publishes `dashboard/dist`.
 
-Profiles and progress are stored in browser local storage. They are available
-in that browser and on that device, are not synced between devices, and are not
-automatically imported from older JSON profile files. Camera frames are
-processed in the browser; the landmark models are served by the app and the
-MediaPipe WASM runtime is loaded from jsDelivr. Webcam access requires HTTPS,
-which Vercel provides.
+Each normalized username has a separate, versioned profile in browser local
+storage. XP is the source of truth for level, and sessions and achievements
+are saved with the profile. Data remains available after refresh or signing
+out in the same browser and site origin, but is not synced between devices or
+different deployment domains. Profiles are not automatically imported from
+older JSON export files. Camera frames are processed in the browser; the
+landmark models are served by the app and the MediaPipe WASM runtime is loaded
+from jsDelivr. Webcam access requires HTTPS, which Vercel provides.
 
 ## Contact and support submissions
 
-The Contact Us page is available at `/contact`. Its Vercel serverless endpoint
-validates contact messages, bug reports, and feedback, then forwards accepted
-submissions to `support.focusmate@gmail.com` using Resend. The support inbox is
-the team’s access point; FocusMate does not keep a separate contact database.
-Resend and the receiving email provider handle delivery and retention under
-their own policies. A success message is shown only after Resend accepts the
-email. Without the server-side configuration below, submissions return an
-error and users are directed to the technical support email instead.
+The Contact Us, Report a Bug, and Send Feedback forms submit directly to
+Web3Forms. A success message is shown only after Web3Forms confirms the
+submission. The access key determines the recipient inbox, so confirm that the
+key is associated with `support.focusmate@gmail.com`.
 
-To enable online submissions, configure these **private** environment variables
-in the Vercel project settings for the relevant deployment environments:
+For local development, add your existing access key to `dashboard/.env`:
 
-- `RESEND_API_KEY` — a Resend API key with permission to send email.
-- `SUPPORT_FROM_EMAIL` — a sender address or sender identity verified with
-  Resend (for example, `FocusMate Support <support@your-verified-domain>`).
+```dotenv
+VITE_WEB3FORMS_ACCESS_KEY=your_existing_access_key
+```
 
-The endpoint always sends to the FocusMate support inbox; neither value is
-exposed to the browser. Do not prefix these variables with `VITE_`. The API
-accepts optional PNG, JPG/JPEG, or WEBP screenshots up to 1 MB, validates the file signature server-side, and
-attaches the image to the support email. The Python app server and local Vite
-preview do not run Vercel functions; use the Vercel development environment
-with server-side variables to exercise actual email delivery.
+The root `.gitignore` excludes `.env` files; do not commit the key. The
+`VITE_` prefix means Vite embeds this key in the public frontend bundle, as
+required for browser-side Web3Forms submissions. For Vercel, add the same
+`VITE_WEB3FORMS_ACCESS_KEY` variable in the project’s Environment Variables
+settings for the deployment environments, then redeploy so it is present at
+build time. The local Python launcher and Vite dev server use the local `.env`
+file. Vite preview uses the key embedded when the app was built.
 
-Run the support endpoint validation tests with:
+Screenshots can be selected in the bug and contact forms, but are not sent with
+the form; Web3Forms attachment support is not assumed. To share a screenshot,
+attach it to a separate email to `support.focusmate@gmail.com`.
+
+Run the support form integration tests with:
 
 ```bash
 npm --prefix dashboard test
@@ -81,9 +87,10 @@ profile/wellbeing settings. The webcam is optional; the timer and task list work
 without it. Use the sidebar to switch between pages.
 
 Camera signals are heuristic estimates from face and pose landmarks. The
-looking-away indicator uses head-turn asymmetry as a proxy; it does not track
-eye gaze. The estimated behavioral score does not measure concentration,
-intelligence, fatigue, or mental state and is not medical or scientific advice.
+looking-away indicator uses head-turn asymmetry as a proxy; it does not
+track eye gaze. These are limited observable signals, not a measure of
+concentration, intelligence, fatigue, or mental state, and are not medical or
+scientific advice.
 
 At startup, enter a username to reopen its saved local profile or create a new
 one. Usernames select browser-local data; they are not passwords or secure
@@ -94,35 +101,9 @@ authentication.
 - The dashboard serves its model files from `dashboard/public/models/`:
   - `face_landmarker.task`
   - `pose_landmarker.task`
-- `dashboard/node_modules/` and `dashboard/dist/` are generated and should not be committed.
-- The legacy Python API and webcam detector are not required for the Vercel deployment.
+- `dashboard/node_modules/` and `dashboard/dist/` are generated and should not
+  be committed.
 
-## GitHub upload
-
-Before pushing to GitHub, make sure the repository includes:
-
-- `start_focusmate.py`
-- `dashboard/`
-- `webcam_detection/`
-- `.gitignore`
-- `README.md`
-
-Do not include the local `dashboard/venv` folder.
-
-## Initialize Git
-
-From the project root:
-
-```bash
-git init
-git add .
-git commit -m "Prepare FocusMate for GitHub"
-```
-
-Create an empty repository on GitHub, then connect and push it:
-
-```bash
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/YOUR-REPOSITORY.git
-git push -u origin main
-```
+The optional standalone Python webcam tools use the separate files under
+`webcam_detection/` and the root `focus_detector.py`; those scripts and their
+model copies are not used by the React dashboard.

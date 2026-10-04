@@ -116,7 +116,7 @@ html[data-theme='light'] .sidebar {
 .switch-profile { width: 100%; height: 35px; display: flex; align-items: center; gap: 9px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.025); color: #b8c2d0; text-align: left; font-size: 11px; cursor: pointer; }
 .switch-profile:hover { border-color: rgba(168,240,208,.24); color: var(--mint); }
 .camera-mini { position: relative; margin-bottom: 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #0a1119; aspect-ratio: 16/9; }
-.camera-mini video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.camera-mini video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
 .camera-mini > div { position: absolute; inset: auto 0 0; display: flex; align-items: center; gap: 7px; padding: 7px 9px; background: rgba(9,15,21,.76); color: var(--mint); font-size: 9px; font-weight: 700; }
 .main-area { width: 100%; max-width: 1510px; min-width: 0; margin: 0 auto; padding: 44px clamp(22px, 4.2vw, 66px) 26px; }
 html[data-theme='light'] .main-area { background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,0)); }
@@ -234,7 +234,7 @@ html[data-theme='light'] .main-area { background: linear-gradient(180deg, rgba(2
 .camera-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #a0b5b9; }
 .camera-placeholder span { color: var(--soft); font-size: 10px; }
 .camera-placeholder small { color: var(--muted); font-size: 9px; }
-.camera-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.camera-preview video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
 .camera-overlay { position: absolute; inset: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 8px 10px; background: linear-gradient(#0b1118b8, transparent); color: var(--mint); font-size: 9px; font-weight: 700; }
 .camera-stop { position: absolute; right: 9px; bottom: 9px; display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 0 9px; border: 1px solid rgba(255,255,255,.16); border-radius: 5px; background: rgba(11,17,24,.86); color: white; font-size: 9px; cursor: pointer; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 13px; }
