@@ -5,9 +5,19 @@ import { achievementCatalog, achievementProgress } from './achievement-data.js';
 import AuthGate from './AuthGate.jsx';
 import { createVisionLandmarkers, detectMetrics } from './vision.js';
 import { claimTimerCompletion, playSessionCompletionBeep } from './timer-completion.js';
-import { supabase, updatePrivateProfile } from './lib/supabase.js';
+import {
+  supabase,
+  supabaseConfigurationError,
+  updatePrivateProfile,
+} from './lib/supabase.js';
 import { dailyFocusSeconds, localDateKey, studyStreak, weekStudyDays } from './progress-data.js';
-import { browserLanguage, supportedLanguages, textDirection, translate } from './i18n.js';
+import {
+  browserLanguage,
+  supportedLanguages,
+  textDirection,
+  translate,
+  translateAchievement,
+} from './i18n.js';
 import ContactPage from './ContactPage.jsx';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
@@ -18,15 +28,15 @@ import {
 import './style.css';
 
 const pages = [
-  { id: 'overview', label: 'Overview', group: 'Your space', icon: Home },
-  { id: 'focus-room', label: 'Focus room', group: 'Your space', icon: Timer },
-  { id: 'insights', label: 'My Progress', group: 'Your space', icon: BarChart3 },
-  { id: 'session-results', label: 'Session results', group: 'Your space', icon: Sparkles },
-  { id: 'achievements', label: 'Achievements', group: 'Build good habits', icon: Trophy },
-  { id: 'quests', label: 'Daily quests', group: 'Build good habits', icon: Award },
-  { id: 'session-preferences', label: 'Session preferences', group: 'Build good habits', icon: Settings2 },
-  { id: 'profile', label: 'Profile & wellbeing', group: 'Build good habits', icon: UserRound },
-  { id: 'contact', label: 'Contact Us', group: 'Build good habits', icon: CircleHelp },
+  { id: 'overview', label: 'nav.overview', group: 'nav.yourSpace', icon: Home },
+  { id: 'focus-room', label: 'nav.focusRoom', group: 'nav.yourSpace', icon: Timer },
+  { id: 'insights', label: 'nav.progress', group: 'nav.yourSpace', icon: BarChart3 },
+  { id: 'session-results', label: 'nav.sessionResults', group: 'nav.yourSpace', icon: Sparkles },
+  { id: 'achievements', label: 'nav.achievements', group: 'nav.habits', icon: Trophy },
+  { id: 'quests', label: 'nav.quests', group: 'nav.habits', icon: Award },
+  { id: 'session-preferences', label: 'nav.preferences', group: 'nav.habits', icon: Settings2 },
+  { id: 'profile', label: 'nav.profile', group: 'nav.habits', icon: UserRound },
+  { id: 'contact', label: 'nav.contact', group: 'nav.habits', icon: CircleHelp },
 ];
 
 const achievements = achievementCatalog;
@@ -42,36 +52,37 @@ function saveProfile(username, profile) {
   });
 }
 
-function cameraStatusText(state, live) {
-  if (state === 'unavailable') return 'Camera unavailable';
-  if (state === 'permission-denied') return 'Camera permission denied';
-  if (state === 'starting') return 'Camera starting';
-  if (state === 'analysis-error') return 'Camera active · Analysis unavailable';
-  if (state === 'analysis-unavailable') return 'Camera analysis unavailable';
-  if (state !== 'active') return 'Camera off';
-  if (!live.last_updated) return 'Camera active · Waiting for camera signals';
-  if (!live.face_detected) return 'Camera active · Face not detected';
-  if (live.pose_detection_status === 'temporarily-missing') return 'Camera active · Shoulders temporarily not detected';
-  if (live.pose_detection_status === 'checking') return 'Camera active · Checking for shoulders';
-  if (live.pose_detection_status === 'missing') return 'Camera active · Reframe to include shoulders';
+function cameraStatusText(state, live, language) {
+  const t = (key) => translate(language, `focus.${key}`);
+  if (state === 'unavailable') return t('cameraUnavailable');
+  if (state === 'permission-denied') return t('permissionDenied');
+  if (state === 'starting') return t('cameraStarting');
+  if (state === 'analysis-error') return t('analysisUnavailable');
+  if (state === 'analysis-unavailable') return t('cameraAnalysisUnavailable');
+  if (state !== 'active') return t('cameraOff');
+  if (!live.last_updated) return t('waitingSignals');
+  if (!live.face_detected) return t('faceNotDetected');
+  if (live.pose_detection_status === 'temporarily-missing') return t('shouldersTemporary');
+  if (live.pose_detection_status === 'checking') return t('checkingShoulders');
+  if (live.pose_detection_status === 'missing') return t('includeShoulders');
   if (live.pose_detection_status === 'detected') {
     const detail = live.status && live.status !== 'No alert signals' ? ` · ${live.status}` : '';
-    return `Camera active · Shoulders detected${detail}`;
+    return `${t('shouldersDetected')}${detail}`;
   }
-  return `Camera active · ${live.status || 'Analyzing camera signals'}`;
+  return `${t('cameraActive')} · ${live.status || t('analyzingSignals')}`;
 }
 
-function postureStatusText(state, live) {
-  if (state === 'starting') return 'Camera starting';
-  if (state === 'permission-denied') return 'Unavailable · Camera permission denied';
-  if (state === 'unavailable') return 'Unavailable · Camera not available';
-  if (state === 'analysis-error') return 'Unavailable · Camera analysis error';
-  if (state === 'analysis-unavailable') return 'Unavailable · Camera analysis could not start';
-  if (state !== 'active' || !live.last_updated) return 'Waiting for camera signals';
-  if (live.pose_detection_status === 'temporarily-missing') return 'Shoulders temporarily not detected';
-  if (live.pose_detection_status === 'checking') return 'Checking for shoulders';
-  if (live.pose_detection_status === 'missing') return 'Reframe to include shoulders';
-  return live.pose_detected ? live.posture || 'Unknown' : 'Checking for shoulders';
+function postureStatusText(state, live, language) {
+  const t = (key) => translate(language, `focus.${key}`);
+  if (state === 'starting') return t('cameraStarting');
+  if (state === 'permission-denied') return t('permissionDenied');
+  if (state === 'unavailable') return t('cameraUnavailable');
+  if (state === 'analysis-error' || state === 'analysis-unavailable') return t('cameraAnalysisUnavailable');
+  if (state !== 'active' || !live.last_updated) return t('waitingSignals');
+  if (live.pose_detection_status === 'temporarily-missing') return t('shouldersTemporary');
+  if (live.pose_detection_status === 'checking') return t('checkingShoulders');
+  if (live.pose_detection_status === 'missing') return t('includeShoulders');
+  return live.pose_detected ? live.posture || t('unknown') : t('checkingShoulders');
 }
 
 class AppErrorBoundary extends React.Component {
@@ -101,7 +112,12 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = null }) {
+function FocusMateApp({
+  account = null,
+  onCloudSignOut = null,
+  onCloudLogin = null,
+  cloudConfigurationError = '',
+}) {
   const [username, setUsername] = useState(account?.storageUsername || localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
   const [live, setLive] = useState({});
@@ -116,9 +132,11 @@ function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = nu
   const [stream, setStream] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('focusmate-theme') || 'dark');
-  const language = profile?.session_preferences?.language && profile.session_preferences.language !== 'system'
-    ? profile.session_preferences.language
-    : browserLanguage();
+  const storedLanguage = localStorage.getItem('focusmate-language');
+  const profileLanguage = profile?.session_preferences?.language;
+  const language = supportedLanguages.includes(storedLanguage)
+    ? storedLanguage
+    : supportedLanguages.includes(profileLanguage) ? profileLanguage : browserLanguage();
   const videoRef = useRef(null);
   const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
@@ -154,6 +172,12 @@ function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = nu
     document.documentElement.lang = language;
     document.documentElement.dir = textDirection(language);
   }, [language]);
+
+  useEffect(() => {
+    const syncError = (event) => inform(event.detail?.message || 'Cloud profile sync failed.');
+    window.addEventListener('focusmate:cloud-sync-error', syncError);
+    return () => window.removeEventListener('focusmate:cloud-sync-error', syncError);
+  }, []);
 
   useEffect(() => {
     const syncPage = () => setPage(pageFromLocation());
@@ -384,8 +408,8 @@ function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = nu
     setCameraError('');
   };
 
-  if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>Opening your study space</span></div>;
-  if (!profile) return <Welcome onLogin={login} onCloudLogin={onCloudLogin} notice={notice} />;
+  if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>{translate(language, 'app.opening')}</span></div>;
+  if (!profile) return <Welcome onLogin={login} onCloudLogin={onCloudLogin} cloudConfigurationError={cloudConfigurationError} notice={notice} />;
 
   const current = pages.find((item) => item.id === page) || pages[0];
   const xp = Number(profile.total_xp || 0);
@@ -410,57 +434,62 @@ function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = nu
         </div>
         <div className="user-block">
           <div className="avatar">{(profile.player_name || 'F').slice(0, 1).toUpperCase()}</div>
-          <div className="user-copy"><span>WELCOME BACK</span><strong>{profile.player_name}</strong><small>@{profile.username}</small></div>
-          <button className="icon-button mobile-logout" title="Switch profile" onClick={logout}><LogOut size={16} /></button>
+          <div className="user-copy"><span>{translate(language, 'app.welcomeBack').toUpperCase()}</span><strong>{profile.player_name}</strong><small>@{account?.username || profile.username}</small></div>
+          <button className="icon-button mobile-logout" title={translate(language, 'auth.logOut')} aria-label={translate(language, 'auth.logOut')} onClick={logout}><LogOut size={16} /></button>
         </div>
         <div className="level-block">
-          <div className="level-copy"><span>LEVEL {level}</span><strong>{xp.toLocaleString()} <small>XP</small></strong></div>
+          <div className="level-copy"><span>{translate(language, 'app.level')} {level}</span><strong>{xp.toLocaleString(language)} <small>XP</small></strong></div>
           <div className="level-track"><span style={{ width: `${xp % 100}%` }} /></div>
-          <small>{100 - (xp % 100)} XP to your next level</small>
+          <small>{100 - (xp % 100)} XP {translate(language, 'app.toNextLevel')}</small>
         </div>
-        {['Your space', 'Build good habits'].map((group) => (
-          <nav className="nav-group" key={group} aria-label={group}>
-            <span className="nav-label">{group}</span>
+        {['nav.yourSpace', 'nav.habits'].map((group) => (
+          <nav className="nav-group" key={group} aria-label={translate(language, group)}>
+            <span className="nav-label">{translate(language, group)}</span>
             {pages.filter((item) => item.group === group).map((item) => {
               const Icon = item.icon;
-              return <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => changePage(item.id)} title={item.label} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined}><Icon size={18} /><span>{item.label}</span>{item.id === 'focus-room' && focusActive && <i className="live-dot" />}</button>;
+              return <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => changePage(item.id)} title={translate(language, item.label)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined}><Icon size={18} /><span>{translate(language, item.label)}</span>{item.id === 'focus-room' && focusActive && <i className="live-dot" />}</button>;
             })}
           </nav>
         ))}
         <div className="sidebar-bottom">
-          {stream && <div className="camera-mini"><video ref={miniVideoRef} autoPlay muted playsInline /><div><span className="live-dot" /> CAMERA ON</div></div>}
-          <p>Progress, not perfection.<br />Take care of yourself.</p>
-          <button className="switch-profile" onClick={logout}><LogOut size={15} /> Switch profile</button>
+          {stream && <div className="camera-mini"><video ref={miniVideoRef} autoPlay muted playsInline /><div><span className="live-dot" /> {translate(language, 'focus.cameraOn').toUpperCase()}</div></div>}
+          <p>{translate(language, 'app.progressNotPerfection')}<br />{translate(language, 'app.takeCare')}</p>
+          <button className="switch-profile" onClick={logout}><LogOut size={15} /> {translate(language, 'auth.logOut')}</button>
         </div>
       </aside>
 
       <main className="main-area">
-        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label="Switch profile"><LogOut size={18} /></button></div></header>
-        <PageHeading page={current} profile={profile} />
+        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label={translate(language, 'app.home')} onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label={translate(language, 'app.toggleTheme')} onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label={translate(language, 'auth.logOut')}><LogOut size={18} /></button></div></header>
+        <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
-          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} />
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
-        {page === 'insights' && <Insights profile={profile} />}
-        {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
-        {page === 'achievements' && <Achievements profile={profile} />}
+        {page === 'insights' && <Insights profile={profile} language={language} />}
+        {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
+        {page === 'achievements' && <Achievements profile={profile} language={language} />}
         {page === 'quests' && <Quests profile={profile} language={language} />}
-        {page === 'session-preferences' && <Preferences profile={profile} onSave={updateProfile} />}
-        {page === 'profile' && <Profile profile={profile} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
-        {page === 'contact' && <ContactPage username={account?.username || username} />}
-        <footer className="page-footer">FocusMate <span>·</span> Progress, not perfection. Be kind to yourself.</footer>
+        {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
+        {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
+        {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
+        <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
-      <nav className="mobile-nav" aria-label="Primary navigation">{pages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} title={item.label}><Icon size={19} /><small>{item.label === 'My Progress' ? 'Progress' : item.label.replace(' room', '')}</small></button>; })}</nav>
+      <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>{pages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined} title={translate(language, item.label)}><Icon size={19} /><small>{translate(language, item.label)}</small></button>; })}</nav>
     </div>
   );
 }
 
-function Welcome({ onLogin, onCloudLogin, notice }) {
+function Welcome({ onLogin, onCloudLogin, cloudConfigurationError, notice }) {
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [error, setError] = useState(notice || '');
   const [usernameStatus, setUsernameStatus] = useState('idle');
+  const [language, setLanguage] = useState(() => {
+    const saved = localStorage.getItem('focusmate-language');
+    return supportedLanguages.includes(saved) ? saved : browserLanguage();
+  });
+  const t = (key) => translate(language, key);
 
   useEffect(() => {
     const username = handle.trim();
@@ -492,30 +521,75 @@ function Welcome({ onLogin, onCloudLogin, notice }) {
     event.preventDefault(); setError('');
     if (usernameStatus === 'checking' || usernameStatus === 'idle' || usernameStatus === 'invalid' || usernameStatus === 'error') return;
     if (usernameStatus === 'available' && !name.trim()) {
-      setError('Enter your name to create a new profile.');
+      setError(translate(language, 'local.createName'));
       return;
     }
     try { await onLogin(usernameStatus === 'existing' ? '' : name, handle); } catch (exception) { setError(exception.message); }
   };
   const checking = usernameStatus === 'checking';
   const canSubmit = usernameStatus === 'existing' || (usernameStatus === 'available' && Boolean(name.trim()));
-  return <main className="welcome-page"><div className="welcome-art"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span><div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div><p>A quieter place to do your best work.</p><div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>YOUR STUDY SPACE</span></div></div><form className="welcome-form" onSubmit={submit}><div className="welcome-kicker">A FRESH START, AT YOUR PACE</div><h1>Make room for<br />your best work.</h1><p>Sign in with your username, or create a new local profile.</p><label>Username<input autoComplete="username" maxLength="33" value={handle} onChange={(event) => { setHandle(event.target.value); setError(''); }} placeholder="letters, numbers, . _ -" required /></label><div className="username-feedback" aria-live="polite">{checking ? 'Checking username…' : usernameStatus === 'existing' ? 'Welcome back. Your saved profile will be opened.' : usernameStatus === 'available' ? 'This username is available. Add your name to create a profile.' : usernameStatus === 'invalid' ? 'Use 1–32 letters, numbers, dots, dashes, or underscores.' : ''}</div>{usernameStatus === 'available' && <label>Your name<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<button className="primary-button" type="submit" disabled={!canSubmit}>{usernameStatus === 'existing' ? 'Sign in to your profile' : 'Create profile'} <ArrowUpRight size={17} /></button>{onCloudLogin && <button className="outline-button auth-local-link" type="button" onClick={onCloudLogin}>Sign in with email</button>}<small className="privacy-note"><LockKeyhole size={14} /> Your profile stays on this computer.</small></form></main>;
+  const feedback = checking
+    ? t('local.checking')
+    : usernameStatus === 'existing'
+      ? t('local.returning')
+      : usernameStatus === 'available'
+        ? t('local.available')
+        : usernameStatus === 'invalid'
+          ? t('local.invalid')
+          : '';
+  return (
+    <main className="welcome-page" dir={textDirection(language)}>
+      <div className="welcome-art">
+        <span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span>
+        <div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div>
+        <p>{t('local.tagline')}</p>
+        <div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>{t('auth.studySpace')}</span></div>
+      </div>
+      <form className="welcome-form" onSubmit={submit}>
+        <div className="auth-language">
+          <label htmlFor="local-language">{translate(language, 'preferences.language')}</label>
+          <select id="local-language" value={language} onChange={(event) => {
+            const selected = event.target.value;
+            setLanguage(selected);
+            localStorage.setItem('focusmate-language', selected);
+            document.documentElement.lang = selected;
+            document.documentElement.dir = textDirection(selected);
+          }}>
+            {supportedLanguages.map((code) => <option key={code} value={code}>{translate(language, `language.${code}`)}</option>)}
+          </select>
+        </div>
+        <div className="welcome-kicker">{t('local.kicker')}</div>
+        <h1>{t('local.title')}</h1>
+        <p>{t('local.description')}</p>
+        <label>{t('local.username')}<input autoComplete="username" maxLength="33" value={handle} onChange={(event) => { setHandle(event.target.value); setError(''); }} placeholder="letters, numbers, . _ -" required /></label>
+        <div className="username-feedback" aria-live="polite">{feedback}</div>
+        {usernameStatus === 'available' && <label>{t('local.name')}<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder={t('local.namePlaceholder')} required /></label>}
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <button className="primary-button" type="submit" disabled={!canSubmit}>
+          {usernameStatus === 'existing' ? t('local.signIn') : t('local.create')} <ArrowUpRight size={17} />
+        </button>
+        {onCloudLogin && <button className="outline-button auth-local-link" type="button" onClick={onCloudLogin}>{t('local.signInCloud')}</button>}
+        {cloudConfigurationError && <small className="privacy-note cloud-config-warning" role="status">{cloudConfigurationError}</small>}
+        <small className="privacy-note"><LockKeyhole size={14} /> {t('local.localNote')}</small>
+      </form>
+    </main>
+  );
 }
 
-function PageHeading({ page, profile }) {
+function PageHeading({ page, profile, language }) {
   const content = {
-    overview: ['YOUR PERSONAL STUDY SPACE', `Make room for your best work, ${profile.player_name || 'friend'}.`, 'Small, steady sessions add up. Settle in, choose one thing to focus on, and remember breaks are part of the plan.'],
-    'focus-room': ['FOCUS ROOM', 'Settle in. Start small.', 'A distraction-friendly space for one task, one timer, and a little breathing room.'],
-    insights: ['MY PROGRESS', 'See how you’re building your rhythm.', 'Review recorded camera signals, study time, and completed sessions.'],
-    'session-results': ['SESSION RESULTS', 'A reflection on your session.', 'A short review based only on the final statistics recorded by FocusMate.'],
-    achievements: ['ACHIEVEMENTS', 'Small wins add up.', 'Earn badges for showing up, building routines, and reaching your own study milestones.'],
-    quests: ['DAILY QUESTS', 'Build momentum with real study activity.', 'Four local-day challenges, saved with your profile. Session-only camera challenges are clearly identified.'],
-    'session-preferences': ['SESSION PREFERENCES', 'Set your session up your way.', 'Choose how FocusMate monitors, reminds, and supports your study time.'],
-    profile: ['YOUR SPACE', 'Make it yours.', 'Your name, wellbeing notes, and saved progress stay in your local FocusMate profile.'],
-    contact: ['HELP & SUPPORT', 'Need help? We’re here.', 'Get help with technical problems, report bugs, or share feedback with the FocusMate team.'],
+    overview: ['heading.overviewEyebrow', 'heading.overviewTitle', 'heading.overviewText'],
+    'focus-room': ['heading.focusEyebrow', 'heading.focusTitle', 'heading.focusText'],
+    insights: ['heading.progressEyebrow', 'heading.progressTitle', 'heading.progressText'],
+    'session-results': ['heading.resultsEyebrow', 'heading.resultsTitle', 'heading.resultsText'],
+    achievements: ['heading.achievementsEyebrow', 'heading.achievementsTitle', 'heading.achievementsText'],
+    quests: ['heading.questsEyebrow', 'heading.questsTitle', 'heading.questsText'],
+    'session-preferences': ['heading.preferencesEyebrow', 'heading.preferencesTitle', 'heading.preferencesText'],
+    profile: ['heading.profileEyebrow', 'heading.profileTitle', 'heading.profileText'],
+    contact: ['heading.contactEyebrow', 'heading.contactTitle', 'heading.contactText'],
   }[page.id];
   if (page.id === 'overview') return null;
-  return <header className="page-heading"><span className="eyebrow">{content[0]}</span><h1>{content[1]}</h1><p>{content[2]}</p></header>;
+  return <header className="page-heading"><span className="eyebrow">{translate(language, content[0])}</span><h1>{translate(language, content[1], { name: profile.player_name || 'friend' })}</h1><p>{translate(language, content[2])}</p></header>;
 }
 
 function Stat({ label, value, note, icon: Icon }) {
@@ -538,9 +612,6 @@ function Overview({ profile, live, language, onNavigate, onSave }) {
   const unlocked = new Set((profile.achievements || []).map((item) => typeof item === 'string' ? item : item?.id));
   const achievementCount = achievementCatalog.filter(([id]) => unlocked.has(id)).length;
   const nextAchievement = achievementCatalog.find(([id]) => !unlocked.has(id));
-  const languageNames = {
-    en: 'English', es: 'Español', fr: 'Français', ar: 'العربية', hi: 'हिन्दी',
-  };
   const updateGoal = (value) => {
     const sessionPreferences = { ...profile.session_preferences, daily_goal_minutes: Number(value) };
     onSave({ session_preferences: sessionPreferences });
@@ -567,25 +638,24 @@ function Overview({ profile, live, language, onNavigate, onSave }) {
             {[30, 60, 90, 120, ...( [30, 60, 90, 120].includes(goalMinutes) ? [] : [goalMinutes] )].sort((a, b) => a - b).map((minutes) => <option value={minutes} key={minutes}>{minutes} min</option>)}
           </select></label>
         </section>
-        <Stat label={translate(language, 'dashboard.studyTime')} value={`${hourCount ? `${hourCount}h ` : ''}${minuteCount}m`} note={live.session_active ? 'Active camera session included' : 'Completed timer and camera study time'} icon={Clock3} />
-        <Stat label={translate(language, 'dashboard.focusScore')} value={translate(language, 'dashboard.noScore')} note={translate(language, 'dashboard.noScoreHelp')} icon={Activity} />
-        <Stat label={translate(language, 'dashboard.studyStreak')} value={`${streak} ${streak === 1 ? 'day' : 'days'}`} note={translate(language, 'dashboard.streakNote')} icon={Flame} />
+        <Stat label={translate(language, 'dashboard.studyTime')} value={`${hourCount ? `${hourCount}h ` : ''}${minuteCount}m`} note={translate(language, live.session_active ? 'dashboard.activeCameraIncluded' : 'dashboard.completedStudyTime')} icon={Clock3} />
+        <Stat label={translate(language, 'dashboard.studyStreak')} value={`${streak} ${translate(language, streak === 1 ? 'dashboard.day' : 'dashboard.days')}`} note={translate(language, 'dashboard.streakNote')} icon={Flame} />
         <section className="surface-panel overview-xp">
-          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.xpLevel')}</span><h3>Level {level}</h3></div><strong>{xp.toLocaleString(language)} XP</strong></div>
-          <div className="progress-track" role="progressbar" aria-label={`Level ${level} progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={levelProgress}><span style={{ width: `${levelProgress}%` }} /></div>
+          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.xpLevel')}</span><h3>{translate(language, 'preferences.level')} {level}</h3></div><strong>{xp.toLocaleString(language)} XP</strong></div>
+          <div className="progress-track" role="progressbar" aria-label={translate(language, 'dashboard.levelProgress', { level })} aria-valuemin="0" aria-valuemax="100" aria-valuenow={levelProgress}><span style={{ width: `${levelProgress}%` }} /></div>
           <small>{levelProgress} / 100 XP · {100 - levelProgress} {translate(language, 'dashboard.toNextLevel')}</small>
         </section>
         <section className="surface-panel overview-achievements">
           <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.achievements')}</span><h3>{achievementCount} / {achievementCatalog.length} {translate(language, 'dashboard.unlocked')}</h3></div><Trophy size={19} /></div>
-          {nextAchievement ? <p>Next: {nextAchievement[1]}</p> : <p>{translate(language, 'quests.completedAll')}</p>}
+          {nextAchievement ? <p>{translate(language, 'dashboard.nextAchievement')}: {nextAchievement[1]}</p> : <p>{translate(language, 'quests.completedAll')}</p>}
           <button className="text-button" onClick={() => onNavigate('achievements')}>{translate(language, 'dashboard.viewAchievements')} <ArrowUpRight size={15} /></button>
         </section>
       </div>
 
       <section className="surface-panel streak-panel">
-        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.week')}</span><h3><Flame size={17} /> {streak} day {translate(language, 'dashboard.studyStreak').toLowerCase()}</h3></div><small>{translate(language, 'dashboard.streakNote')}</small></div>
+        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.week')}</span><h3><Flame size={17} /> {streak} {translate(language, streak === 1 ? 'dashboard.day' : 'dashboard.days')} {translate(language, 'dashboard.studyStreak').toLowerCase()}</h3></div><small>{translate(language, 'dashboard.streakNote')}</small></div>
         <div className="week-calendar" aria-label={translate(language, 'dashboard.week')}>
-          {week.map((day) => <div key={day.date} aria-label={`${day.date}: ${day.completed ? 'study completed' : 'no study recorded'}`} className={day.completed ? 'completed' : ''}><span>{day.label}</span><strong>{day.completed ? '✓' : '·'}</strong></div>)}
+          {week.map((day) => <div key={day.date} aria-label={`${day.date}: ${translate(language, day.completed ? 'dashboard.studyCompleted' : 'dashboard.noStudyRecorded')}`} className={day.completed ? 'completed' : ''}><span>{day.label}</span><strong>{day.completed ? '✓' : '·'}</strong></div>)}
         </div>
       </section>
 
@@ -666,7 +736,7 @@ function DailyQuests({ profile, language, onViewAll }) {
   </section>;
 }
 
-function TimerPanel({ profile, username, onNotice }) {
+function TimerPanel({ profile, username, onNotice, language }) {
   const defaultDuration = Number(profile.session_preferences?.session_length_minutes || 25);
   const durations = [...new Set([15, 25, 45, 60, 90, 120, defaultDuration])].sort((a, b) => a - b);
   const [duration, setDuration] = useState(defaultDuration);
@@ -712,7 +782,7 @@ function TimerPanel({ profile, username, onNotice }) {
     const secondsToCredit = Math.max(0, duration * 60 - creditedSeconds.current);
     creditedSeconds.current = 0;
     api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: secondsToCredit }) })
-      .then(() => onNotice('Your focus session is complete. Your study time has been saved.'))
+      .then(() => onNotice(translate(language, 'focus.timerSaved')))
       .catch((error) => onNotice(error.message));
   }, [remaining, running, duration, username, onNotice]);
   const chooseDuration = (value) => { if (!running) { completionHandled.current = false; setCompleted(false); creditedSeconds.current = 0; setDuration(value); setRemaining(value * 60); } };
@@ -746,10 +816,11 @@ function TimerPanel({ profile, username, onNotice }) {
   const reset = () => { completionHandled.current = false; creditedSeconds.current = 0; setCompleted(false); setRunning(false); setRemaining(duration * 60); };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
-  return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">A CALM LITTLE POMODORO</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} minutes</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`Timer ${minutes} minutes ${seconds} seconds`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">A steady pace is a good pace</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 Session complete!</strong><span>Your focus session has ended.</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> Pause</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? 'Resume' : 'Start focus'}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> Reset</button></div><small className="muted-note">This timer is a gentle guide; it does not control or record webcam sessions.</small></section>;
+  const t = (key, values) => translate(language, `focus.${key}`, values);
+  return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
 }
 
-function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username, cameraState, cameraError }) {
+function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username, cameraState, cameraError, language }) {
   const [tasks, setTasks] = useState(profile.tasks || []);
   const [newTask, setNewTask] = useState('');
   const [subject, setSubject] = useState('Mathematics');
@@ -760,20 +831,22 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   const toggleTask = (id) => { const next = tasks.map((task) => task.id === id ? { ...task, done: !task.done } : task); setTasks(next); onUpdateProfile({ tasks: next }); };
   const removeTask = (id) => { const next = tasks.filter((task) => task.id !== id); setTasks(next); onUpdateProfile({ tasks: next }); };
   const moodNeeded = profile.session_preferences?.mood_checkins !== false && profile.session_wellbeing?.mood_checkin_date !== new Date().toISOString().slice(0, 10);
+  const t = (key, values) => translate(language, `focus.${key}`, values);
   return <div className="page-content">
-    <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} />
-      <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">OPTIONAL CAMERA SESSION</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? 'Live' : 'Camera off'}</span></div><h3>Study buddy</h3><p className="panel-copy">Turn on webcam tracking only if it feels useful. You can use the focus timer and task list without enabling the camera.</p>
-        {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> CAMERA ACTIVE</div><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> Stop camera</button></div> : <div className="camera-placeholder"><Video size={25} /><span>Camera preview appears here</span><small>Frames are processed locally and are not saved.</small></div>}
-        {!stream && <><div className="form-grid"><label>What are you working on?<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item}>{item}</option>)}</select></label><label>Session goal<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="e.g. Complete Chapter 4 exercises" /></label>{moodNeeded && <label>How are you feeling?<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">Choose a mood</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item}>{item}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood })}><Video size={17} /> {cameraState === 'starting' ? 'Starting camera…' : 'Start camera'}</button></>}
-        {stream && <div className="camera-signals"><div><small>CAMERA STATUS</small><strong>{cameraStatusText(cameraState, live)}</strong></div><div><small>POSTURE</small><strong>{postureStatusText(cameraState, live)}</strong></div><div><small>HEAD TURN PROXY</small><strong>{!live.face_detected ? 'Waiting for face' : live.looking_away ? 'Turn detected' : 'No turn detected'}</strong></div><div><small>FACE</small><strong>{live.face_detected ? 'Detected' : 'Not detected'}</strong></div><p>These are visible camera signals, not a score or a measure of concentration or mental state. Head turn is only a rough proxy for looking away. Video frames stay on this device.</p></div>}
-        {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>CAMERA STATUS</small><strong>{cameraStatusText(cameraState, live)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
+    <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} language={language} />
+      <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">{t('optionalCamera')}</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? t('live') : t('cameraOff')}</span></div><h3>{t('studyBuddy')}</h3><p className="panel-copy">{t('cameraIntro')}</p>
+        {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> {t('stopCamera')}</button></div> : <div className="camera-placeholder"><Video size={25} /><span>{t('cameraPreview')}</span><small>{t('cameraLocal')}</small></div>}
+        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood })}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
+        {stream && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div><div><small>{t('posture')}</small><strong>{postureStatusText(cameraState, live, language)}</strong></div><div><small>{t('headTurn')}</small><strong>{!live.face_detected ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn')}</strong></div><div><small>{t('face')}</small><strong>{live.face_detected ? t('detected') : t('notDetected')}</strong></div><p>{t('cameraSignalsNote')}</p></div>}
+        {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
       </section>
     </div>
-    <section className="task-section"><div className="task-heading"><div><span className="eyebrow">KEEP IT LIGHT</span><h3>Your small-step list</h3><p>A few clear next steps are plenty.</p></div><span className="task-count">{tasks.filter((task) => task.done).length}/{tasks.length} done</span></div><form className="task-form" onSubmit={addTask}><input maxLength="120" value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="Add one small next step…" /><button className="outline-button" type="submit"><Plus size={16} /> Add task</button></form><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'done' : ''}`} key={task.id}><button className="check-button" onClick={() => toggleTask(task.id)} aria-label={task.done ? 'Mark task incomplete' : 'Complete task'}>{task.done && <Check size={14} />}</button><span>{task.text}</span><button className="icon-button task-remove" onClick={() => removeTask(task.id)} aria-label="Remove task"><X size={15} /></button></div>) : <div className="empty-state">Your list is clear. Add one small next step when you’re ready.</div>}</div></section>
+    <section className="task-section"><div className="task-heading"><div><span className="eyebrow">{t('taskEyebrow')}</span><h3>{t('taskTitle')}</h3><p>{t('taskIntro')}</p></div><span className="task-count">{tasks.filter((task) => task.done).length}/{tasks.length} {t('done')}</span></div><form className="task-form" onSubmit={addTask}><input maxLength="120" value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder={t('taskPlaceholder')} /><button className="outline-button" type="submit"><Plus size={16} /> {t('addTask')}</button></form><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'done' : ''}`} key={task.id}><button className="check-button" onClick={() => toggleTask(task.id)} aria-label={task.done ? t('markIncomplete') : t('completeTask')}>{task.done && <Check size={14} />}</button><span>{task.text}</span><button className="icon-button task-remove" onClick={() => removeTask(task.id)} aria-label={t('removeTask')}><X size={15} /></button></div>) : <div className="empty-state">{t('taskEmpty')}</div>}</div></section>
   </div>;
 }
 
-function Insights({ profile }) {
+function Insights({ profile, language }) {
+  const t = (key, values) => translate(language, `insights.${key}`, values);
   const rows = [...(Array.isArray(profile.session_history) ? profile.session_history : [])]
     .filter((row) => row && row.date && Number(row.seconds) > 0)
     .reverse();
@@ -784,7 +857,7 @@ function Insights({ profile }) {
     if (!Number.isFinite(date.getTime())) return '';
     const options = { hour: 'numeric', minute: '2-digit' };
     if (timeFormat !== 'system') options.hour12 = timeFormat === '12-hour';
-    return date.toLocaleTimeString(undefined, options);
+    return date.toLocaleTimeString(language, options);
   };
   const timerHistory = Array.isArray(profile.focus_timer_history) ? profile.focus_timer_history : [];
   const sessions = Number(profile.sessions_completed || 0);
@@ -844,51 +917,66 @@ function Insights({ profile }) {
     }).filter((period) => period.count > 0).sort((a, b) => b.average - a.average)[0]
     : null;
   const maxWeek = Math.max(30, ...week.map((day) => day.value));
-  const exportCsv = () => { const columns = ['Date', 'Subject', 'Goal', 'Task', 'Study time', 'Recorded camera alerts', 'XP earned']; const lines = [columns, ...rows.map((item) => [item.date, item.subject || '', item.goal || '', item.task_text || '', `${Math.floor(Number(item.seconds || 0) / 60)} min`, Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0), item.xp || 0])].map((row) => row.map((field) => `"${String(field).replaceAll('"', '""')}"`).join(',')); downloadText('focusmate-session-history.csv', lines.join('\n'), 'text/csv'); };
+  const exportCsv = () => { const columns = [t('date'), t('subject'), t('goal'), t('task'), t('studyTime'), t('cameraAlerts'), t('xpEarned')]; const lines = [columns, ...rows.map((item) => [item.date, item.subject || '', item.goal || '', item.task_text || '', `${Math.floor(Number(item.seconds || 0) / 60)} ${translate(language, 'preferences.minutes')}`, Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0), item.xp || 0])].map((row) => row.map((field) => `"${String(field).replaceAll('"', '""')}"`).join(',')); downloadText('focusmate-session-history.csv', lines.join('\n'), 'text/csv'); };
   return (
     <div className="page-content">
       <div className="stats-grid insights-stats">
-        <Stat label="Completed sessions" value={sessions} note={`${rows.length} with optional camera data`} icon={BookOpen} />
-        <Stat label="Study time this week" value={`${thisWeekMinutes} min`} note="Recorded local-calendar days" icon={Clock3} />
-        <Stat label="Study-day streak" value={`${studyStreak(profile)} days`} note="Only saved study activity counts" icon={Flame} />
-        <Stat label="Average camera session" value={rows.length ? `${averageCameraMinutes} min` : 'Not enough data'} note="Based on completed camera sessions" icon={Activity} />
+        <Stat label={t('completedSessions')} value={sessions} note={t('cameraDataCount', { count: rows.length })} icon={BookOpen} />
+        <Stat label={t('studyTimeWeek')} value={`${thisWeekMinutes} ${translate(language, 'preferences.minutes')}`} note={t('calendarDays')} icon={Clock3} />
+        <Stat label={t('studyDayStreak')} value={`${studyStreak(profile)} ${translate(language, 'dashboard.days')}`} note={t('savedActivityOnly')} icon={Flame} />
+        <Stat label={t('averageCamera')} value={rows.length ? `${averageCameraMinutes} ${translate(language, 'preferences.minutes')}` : t('notEnoughData')} note={t('cameraSessionBasis')} icon={Activity} />
       </div>
       <div className="content-columns chart-columns">
         <section className="surface-panel chart-panel">
-          <div className="section-heading"><div><span className="eyebrow">LOCAL CALENDAR WEEK</span><h3>Focus time</h3></div><span className="chart-legend mint"><i /> Study minutes</span></div>
-          {thisWeekMinutes ? <div className="week-chart">{week.map((day) => <div className="week-column" key={day.date}><span>{day.value || ''}</span><i style={{ height: `${Math.max(3, day.value / maxWeek * 100)}%` }} /><small>{day.label}</small></div>)}</div> : <div className="empty-state">Not enough data yet. Complete a focus session to start your weekly chart.</div>}
-          <p className="muted-note">{thisWeekMinutes} minutes this week · saved timer and camera-session time</p>
+          <div className="section-heading"><div><span className="eyebrow">{t('calendarWeek')}</span><h3>{t('focusTime')}</h3></div><span className="chart-legend mint"><i /> {t('studyMinutes')}</span></div>
+          {thisWeekMinutes ? <div className="week-chart">{week.map((day) => <div className="week-column" key={day.date}><span>{day.value || ''}</span><i style={{ height: `${Math.max(3, day.value / maxWeek * 100)}%` }} /><small>{new Date(`${day.date}T12:00:00`).toLocaleDateString(language, { weekday: 'short' })}</small></div>)}</div> : <div className="empty-state">{t('chartEmpty')}</div>}
+          <p className="muted-note">{t('weekSummary', { minutes: thisWeekMinutes })}</p>
         </section>
         <section className="surface-panel analytics-detail">
-          <span className="eyebrow">RECORDED CAMERA SIGNALS</span><h3>Session alerts</h3>
-          {rows.length ? <dl className="analytics-list"><div><dt>Posture alerts</dt><dd>{alertTotals.posture}</dd></div><div><dt>Looking-away signals</dt><dd>{alertTotals.lookingAway}</dd></div><div><dt>Distance alerts</dt><dd>{alertTotals.distance}</dd></div><div><dt>Fatigue-related signals</dt><dd>{alertTotals.fatigue}</dd></div></dl> : <div className="empty-state">Camera alert analytics appear after a completed optional camera session.</div>}
-          <p className="muted-note">These are heuristic visual signals, not a measure of concentration or mental state.</p>
+          <span className="eyebrow">{t('cameraSignals')}</span><h3>{t('sessionAlerts')}</h3>
+          {rows.length ? <dl className="analytics-list"><div><dt>{t('postureAlerts')}</dt><dd>{alertTotals.posture}</dd></div><div><dt>{t('lookingAway')}</dt><dd>{alertTotals.lookingAway}</dd></div><div><dt>{t('distanceAlerts')}</dt><dd>{alertTotals.distance}</dd></div><div><dt>{t('fatigue')}</dt><dd>{alertTotals.fatigue}</dd></div></dl> : <div className="empty-state">{t('cameraAnalyticsEmpty')}</div>}
+          <p className="muted-note">{t('signalsDisclaimer')}</p>
         </section>
       </div>
       <section className="surface-panel personal-insights">
-        <span className="eyebrow">PERSONAL INSIGHTS</span><h3>What your saved activity shows</h3>
-        {!seconds ? <div className="empty-state">Not enough data yet. Complete a few sessions to unlock insights.</div> : <div className="insight-list">
-          {bestDay && <p><strong>Your best study day</strong><span>{new Date(`${bestDay.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })} had the most recorded study time this week ({bestDay.value} min).</span></p>}
-          {priorWeekMinutes > 0 && thisWeekMinutes !== Math.round(priorWeekMinutes) && <p><strong>{thisWeekMinutes > priorWeekMinutes ? 'Study time is up' : 'A gentler week'}</strong><span>{Math.abs(Math.round((thisWeekMinutes - priorWeekMinutes) / priorWeekMinutes * 100))}% {thisWeekMinutes > priorWeekMinutes ? 'more' : 'less'} saved study time than last week.</span></p>}
-          {strongestPeriod && <p><strong>Your longest sessions are often in the {strongestPeriod.name}</strong><span>Based on average duration across {timedSessions.length} completed camera sessions.</span></p>}
-          {rows.length > 0 && !strongestPeriod && <p><strong>Keep studying</strong><span>Complete a few more camera sessions to compare session duration by time of day.</span></p>}
-          <p><strong>Focus score trend</strong><span>Not available: FocusMate does not record a validated focus score.</span></p>
-          {totalAlerts > 0 && <p><strong>Camera signal summary</strong><span>{totalAlerts} visual-signal alerts are recorded across your camera sessions.</span></p>}
+        <span className="eyebrow">{t('personal')}</span><h3>{t('activityShows')}</h3>
+        {!seconds ? <div className="empty-state">{t('insightsEmpty')}</div> : <div className="insight-list">
+          {bestDay && <p><strong>{t('bestDay')}</strong><span>{new Date(`${bestDay.date}T12:00:00`).toLocaleDateString(language, { weekday: 'long' })} · {bestDay.value} {translate(language, 'preferences.minutes')}</span></p>}
+          {priorWeekMinutes > 0 && thisWeekMinutes !== Math.round(priorWeekMinutes) && <p><strong>{thisWeekMinutes > priorWeekMinutes ? t('studyTimeUp') : t('gentlerWeek')}</strong><span>{Math.abs(Math.round((thisWeekMinutes - priorWeekMinutes) / priorWeekMinutes * 100))}% {thisWeekMinutes > priorWeekMinutes ? t('more') : t('less')} {t('thanLastWeek')}</span></p>}
+          {strongestPeriod && <p><strong>{t('strongestPeriod', { period: t(`period.${strongestPeriod.name}`) })}</strong><span>{t('periodBasis', { count: timedSessions.length })}</span></p>}
+          {rows.length > 0 && !strongestPeriod && <p><strong>{t('keepStudying')}</strong><span>{t('moreSessionsForComparison')}</span></p>}
+          {totalAlerts > 0 && <p><strong>{t('signalSummary')}</strong><span>{t('signalTotal', { count: totalAlerts })}</span></p>}
         </div>}
       </section>
       <section className="history-section">
-        <div className="section-heading"><div><span className="eyebrow">YOUR HISTORY</span><h3>Saved sessions</h3></div><button className="outline-button" onClick={exportCsv}><ArrowUpRight size={15} /> Download CSV</button></div>
-        {rows.length ? <div className="table-wrap"><table><thead><tr><th>Date &amp; time</th><th>Subject</th><th>Goal</th><th>Study time</th><th>Camera alerts</th><th>XP earned</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(`${String(item.date).slice(0, 10)}T12:00:00`).toLocaleDateString()}{sessionStartTime(item.session_started_at) && <small>{sessionStartTime(item.session_started_at)}</small>}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} min</td><td>{Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0)}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">No focus sessions yet. Complete your first optional camera session to see session history.</div>}
+        <div className="section-heading"><div><span className="eyebrow">{t('yourHistory')}</span><h3>{t('savedSessions')}</h3></div><button className="outline-button" onClick={exportCsv}><ArrowUpRight size={15} /> {t('downloadCsv')}</button></div>
+        {rows.length ? <div className="table-wrap"><table><thead><tr><th>{t('dateTime')}</th><th>{t('subject')}</th><th>{t('goal')}</th><th>{t('studyTime')}</th><th>{t('cameraAlerts')}</th><th>{t('xpEarned')}</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(`${String(item.date).slice(0, 10)}T12:00:00`).toLocaleDateString(language)}{sessionStartTime(item.session_started_at) && <small>{sessionStartTime(item.session_started_at)}</small>}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} {translate(language, 'preferences.minutes')}</td><td>{Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0)}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">{t('historyEmpty')}</div>}
       </section>
     </div>
   );
 }
 
-function SessionResults({ live, profile, username, onProfile, onGoal }) {
+function SessionResults({ live, profile, username, onProfile, onGoal, language }) {
+  const t = (key, values) => translate(language, `results.${key}`, values);
   const [outcome, setOutcome] = useState(live.goal_outcome || '');
   const completed = live.session_completed;
   const totalAlerts = Number(live.posture_alerts || 0) + Number(live.distance_alerts || 0) + Number(live.looking_away_alerts || 0) + Number(live.fatigue_signals || 0);
   const reflection = (profile.session_reflections || []).find((item) => item.session_id === live.session_id);
+  const generatedReflection = reflection?.source === 'Local summary' && reflection.stats?.alert_counts;
+  const reflectionMinutes = Number(reflection?.stats?.duration_minutes || Math.round(Number(live.session_seconds || 0) / 60));
+  const highestSignal = Object.entries(reflection?.stats?.alert_counts || {}).sort((left, right) => right[1] - left[1])[0];
+  const reflectionSummary = generatedReflection
+    ? t('signalSummary', { count: totalAlerts })
+    : reflection?.summary || t('signalSummary', { count: totalAlerts });
+  const whatWentWell = generatedReflection
+    ? [t('minutesCompleted', { minutes: reflectionMinutes }), t('visibleSignals')]
+    : reflection?.what_went_well || [
+      t('minutesCompleted', { minutes: reflectionMinutes }),
+      t('visibleSignals'),
+    ];
+  const tryNext = generatedReflection
+    ? [highestSignal?.[1] > 0 ? t(`suggestion.${highestSignal[0]}`) : t('nextSuggestion')]
+    : reflection?.try_next || [t('nextSuggestion')];
   useEffect(() => {
     if (!completed || !reflection) return;
     api(`/api/session/reflection?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' })
@@ -898,17 +986,18 @@ function SessionResults({ live, profile, username, onProfile, onGoal }) {
   const saveOutcome = async (value) => { setOutcome(value); try { await onGoal(value); } catch { setOutcome(''); } };
   return (
     <div className="page-content">
-      {!completed ? <div className="surface-panel reflection-empty"><span className="reflection-icon"><Sparkles size={22} /></span><h3>Your reflection is waiting.</h3><p>Finish a camera session to review the visible signals recorded by FocusMate. Video frames are analyzed in your browser and are not saved.</p></div> : <>
-        <div className="reflection-banner"><span className="reflection-icon"><Sparkles size={22} /></span><div><span className="eyebrow">SESSION REFLECTION</span><h2>A little more insight, a little more room.</h2><p>{reflection?.summary || `FocusMate recorded ${totalAlerts} visible-signal alerts. This is not a measure of concentration or mental state.`}</p></div><span className="local-badge"><ShieldCheck size={14} /> Local summary</span></div>
-        <div className="stats-grid result-stats"><Stat label="Session duration" value={`${Math.round(Number(live.session_seconds || 0) / 60)} min`} note="Time with your study buddy" icon={Clock3} /><Stat label="Recorded camera alerts" value={totalAlerts} note="Counts for visible camera signals" icon={Activity} /><Stat label="Posture signal" value={live.pose_detected ? live.posture || 'Unknown' : 'Not available'} note={live.pose_detected ? 'From visible ear and shoulder landmarks' : live.pose_detection_status === 'missing' ? 'Shoulders were not reliably detected during the session' : 'Shoulder detection was unavailable for this session'} icon={UserRound} /></div>
-        <div className="content-columns"><section className="surface-panel reflection-list"><span className="eyebrow">WHAT WENT WELL</span><h3>Give yourself credit.</h3>{(reflection?.what_went_well || [`You completed ${Math.round(Number(live.session_seconds || 0) / 60)} minutes of study time.`, 'Camera signals describe visible landmarks only.']).map((item) => <p key={item}>{item}</p>)}</section><section className="surface-panel reflection-list"><span className="eyebrow">TRY NEXT TIME</span><h3>One small idea.</h3>{(reflection?.try_next || ['Choose a clear, achievable goal before you begin, then make room for a brief break afterward.']).map((item) => <p key={item}>{item}</p>)}</section></div>
-        {live.study_goal && <section className="goal-checkin surface-panel"><span className="eyebrow">YOUR SESSION GOAL</span><h3>{live.study_goal}</h3><label>How did it go?<select value={outcome} onChange={(event) => saveOutcome(event.target.value)}><option value="">Choose one</option><option>Yes</option><option>Partially</option><option>Not yet</option></select></label>{outcome && <small className="saved-note"><Check size={14} /> Goal check-in saved: {outcome}</small>}</section>}
+      {!completed ? <div className="surface-panel reflection-empty"><span className="reflection-icon"><Sparkles size={22} /></span><h3>{t('waiting')}</h3><p>{t('waitingText')}</p></div> : <>
+        <div className="reflection-banner"><span className="reflection-icon"><Sparkles size={22} /></span><div><span className="eyebrow">{t('eyebrow')}</span><h2>{t('title')}</h2><p>{reflectionSummary}</p></div><span className="local-badge"><ShieldCheck size={14} /> {t('localSummary')}</span></div>
+        <div className="stats-grid result-stats"><Stat label={t('duration')} value={`${Math.round(Number(live.session_seconds || 0) / 60)} ${translate(language, 'preferences.minutes')}`} note={t('buddyTime')} icon={Clock3} /><Stat label={t('cameraAlerts')} value={totalAlerts} note={t('visibleCounts')} icon={Activity} /><Stat label={t('posture')} value={live.pose_detected ? live.posture || t('unknown') : t('notAvailable')} note={live.pose_detected ? t('visibleLandmarks') : live.pose_detection_status === 'missing' ? t('shouldersMissing') : t('shouldersUnavailable')} icon={UserRound} /></div>
+        <div className="content-columns"><section className="surface-panel reflection-list"><span className="eyebrow">{t('wentWell')}</span><h3>{t('giveCredit')}</h3>{whatWentWell.map((item) => <p key={item}>{item}</p>)}</section><section className="surface-panel reflection-list"><span className="eyebrow">{t('tryNext')}</span><h3>{t('smallIdea')}</h3>{tryNext.map((item) => <p key={item}>{item}</p>)}</section></div>
+        {live.study_goal && <section className="goal-checkin surface-panel"><span className="eyebrow">{t('sessionGoal')}</span><h3>{live.study_goal}</h3><label>{t('howGo')}<select value={outcome} onChange={(event) => saveOutcome(event.target.value)}><option value="">{t('chooseOne')}</option><option value="Yes">{t('yes')}</option><option value="Partially">{t('partially')}</option><option value="Not yet">{t('notYet')}</option></select></label>{outcome && <small className="saved-note"><Check size={14} /> {t('savedCheckin', { outcome: t(outcome.toLowerCase().replace(' ', '')) })}</small>}</section>}
       </>}
     </div>
   );
 }
 
-function Achievements({ profile }) {
+function Achievements({ profile, language }) {
+  const t = (key, values) => translate(language, `achievements.${key}`, values);
   const earnedRecords = new Map((profile.achievements || []).map((item) => [
     typeof item === 'string' ? item : item?.id,
     typeof item === 'string' ? null : item,
@@ -919,8 +1008,8 @@ function Achievements({ profile }) {
   return (
     <div className="page-content">
       <section className="achievement-progress surface-panel">
-        <div><span className="eyebrow">YOUR COLLECTION</span><h3>{count} of {achievements.length} unlocked</h3></div>
-        <div className="progress-track" role="progressbar" aria-label="Achievements unlocked" aria-valuemin="0" aria-valuemax={achievements.length} aria-valuenow={count}>
+        <div><span className="eyebrow">{t('collection')}</span><h3>{t('unlockedCount', { count, total: achievements.length })}</h3></div>
+        <div className="progress-track" role="progressbar" aria-label={t('unlocked')} aria-valuemin="0" aria-valuemax={achievements.length} aria-valuenow={count}>
           <span style={{ width: `${count / achievements.length * 100}%` }} />
         </div>
       </section>
@@ -929,31 +1018,33 @@ function Achievements({ profile }) {
         return (
           <section className="achievement-group" key={group}>
             <div className="section-heading">
-              <div><span className="eyebrow">{String(group).toUpperCase()}</span><h3>{group}</h3></div>
+              <div><span className="eyebrow">{t(`group.${group}`)}</span><h3>{t(`group.${group}`)}</h3></div>
               <span className="group-count">{entries.filter((item) => earned.has(item[0])).length} / {entries.length}</span>
             </div>
             <div className="achievement-grid">
               {entries.map(([id, title, description, reward]) => {
+                const localizedTitle = translateAchievement(language, id, 'title', title);
+                const localizedDescription = translateAchievement(language, id, 'description', description);
                 const record = earnedRecords.get(id);
                 const progress = record ? null : achievementProgress(profile, id);
                 const earnedAt = record?.earned_at && new Date(record.earned_at);
                 const earnedDate = earnedAt && Number.isFinite(earnedAt.getTime())
-                  ? earnedAt.toLocaleDateString()
+                  ? earnedAt.toLocaleDateString(language)
                   : '';
                 return (
                   <article className={`achievement-card ${record || earned.has(id) ? 'earned' : ''}`} key={id}>
                     <div className="achievement-symbol">{earned.has(id) ? <Trophy size={18} /> : <LockKeyhole size={17} />}</div>
                     <div>
-                      <h4>{title}</h4>
-                      <p>{description}</p>
+                      <h4>{localizedTitle}</h4>
+                      <p>{localizedDescription}</p>
                       {earned.has(id)
-                        ? <small>{earnedDate ? `Unlocked ${earnedDate}` : 'Unlocked'} · +{reward} XP</small>
+                        ? <small>{earnedDate ? t('unlockedOn', { date: earnedDate }) : t('unlocked')} · +{reward} XP</small>
                         : <>
-                          <small>Reward · +{reward} XP</small>
+                          <small>{t('reward')} · +{reward} XP</small>
                           {progress && (
                             <div className="achievement-progress-detail">
                               <span>{progress.current} / {progress.target} {progress.unit}</span>
-                              <div className="progress-track" role="progressbar" aria-label={`${title} progress`} aria-valuemin="0" aria-valuemax={progress.target} aria-valuenow={progress.current}>
+                              <div className="progress-track" role="progressbar" aria-label={`${localizedTitle} progress`} aria-valuemin="0" aria-valuemax={progress.target} aria-valuenow={progress.current}>
                                 <span style={{ width: `${progress.current / progress.target * 100}%` }} />
                               </div>
                             </div>
@@ -972,7 +1063,7 @@ function Achievements({ profile }) {
 }
 
 function Quests({ profile, language }) {
-  return <div className="page-content"><DailyQuests profile={profile} language={language} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data; no self-report or unsupported focus score is used.</p></div>;
+  return <div className="page-content"><DailyQuests profile={profile} language={language} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
 }
 
 function Preferences({ profile, onSave }) {
@@ -991,9 +1082,22 @@ function Preferences({ profile, onSave }) {
   };
   const [preferences, setPreferences] = useState({ ...defaults, ...(profile.session_preferences || {}) });
   const [saved, setSaved] = useState(false);
-  const set = (key, value) => setPreferences((current) => ({ ...current, [key]: value }));
+  const set = (key, value) => {
+    const updated = { ...preferences, [key]: value };
+    setPreferences(updated);
+    if (key === 'language') {
+      if (value === 'system') localStorage.removeItem('focusmate-language');
+      else localStorage.setItem('focusmate-language', value);
+      void onSave({ session_preferences: updated });
+    }
+  };
   const save = async () => { await onSave({ session_preferences: preferences }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
-  const rows = [['focus_monitoring', 'Focus monitoring', 'Enable optional in-browser face, eye, posture, and distance estimates'], ['posture_alerts', 'Posture alerts', 'Show one gentle reminder after two minutes of slouching'], ['mood_checkins', 'Mood check-ins', 'Ask how I feel before my first camera session each day'], ['session_chimes', 'Session chimes', 'Play a soft tone when the focus timer starts and completes']];
+  const rows = [
+    ['focus_monitoring', 'monitoring', 'monitoringHelp'],
+    ['posture_alerts', 'postureAlerts', 'postureHelp'],
+    ['mood_checkins', 'moodCheckins', 'moodHelp'],
+    ['session_chimes', 'sessionChimes', 'chimesHelp'],
+  ];
   const language = preferences.language !== 'system' && supportedLanguages.includes(preferences.language) ? preferences.language : browserLanguage();
   const selectedLanguage = supportedLanguages.includes(preferences.language) ? preferences.language : 'system';
   const preferenceSelect = (key, title, values) => (
@@ -1015,9 +1119,9 @@ function Preferences({ profile, onSave }) {
     <div className="page-content settings-layout">
       <section className="surface-panel settings-panel">
         <div className="settings-heading">
-          <span className="eyebrow">PERSONALIZE YOUR SPACE</span>
-          <h3>Support that feels right.</h3>
-          <p>These choices stay with your local profile and can be changed at any time.</p>
+          <span className="eyebrow">{translate(language, 'preferences.settingsEyebrow')}</span>
+          <h3>{translate(language, 'preferences.settingsTitle')}</h3>
+          <p>{translate(language, 'preferences.settingsDescription')}</p>
         </div>
         {preferenceSelect('language', translate(language, 'preferences.language'), [
           ['system', translate(language, 'preferences.systemLanguage')],
@@ -1046,9 +1150,9 @@ function Preferences({ profile, onSave }) {
           ['12-hour', translate(language, 'preferences.twelveHour')],
           ['24-hour', translate(language, 'preferences.twentyFourHour')],
         ])}
-        {rows.map(([key, title, description]) => (
+        {rows.map(([key, titleKey, descriptionKey]) => (
           <label className="setting-row" key={key}>
-            <span><strong>{title}</strong><small>{description}</small></span>
+            <span><strong>{translate(language, `preferences.${titleKey}`)}</strong><small>{translate(language, `preferences.${descriptionKey}`)}</small></span>
             <input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} />
             <i className="toggle-track" />
           </label>
@@ -1103,33 +1207,34 @@ function Preferences({ profile, onSave }) {
             </span>
           </label>
         </div>
-        <button className="primary-button" onClick={save}><Check size={16} /> {saved ? 'Saved' : 'Save preferences'}</button>
+        <button className="primary-button" onClick={save}><Check size={16} /> {saved ? translate(language, 'app.saved') : translate(language, 'preferences.savePreferences')}</button>
       </section>
       <section className="surface-panel profile-summary">
-        <span className="eyebrow">YOUR PROFILE</span>
+        <span className="eyebrow">{translate(language, 'preferences.yourProfile')}</span>
         <div className="summary-person">
           <div className="avatar">{(profile.player_name || 'F')[0].toUpperCase()}</div>
           <div><strong>{profile.player_name}</strong><small>@{profile.username}</small></div>
         </div>
         <dl>
-          <div><dt>Rank</dt><dd>Level {levelForXp(profile.total_xp)}</dd></div>
-          <div><dt>Study style</dt><dd>{preferences.study_style}</dd></div>
-          <div><dt>Session length</dt><dd>{preferences.session_length_minutes} minutes</dd></div>
-          <div><dt>Daily goal</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div>
+          <div><dt>{translate(language, 'preferences.rank')}</dt><dd>{translate(language, 'preferences.level')} {levelForXp(profile.total_xp)}</dd></div>
+          <div><dt>{translate(language, 'preferences.studyStyle')}</dt><dd>{translate(language, `preferences.${preferences.study_style}`)}</dd></div>
+          <div><dt>{translate(language, 'preferences.sessionLength')}</dt><dd>{preferences.session_length_minutes} {translate(language, 'preferences.minutes')}</dd></div>
+          <div><dt>{translate(language, 'preferences.dailyGoal')}</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div>
         </dl>
       </section>
     </div>
   );
 }
 
-function Profile({ profile, onSave, onExport, cloudAccount }) {
+function Profile({ profile, onSave, onExport, cloudAccount, language }) {
   const [name, setName] = useState(profile.player_name || '');
   const [sleep, setSleep] = useState(profile.session_wellbeing?.sleep_hours || 0);
   const [water, setWater] = useState(profile.water_glasses_today || 0);
   const [reflection, setReflection] = useState(profile.session_wellbeing?.reflection || '');
   const [saved, setSaved] = useState(false);
   const save = async (event) => { event.preventDefault(); const wellbeing = { ...profile.session_wellbeing, sleep_hours: Number(sleep), water_glasses: Number(water), reflection: reflection.slice(0, 500) }; await onSave({ player_name: name, water_glasses_today: Number(water), session_wellbeing: wellbeing }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
-  return <div className="page-content settings-layout"><form className="surface-panel profile-form" onSubmit={save}><span className="eyebrow">A LITTLE ABOUT YOU</span><h3>Your profile, at your pace.</h3>{cloudAccount && <div className="cloud-profile-note">Signed in with {cloudAccount.email}. Your account and profile preferences use Supabase; study sessions, quests, XP, achievements, and wellbeing notes remain in this browser and are not yet synchronized.</div>}<label>What should we call you?<input maxLength="80" value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-grid"><label>Sleep last night (hours)<input type="number" min="0" max="24" step="0.5" value={sleep} onChange={(event) => setSleep(event.target.value)} /></label><label>Water glasses today<input type="number" min="0" max="100" value={water} onChange={(event) => setWater(event.target.value)} /></label></div><label>A note to yourself<textarea maxLength="500" rows="4" value={reflection} onChange={(event) => setReflection(event.target.value)} placeholder="What would help you feel supported today?" /></label><button className="primary-button" type="submit"><Check size={16} /> {saved ? 'Saved' : 'Save check-in'}</button></form><section className="surface-panel data-panel"><span className="eyebrow">YOUR DATA, YOUR CHOICE</span><h3>Local by default.</h3><p>Your profile and completed-session history are stored in this browser's localStorage. They do not sync between browsers or devices, and clearing this site's data can remove them. localhost and your Vercel site have separate profiles. Camera frames are analyzed in this browser and are not saved or sent to FocusMate. Completed camera sessions store duration and counts of posture, distance, head-turn, and eye-closure signals in your local profile. The app downloads MediaPipe code from jsDelivr; support forms are sent separately to Web3Forms.</p><button className="outline-button full-button" onClick={onExport}><ArrowUpRight size={15} /> Export profile as JSON</button><div className="privacy-card"><LockKeyhole size={17} /><span>{cloudAccount ? 'Your email password is managed by Supabase Auth. Your local username is not a password.' : 'Your username selects local data; it is not a password or secure authentication.'}</span></div></section></div>;
+  const t = (key, values) => translate(language, `profile.${key}`, values);
+  return <div className="page-content settings-layout"><form className="surface-panel profile-form" onSubmit={save}><span className="eyebrow">{t('about')}</span><h3>{t('title')}</h3>{cloudAccount && <div className="cloud-profile-note">{t('cloudSync', { username: cloudAccount.username })}</div>}<label>{t('name')}<input maxLength="80" value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-grid"><label>{t('sleep')}<input type="number" min="0" max="24" step="0.5" value={sleep} onChange={(event) => setSleep(event.target.value)} /></label><label>{t('water')}<input type="number" min="0" max="100" value={water} onChange={(event) => setWater(event.target.value)} /></label></div><label>{t('note')}<textarea maxLength="500" rows="4" value={reflection} onChange={(event) => setReflection(event.target.value)} placeholder={t('notePlaceholder')} /></label><button className="primary-button" type="submit"><Check size={16} /> {saved ? t('saved') : t('save')}</button></form><section className="surface-panel data-panel"><span className="eyebrow">{t('dataEyebrow')}</span><h3>{cloudAccount ? t('cloudTitle') : t('localTitle')}</h3><p>{cloudAccount ? t('cloudData') : t('localData')}</p><button className="outline-button full-button" onClick={onExport}><ArrowUpRight size={15} /> {t('export')}</button><div className="privacy-card"><LockKeyhole size={17} /><span>{cloudAccount ? t('cloudSecurity') : t('localSecurity')}</span></div></section></div>;
 }
 
 function downloadText(filename, contents, type) { const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([contents], { type })); link.download = filename; link.click(); URL.revokeObjectURL(link.href); }
@@ -1138,11 +1243,12 @@ function downloadProfile(profile) { downloadText('focusmate-profile.json', JSON.
 function App() {
   return (
     <AuthGate>
-      {({ account, onCloudSignOut, onCloudLogin }) => (
+      {({ account, onCloudSignOut, onCloudLogin, cloudConfigurationError }) => (
         <FocusMateApp
           account={account}
           onCloudSignOut={onCloudSignOut}
           onCloudLogin={onCloudLogin}
+          cloudConfigurationError={cloudConfigurationError || supabaseConfigurationError}
         />
       )}
     </AuthGate>

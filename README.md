@@ -1,6 +1,6 @@
 # FocusMate
 
-FocusMate is a local-first study space with a React dashboard and optional in-browser webcam estimates. It deploys to Vercel as a static app with a small optional serverless endpoint for support submissions.
+FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Camera frames are analyzed in the browser and are not uploaded.
 
 ## Project structure
 
@@ -37,28 +37,27 @@ generated build with `npm --prefix dashboard run preview`.
 
 ## Deploy to Vercel
 
-Import the repository into Vercel and leave the project root set to the
-repository root. The root `vercel.json` installs the dashboard dependencies,
-builds the Vite app, and publishes `dashboard/dist`.
+Import the repository into Vercel and set the **Root Directory** to
+`dashboard`. The root `vercel.json` commands are relative to that directory:
+install with `npm install`, build with `npm run build`, and publish `dist`.
 
-Each normalized username has a separate, versioned profile in browser local
-storage. XP is the source of truth for level, and sessions and achievements
-are saved with the profile. Data remains available after refresh or signing
-out in the same browser and site origin, but is not synced between devices or
-different deployment domains. Profiles are not automatically imported from
-older JSON export files. Camera frames are processed in the browser; the
-landmark models are served by the app and the MediaPipe WASM runtime is loaded
-from jsDelivr. Webcam access requires HTTPS, which Vercel provides.
+Local profiles remain available in browser storage. When Supabase is
+configured and a user signs in, the profile snapshot (including study
+activity, XP, quests, achievements, wellbeing notes, and preferences) is also
+stored in that account's `profiles.app_data` field and restored on another
+device. Local-only profiles do not sync. Existing browser-local profiles are
+not automatically merged into a cloud account. Camera frames are processed in
+the browser; only completed-session duration and derived signal counts are
+stored. The landmark models are served by the app and the MediaPipe WASM
+runtime is loaded from jsDelivr. Webcam access requires HTTPS or localhost.
 
 Daily quests are generated as four distinct challenges for the browser's local
-calendar date and stored in the selected profile. Their progress is derived from
-recorded timer activity and completed camera sessions; camera-signal challenges
-require a completed camera session. Streaks count saved study activity rather
-than visits to the app. FocusMate does not currently record a validated focus
-score, so the dashboard reports that no score is available instead of
-estimating one. Theme, language, study style, study goal, time format, and
-session preferences are saved per profile. A camera session interrupted by a
-page reload is not treated as a completed session.
+calendar date and stored in the selected profile. Their progress is derived
+from recorded timer activity and completed camera sessions; camera-signal
+challenges require a completed camera session. Streaks count saved study
+activity rather than visits to the app. Theme, language, study style, study
+goal, time format, and session preferences are saved per profile. A camera
+session interrupted by a page reload is not treated as a completed session.
 
 ## Contact and support submissions
 
@@ -93,34 +92,70 @@ npm --prefix dashboard test
 
 The dashboard includes an overview, a focus room with a Pomodoro timer and task
 list, session insights, session reflections, daily quests, achievements, and
-profile/wellbeing settings. The webcam is optional; the timer and task list work
+profile/wellbeing settings. The interface supports English, Spanish, French,
+Arabic (RTL), and Hindi. The webcam is optional; the timer and task list work
 without it. Use the sidebar to switch between pages.
 
-## Optional Supabase account foundation
+## Optional Supabase username/PIN accounts
 
 Local username profiles continue to work when Supabase is not configured.
-Email/password accounts are enabled only when both
-`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are present at build
-time. Copy the placeholders from `dashboard/.env.example` into an ignored
-`dashboard/.env` file and provide the public project URL and publishable key.
-Never put a service-role or secret key in a Vite variable.
+Cloud username/PIN accounts are enabled only when both
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` are present and valid
+at build time. The project URL is prefilled in `dashboard/.env.example`. For local
+development, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` to an
+ignored `dashboard/.env.local` file. Do not replace an existing `.env` file:
+it may contain the Web3Forms setting. The app explains which setting is
+missing or invalid while keeping local profiles available. Never put a
+service-role or secret key in a Vite variable or frontend deployment setting.
 
-Before enabling email accounts, apply
-`supabase/migrations/20261004120000_profiles.sql` to the Supabase project and
-configure its Auth email-confirmation and redirect-URL settings for the local
-and deployed app URLs. The migration creates an owner-only `profiles` table:
-RLS policies restrict row access to `auth.uid()`, and the Auth signup trigger
-creates the profile using validated username metadata. Review the SQL and test
-it in your own Supabase project before enabling the feature for users.
+Before enabling accounts, apply migrations in order:
 
-This is an Auth/profile foundation, not full cloud synchronization. Supabase
-stores account identity and the supported profile/preferences fields. XP,
-levels, achievements, quests, session history, camera statistics, and wellbeing
-notes remain in browser-local storage and are not synced across devices. A
-cloud account uses a separate local storage namespace; existing local profiles
-are preserved and are not automatically imported or merged. Camera frames
-remain processed in the browser and are not uploaded. The app does not yet
-provide realtime rooms, friends, or a global leaderboard.
+1. `supabase/migrations/20261004120000_profiles.sql`
+2. `supabase/migrations/20261004140000_username_pin_auth.sql`
+3. `supabase/migrations/20261004160000_profile_cloud_fields.sql`
+
+The profiles table links both `id` and `user_id` to the same Supabase Auth
+identity and enforces owner-only RLS for reads, inserts, and updates. It stores
+the account's XP, derived level, achievements, preferences, and complete
+FocusMate snapshot. Existing local profiles are never automatically imported
+or merged; each cloud account uses a separate browser-local namespace, and
+signing into that same account on another device restores its cloud snapshot.
+XP, level, and achievements are mirrored from the snapshot by a database
+trigger. The owner can still edit their own snapshot, so this is cross-device
+continuity rather than a tamper-resistant rewards ledger.
+
+Deploy `supabase/functions/username-pin` with JWT verification disabled because
+login and signup requests are unauthenticated:
+
+```bash
+supabase functions deploy username-pin --no-verify-jwt
+```
+
+The Edge Function needs the platform-provided `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`, plus a private
+`FOCUSMATE_PIN_PEPPER` of at least 32 characters. Configure the pepper as a
+server-side Edge Function secret; never put it in `.env`, a `VITE_` variable,
+the repository, or client code. The function stores salted PBKDF2 hashes of
+PINs and applies database-backed login/signup rate limits. Supabase Auth still
+backs the returned account session; new accounts use a non-deliverable
+internal `.invalid` address as the Auth identifier. No email is used for
+username/PIN login or shown as an account credential in the app.
+
+Existing Supabase email/password users can use the one-time migration option.
+Their current email/password is sent to the Edge Function over HTTPS to verify
+ownership; the existing email is retained, their Auth password is replaced by
+a PIN-derived bridge credential, and the existing profile row is preserved.
+This migration has not been tested against a live Supabase project here.
+Forgotten PIN recovery currently requires an administrator-assisted reset.
+
+The profile row is protected by owner-only RLS. Cloud profile snapshots are
+also owner-writable JSON, which enables cross-device continuity but is not a
+server-authoritative rewards ledger: a technically capable signed-in user can
+tamper with their own XP or session history. The app does not provide realtime
+rooms, friends, or a global leaderboard. Apply and test migrations and Auth
+settings in the Supabase project before enabling cloud users. Configure only
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel; do not add
+server-side Edge Function secrets to the frontend project.
 
 Camera signals are heuristic estimates from face and pose landmarks. The
 looking-away indicator uses head-turn asymmetry as a proxy; it does not

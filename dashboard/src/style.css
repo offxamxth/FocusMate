@@ -689,6 +689,8 @@ html[data-theme='light'] .welcome-page { background: linear-gradient(180deg, #ed
 .insight-list span { color: var(--muted); font-size: 10px; line-height: 1.55; }
 .auth-form { gap: 13px; }
 .auth-form > label { gap: 6px; }
+.auth-language { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); font-size: 10px; }
+.auth-language select { max-width: 145px; min-height: 32px; padding-block: 4px; }
 .auth-input-wrap { min-width: 0; min-height: 43px; display: flex; align-items: center; gap: 9px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-strong); color: var(--muted); }
 .auth-input-wrap:focus-within { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(168,240,208,.12); }
 .auth-input-wrap > svg { flex: 0 0 auto; color: var(--muted); }
@@ -702,6 +704,7 @@ html[data-theme='light'] .welcome-page { background: linear-gradient(180deg, #ed
 .auth-switch button { padding: 2px; border: 0; background: transparent; color: var(--mint); font-weight: 700; cursor: pointer; }
 .auth-link { justify-self: end; min-height: 34px; padding: 5px 2px; border: 0; background: transparent; color: var(--mint); font-size: 10px; cursor: pointer; }
 .auth-form .auth-link { margin-top: -10px; }
+.auth-reset-help { margin: -4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
 .auth-message, .cloud-profile-note { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--quiet); color: var(--soft); font-size: 10px; line-height: 1.55; }
 .auth-local-link { width: 100%; justify-content: center; }
 .cloud-profile-note { margin: 0 0 3px; }

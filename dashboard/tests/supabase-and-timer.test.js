@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { createClient } from '@supabase/supabase-js';
 import {
   authErrorMessage,
   localIdentityForAuthUser,
   supabase,
   supabaseConfigured,
+  supabaseConfigurationIssue,
   updatePrivateProfile,
   validCloudUsername,
 } from '../src/lib/supabase.js';
@@ -23,11 +25,50 @@ test('Supabase auth validation and account-local storage identities are bounded'
   assert.throws(() => localIdentityForAuthUser('not-a-user-id'), /invalid ID/);
 });
 
-test('authentication errors are mapped without exposing credentials', () => {
-  assert.match(authErrorMessage(new Error('Invalid login credentials')), /Incorrect email or password/);
-  assert.match(authErrorMessage(new Error('Email not confirmed')), /confirm your email/);
+test('Supabase configuration requires the project URL and a public key, never a secret key', () => {
+  assert.match(supabaseConfigurationIssue('', ''), /VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY/);
+  assert.match(
+    supabaseConfigurationIssue('https://qdvxfpzoychtgfenfjrs.supabase.co', ''),
+    /VITE_SUPABASE_PUBLISHABLE_KEY/,
+  );
+  assert.match(
+    supabaseConfigurationIssue('https://qdvxfpzoychtgfenfjrs.supabase.co', 'sb_secret_do_not_use'),
+    /never use a Supabase secret or service-role key/,
+  );
+  const serviceRolePayload = btoa(JSON.stringify({ role: 'service_role' }));
+  assert.match(
+    supabaseConfigurationIssue(
+      'https://qdvxfpzoychtgfenfjrs.supabase.co',
+      `header.${serviceRolePayload}.signature`,
+    ),
+    /never use a Supabase secret or service-role key/,
+  );
+  assert.match(
+    supabaseConfigurationIssue(
+      'https://qdvxfpzoychtgfenfjrs.supabase.co',
+      'sb_publishable_replace_with_your_project_key',
+    ),
+    /replace the example value/,
+  );
+  assert.match(
+    supabaseConfigurationIssue('http://not-local.example', 'sb_publishable_public-test'),
+    /must use HTTPS/,
+  );
+  assert.equal(
+    supabaseConfigurationIssue('https://qdvxfpzoychtgfenfjrs.supabase.co', 'sb_publishable_public-test'),
+    '',
+  );
+  assert.doesNotThrow(() => createClient(
+    'https://qdvxfpzoychtgfenfjrs.supabase.co',
+    'sb_publishable_public-test',
+  ));
+});
+
+test('authentication errors do not expose legacy email or password details', () => {
+  assert.match(authErrorMessage(new Error('Invalid login credentials')), /Authentication could not be completed/);
+  assert.match(authErrorMessage(new Error('Email not confirmed')), /Authentication could not be completed/);
   assert.match(authErrorMessage(new Error('Failed to fetch')), /Network error/);
-  assert.match(authErrorMessage(new Error('User password is too short')), /stronger password/);
+  assert.match(authErrorMessage(new Error('User password is too short')), /Authentication could not be completed/);
 });
 
 test('cloud profile updates whitelist profile and preference fields, never XP or identity', async () => {
@@ -40,7 +81,7 @@ test('cloud profile updates whitelist profile and preference fields, never XP or
       return this;
     },
     eq(column, value) {
-      assert.equal(column, 'id');
+      assert.equal(column, 'user_id');
       matchedUserId = value;
       return this;
     },
@@ -76,8 +117,18 @@ test('cloud profile updates whitelist profile and preference fields, never XP or
     study_style: 'quiet',
     time_format: '24-hour',
     session_preferences: { daily_goal_minutes: 90 },
+    preferences: {
+      daily_goal_minutes: 90,
+      study_goal_type: 'coding',
+      theme: 'dark',
+      study_style: 'quiet',
+      time_format: '24-hour',
+    },
   });
-  assert.doesNotMatch(selectedColumns, /xp|password/i);
+  assert.match(selectedColumns, /user_id/);
+  assert.doesNotMatch(selectedColumns, /password/i);
+  assert.equal(Object.hasOwn(updatePayload, 'xp'), false);
+  assert.equal(Object.hasOwn(updatePayload, 'user_id'), false);
   assert.equal(updated.id, 'user-a-id');
 });
 
@@ -94,6 +145,26 @@ test('profile database migration restricts private access to the authenticated o
   assert.doesNotMatch(sql, /using\s*\(\s*true\s*\)/i);
   assert.doesNotMatch(sql, /\bservice[_ -]?role\b|\bsecret[_ -]?key\b/i);
   assert.doesNotMatch(sql, /\bxp\s+(?:integer|bigint|numeric)|\blevel\s+(?:integer|bigint)|session_history/i);
+});
+
+test('cloud profile migration adds owner-bound data fields and preserves RLS isolation', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261004160000_profile_cloud_fields.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /add column if not exists user_id uuid/i);
+  assert.match(sql, /foreign key \(user_id\) references auth\.users \(id\) on delete cascade/i);
+  assert.match(sql, /check \(id = user_id\)/i);
+  assert.match(sql, /add column if not exists xp bigint/i);
+  assert.match(sql, /add column if not exists level bigint/i);
+  assert.match(sql, /add column if not exists achievements jsonb/i);
+  assert.match(sql, /add column if not exists preferences jsonb/i);
+  assert.match(sql, /create policy "Users can read their own profile"[\s\S]*?auth\.uid\(\)\) = user_id/i);
+  assert.match(sql, /create policy "Users can create their own profile"[\s\S]*?auth\.uid\(\)\) = user_id and id = user_id/i);
+  assert.match(sql, /create policy "Users can update their own profile"[\s\S]*?auth\.uid\(\)\) = user_id/i);
+  assert.match(sql, /grant update \([\s\S]*?preferences,[\s\S]*?app_data\s*\)/i);
+  assert.doesNotMatch(sql, /using\s*\(\s*true\s*\)/i);
+  assert.doesNotMatch(sql, /\bsb_secret_[A-Za-z0-9_-]{12,}|\bservice[_ -]?role\s*key/i);
 });
 
 test('timer completion guard permits one completion and safely ignores blocked audio', async () => {

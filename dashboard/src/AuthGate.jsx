@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ArrowUpRight, Eye, EyeOff, LockKeyhole, Mail, UserRound } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUpRight, Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-react';
 import { api } from './local-api.js';
 import {
   authErrorMessage,
@@ -7,27 +7,31 @@ import {
   localIdentityForAuthUser,
   supabase,
   supabaseConfigured,
+  supabaseConfigurationError,
   validCloudUsername,
 } from './lib/supabase.js';
+import { authenticateWithUsernamePin, validatePinAccount } from './pin-auth.js';
+import { browserLanguage, supportedLanguages, translate } from './i18n.js';
+
+function accountLanguage() {
+  const saved = localStorage.getItem('focusmate-language');
+  return supportedLanguages.includes(saved) ? saved : browserLanguage();
+}
 
 function profileForLocalApp(profile) {
-  const defaults = {
-    language: 'system',
-    focus_monitoring: true,
-    posture_alerts: true,
-    mood_checkins: true,
-    session_chimes: false,
-    session_length_minutes: 25,
-    daily_goal_minutes: 60,
-  };
   return {
     theme: profile.theme,
     study_style: profile.study_style,
     study_goal_type: profile.study_goal,
     time_format: profile.time_format,
-    ...defaults,
+    ...(profile.preferences || {}),
     ...(profile.session_preferences || {}),
   };
+}
+
+function isProfileSnapshot(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length > 0;
 }
 
 export default function AuthGate({ children }) {
@@ -38,9 +42,6 @@ export default function AuthGate({ children }) {
   const [profileAttempt, setProfileAttempt] = useState(0);
   const [profileError, setProfileError] = useState('');
   const [localMode, setLocalMode] = useState(!supabaseConfigured);
-  const [recoveryMode, setRecoveryMode] = useState(
-    () => new URLSearchParams(window.location.search).get('recovery') === '1',
-  );
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -48,10 +49,8 @@ export default function AuthGate({ children }) {
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
       setSession(nextSession);
-      setProfile(null);
+      if (event === 'SIGNED_OUT') setProfile(null);
       setProfileError('');
-      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
-      else if (event === 'SIGNED_OUT') setRecoveryMode(false);
     });
     supabase.auth.getSession()
       .then(({ data, error }) => {
@@ -59,9 +58,6 @@ export default function AuthGate({ children }) {
         if (error) setProfileError(authErrorMessage(error));
         setSession(data?.session || null);
         setAuthLoading(false);
-        if (!data?.session && new URLSearchParams(window.location.search).get('recovery') === '1') {
-          setProfileError('This recovery link is invalid or expired. Request a new password reset link.');
-        }
       })
       .catch((error) => {
         if (active) {
@@ -90,21 +86,30 @@ export default function AuthGate({ children }) {
           name: row.display_name || 'Focus friend',
         }),
       });
-      const sessionPreferences = profileForLocalApp(row);
+      const snapshotExists = isProfileSnapshot(row.app_data);
+      const sourceProfile = snapshotExists ? row.app_data : local.profile;
       const nextProfile = {
-        ...local.profile,
-        player_name: row.display_name || local.profile.player_name,
-        username: row.username,
+        ...sourceProfile,
+        username: storageUsername,
+        player_name: row.display_name || sourceProfile.player_name || local.profile.player_name,
         session_preferences: {
           ...local.profile.session_preferences,
-          ...sessionPreferences,
+          ...(sourceProfile.session_preferences || {}),
+          ...profileForLocalApp(row),
         },
       };
       await api(`/api/state?username=${encodeURIComponent(storageUsername)}`, {
         method: 'PUT',
         body: JSON.stringify({ profile: nextProfile }),
       });
-      if (active) setProfile({ ...row, storageUsername });
+      if (!snapshotExists) {
+        await supabase
+          .from('profiles')
+          .update({ app_data: nextProfile })
+          .eq('user_id', session.user.id)
+          .throwOnError();
+      }
+      if (active) setProfile({ ...row, app_data: nextProfile, storageUsername });
     };
     load()
       .catch((error) => {
@@ -118,12 +123,46 @@ export default function AuthGate({ children }) {
     };
   }, [session?.user?.id, profileAttempt]);
 
+  const syncedSnapshot = useRef('');
+  useEffect(() => {
+    if (!supabase || !session?.user?.id || !profile?.storageUsername) return undefined;
+    let timeout;
+    let active = true;
+    const handleProfileUpdate = (event) => {
+      if (event.detail?.username !== profile.storageUsername || !event.detail.profile) return;
+      const snapshot = JSON.stringify(event.detail.profile);
+      if (snapshot === syncedSnapshot.current) return;
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(async () => {
+        try {
+          await supabase
+            .from('profiles')
+            .update({ app_data: event.detail.profile })
+            .eq('user_id', session.user.id)
+            .throwOnError();
+          if (active) syncedSnapshot.current = snapshot;
+        } catch (error) {
+          if (!active) return;
+          window.dispatchEvent(new CustomEvent('focusmate:cloud-sync-error', {
+            detail: { message: authErrorMessage(error) },
+          }));
+        }
+      }, 1200);
+    };
+    syncedSnapshot.current = JSON.stringify(profile.app_data || {});
+    window.addEventListener('focusmate:profile-updated', handleProfileUpdate);
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+      window.removeEventListener('focusmate:profile-updated', handleProfileUpdate);
+    };
+  }, [session?.user?.id, profile?.storageUsername]);
+
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
     setSession(null);
     setProfile(null);
-    setRecoveryMode(false);
   };
 
   if (!supabaseConfigured || localMode) {
@@ -131,6 +170,7 @@ export default function AuthGate({ children }) {
       account: null,
       onCloudSignOut: null,
       onCloudLogin: supabaseConfigured ? () => setLocalMode(false) : null,
+      cloudConfigurationError: supabaseConfigurationError,
     });
   }
 
@@ -138,42 +178,19 @@ export default function AuthGate({ children }) {
     return (
       <main className="boot-screen" role="status">
         <span className="brand-mark">f<span>✳</span></span>
-        <span>Loading your FocusMate session…</span>
+        <span>{translate(accountLanguage(), 'auth.loading')}</span>
       </main>
-    );
-  }
-
-  if (recoveryMode) {
-    return (
-      <AuthScreen
-        mode="recovery"
-        initialError={profileError}
-        onBack={() => {
-          setRecoveryMode(false);
-          setProfileError('');
-          window.history.replaceState({}, '', '/');
-        }}
-        onPasswordUpdated={async () => {
-          setRecoveryMode(false);
-          setProfileError('');
-          window.history.replaceState({}, '', '/');
-          if (session) setProfileLoading(true);
-        }}
-      />
     );
   }
 
   if (!session) {
     return (
       <AuthScreen
-        mode="auth"
         initialError={profileError}
         onLocal={() => setLocalMode(true)}
         onSignedIn={(nextSession) => {
           setProfileError('');
           setSession(nextSession);
-          setRecoveryMode(false);
-          window.history.replaceState({}, '', '/');
         }}
       />
     );
@@ -183,7 +200,7 @@ export default function AuthGate({ children }) {
     return (
       <main className="boot-screen" role="status">
         <span className="brand-mark">f<span>✳</span></span>
-        <span>Loading your FocusMate profile…</span>
+        <span>{translate(accountLanguage(), 'auth.loadingProfile')}</span>
       </main>
     );
   }
@@ -192,13 +209,13 @@ export default function AuthGate({ children }) {
     return (
       <main className="welcome-page">
         <section className="welcome-form" role="alert">
-          <div className="welcome-kicker">CLOUD PROFILE UNAVAILABLE</div>
-          <h1>Your account is safe.</h1>
-          <p>{profileError || 'FocusMate could not load your private profile. Your local study data has not been changed.'}</p>
-          <button className="primary-button" onClick={() => setProfileAttempt((attempt) => attempt + 1)}>Try again</button>
-          <button className="outline-button" onClick={() => signOut().catch((error) => setProfileError(authErrorMessage(error)))}>Sign out</button>
-          <small className="privacy-note">Your existing browser-local profiles remain available from local sign-in.</small>
-          <button className="text-button" onClick={() => setLocalMode(true)}>Continue with a local profile</button>
+          <div className="welcome-kicker">{translate(accountLanguage(), 'auth.profileUnavailable')}</div>
+          <h1>{translate(accountLanguage(), 'auth.accountSafe')}</h1>
+          <p>{profileError || translate(accountLanguage(), 'auth.profileLoadError')}</p>
+          <button className="primary-button" onClick={() => setProfileAttempt((attempt) => attempt + 1)}>{translate(accountLanguage(), 'auth.tryAgain')}</button>
+          <button className="outline-button" onClick={() => signOut().catch((error) => setProfileError(authErrorMessage(error)))}>{translate(accountLanguage(), 'auth.logOut')}</button>
+          <small className="privacy-note">{translate(accountLanguage(), 'auth.localPreserved')}</small>
+          <button className="text-button" onClick={() => setLocalMode(true)}>{translate(accountLanguage(), 'auth.useLocal')}</button>
         </section>
       </main>
     );
@@ -210,7 +227,6 @@ export default function AuthGate({ children }) {
       username: profile.username,
       displayName: profile.display_name,
       storageUsername: profile.storageUsername,
-      email: session.user.email || '',
       profile,
     },
     onCloudSignOut: signOut,
@@ -218,213 +234,147 @@ export default function AuthGate({ children }) {
   });
 }
 
-function AuthScreen({ mode, initialError = '', onSignedIn, onLocal, onBack, onPasswordUpdated }) {
-  const [view, setView] = useState(mode === 'recovery' ? 'new-password' : 'login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
+function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
+  const [view, setView] = useState('login');
   const [username, setUsername] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [showPin, setShowPin] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirmationPending, setConfirmationPending] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState(initialError);
+  const [language, setLanguage] = useState(accountLanguage);
   const signup = view === 'signup';
-  const isRecovery = mode === 'recovery' || view === 'new-password';
+  const migrating = view === 'migrate';
+  const t = (key, values) => translate(language, `auth.${key}`, values);
 
   const submit = async (event) => {
     event.preventDefault();
     setMessage('');
     setError('');
-    if (busy) return;
-
-    const normalizedEmail = email.trim();
-    if (view !== 'new-password' && !normalizedEmail) {
-      setError('Please enter your email.');
+    const action = signup ? 'signup' : migrating ? 'migrate' : 'login';
+    const validationError = validatePinAccount({ username, displayName, pin, action });
+    if (validationError) {
+      setError(validationError === 'Please enter your username.'
+        ? t('usernameRequired')
+        : validationError === 'Please enter your display name.'
+          ? t('displayNameRequired')
+          : t('pinInvalid'));
       return;
     }
-    if (view !== 'new-password' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      setError('Please enter a valid email address.');
+    if (username.trim() && !validCloudUsername(username)) {
+      setError(t('usernameInvalid'));
       return;
     }
-    if (view === 'reset') {
-      setBusy(true);
-      try {
-        const { error: resetError } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-          redirectTo: `${window.location.origin}/?recovery=1`,
-        });
-        if (resetError) throw resetError;
-        setMessage('If an account matches that address, a password reset link will be sent.');
-      } catch (resetError) {
-        setError(authErrorMessage(resetError));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    if (signup) {
-      if (!displayName.trim()) {
-        setError('Please enter your display name.');
-        return;
-      }
-      if (!validCloudUsername(username)) {
-        setError('Username must be 1–32 letters, numbers, dots, dashes, or underscores.');
-        return;
-      }
-      if (password.length < 8) {
-        setError('Choose a password with at least 8 characters.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
-        return;
-      }
-    } else if (view === 'new-password') {
-      if (password.length < 8) {
-        setError('Choose a password with at least 8 characters.');
-        return;
-      }
-      if (password !== confirmPassword) {
-        setError('Passwords do not match.');
-        return;
-      }
-    } else if (!password) {
-      setError('Please enter your password.');
+    if (migrating && (!email.trim() || !currentPassword)) {
+      setError(t('migrationCredentialsRequired'));
       return;
     }
 
     setBusy(true);
     try {
-      if (view === 'new-password') {
-        const { error: updateError } = await supabase.auth.updateUser({ password });
-        if (updateError) throw updateError;
-        setMessage('Your password has been updated.');
-        await onPasswordUpdated();
-        return;
-      }
-      if (signup) {
-        const { data, error: signupError } = await supabase.auth.signUp({
-          email: normalizedEmail,
-          password,
-          options: {
-            data: {
-              username: username.trim().toLowerCase(),
-              display_name: displayName.trim().slice(0, 80),
-            },
-            emailRedirectTo: window.location.origin,
-          },
-        });
-        if (signupError) throw signupError;
-        if (!data.session) {
-          setConfirmationPending(true);
-          setMessage('Account created. Check your email to confirm your account before signing in.');
-        } else {
-          onSignedIn(data.session);
-        }
-      } else {
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
-          email: normalizedEmail,
-          password,
-        });
-        if (signInError) throw signInError;
-        onSignedIn(data.session);
-      }
+      const nextSession = await authenticateWithUsernamePin(supabase, {
+        action,
+        username,
+        displayName,
+        language,
+        email,
+        currentPassword,
+        pin,
+      });
+      onSignedIn(nextSession);
+      setPin('');
     } catch (authError) {
-      setError(authErrorMessage(authError));
+      const message = authErrorMessage(authError);
+      const isNetworkError = /network|fetch|connection|timeout/i.test(message);
+      setError(isNetworkError
+        ? t('networkError')
+        : /unavailable/i.test(message)
+          ? t('usernameUnavailable')
+          : migrating && /does not have a focusmate profile/i.test(message)
+            ? t('migrationProfileMissing')
+            : signup
+              ? t('requestFailure')
+              : t('incorrectCredentials'));
     } finally {
+      setPin('');
+      setCurrentPassword('');
       setBusy(false);
     }
   };
 
-  const resendConfirmation = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      const { error: resendError } = await supabase.auth.resend({ type: 'signup', email: email.trim() });
-      if (resendError) throw resendError;
-      setMessage('If confirmation is still required, a new email will be sent.');
-    } catch (resendError) {
-      setError(authErrorMessage(resendError));
-    } finally {
-      setBusy(false);
-    }
+  const selectLanguage = (event) => {
+    const nextLanguage = event.target.value;
+    setLanguage(nextLanguage);
+    if (nextLanguage === 'system') localStorage.removeItem('focusmate-language');
+    else localStorage.setItem('focusmate-language', nextLanguage);
+    document.documentElement.lang = nextLanguage === 'system' ? browserLanguage() : nextLanguage;
+    document.documentElement.dir = textDirection(nextLanguage);
   };
-
-  const heading = isRecovery
-    ? 'Choose a new password'
-    : view === 'reset'
-      ? 'Reset your password'
-      : signup
-        ? 'Create your account'
-        : 'Welcome back';
-  const description = isRecovery
-    ? 'Use a new password to secure your FocusMate account.'
-    : view === 'reset'
-      ? 'Enter your account email and we’ll send a secure reset link if an account matches.'
-      : signup
-        ? 'A calm space for your next study session.'
-        : 'Sign in to continue building your study rhythm.';
 
   return (
-    <main className="welcome-page auth-page">
+    <main className="welcome-page auth-page" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <section className="welcome-art">
         <span className="orbit orbit-one" />
         <span className="orbit orbit-two" />
         <span className="welcome-cross">✳</span>
         <div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div>
-        <p>Focus better. Study smarter.</p>
-        <div className="welcome-art-meta"><span>YOUR STUDY SPACE</span><span>PROGRESS, NOT PERFECTION</span></div>
+        <p>{t('tagline')}</p>
+        <div className="welcome-art-meta"><span>{t('studySpace')}</span><span>{t('progressNotPerfection')}</span></div>
       </section>
       <form className="welcome-form auth-form" onSubmit={submit} noValidate>
-        <div className="welcome-kicker">FOCUSMATE ACCOUNT</div>
-        <h1>{heading}</h1>
-        <p>{description}</p>
-        {!isRecovery && view !== 'reset' && (
-          <label>Email
-            <span className="auth-input-wrap"><Mail size={16} aria-hidden="true" /><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></span>
-          </label>
+        <div className="auth-language">
+          <label htmlFor="auth-language">{translate(language, 'preferences.language')}</label>
+          <select id="auth-language" value={language} onChange={selectLanguage}>
+            {supportedLanguages.map((code) => (
+              <option key={code} value={code}>{translate(language, `language.${code}`)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="welcome-kicker">{t('accountLabel')}</div>
+        <h1>{signup ? t('createTitle') : migrating ? t('migrateTitle') : t('welcome')}</h1>
+        <p>{signup ? t('createDescription') : migrating ? t('migrateDescription') : t('loginDescription')}</p>
+        {migrating && (
+          <>
+            <label>{t('existingEmail')}
+              <span className="auth-input-wrap"><span aria-hidden="true">@</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></span>
+            </label>
+            <label>{t('existingPassword')}
+              <span className="auth-input-wrap"><LockKeyhole size={16} aria-hidden="true" /><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></span>
+            </label>
+          </>
         )}
         {signup && (
-          <>
-            <label>Display name
-              <span className="auth-input-wrap"><UserRound size={16} aria-hidden="true" /><input autoComplete="name" maxLength="80" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></span>
-            </label>
-            <label>Username
-              <span className="auth-input-wrap"><span aria-hidden="true">@</span><input autoComplete="username" maxLength="32" value={username} onChange={(event) => setUsername(event.target.value)} required /></span>
-            </label>
-          </>
+          <label>{t('displayName')}
+            <span className="auth-input-wrap"><UserRound size={16} aria-hidden="true" /><input autoComplete="name" maxLength="80" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></span>
+          </label>
         )}
-        {view !== 'reset' && (
-          <>
-            <label>{isRecovery ? 'New password' : 'Password'}
-              <span className="auth-input-wrap"><LockKeyhole size={16} aria-hidden="true" /><input type={showPassword ? 'text' : 'password'} autoComplete={signup || isRecovery ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} required /><button type="button" className="password-visibility" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span>
-            </label>
-            {(signup || isRecovery) && <label>Confirm password
-              <span className="auth-input-wrap"><LockKeyhole size={16} aria-hidden="true" /><input type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></span>
-            </label>}
-          </>
-        )}
+        <label>{migrating ? t('migrationUsername') : t('username')}
+          <span className="auth-input-wrap"><span aria-hidden="true">@</span><input autoComplete="username" maxLength="32" value={username} onChange={(event) => setUsername(event.target.value)} required={!migrating} /></span>
+          {migrating && <small className="field-hint">{t('migrationUsernameHelp')}</small>}
+        </label>
+        <label>{t('pin')}
+          <span className="auth-input-wrap"><LockKeyhole size={16} aria-hidden="true" /><input type={showPin ? 'text' : 'password'} inputMode="numeric" pattern="[0-9]{6}" autoComplete="off" value={pin} onChange={(event) => setPin(event.target.value)} aria-describedby="pin-help" required /><button type="button" className="password-visibility" aria-label={showPin ? t('hidePin') : t('showPin')} onClick={() => setShowPin((visible) => !visible)}>{showPin ? <EyeOff size={17} /> : <Eye size={17} />}</button></span>
+          <small id="pin-help" className="field-hint">{t('pinHelp')}</small>
+        </label>
         {error && <div className="form-error" role="alert">{error}</div>}
         {message && <div className="auth-message" role="status" aria-live="polite">{message}</div>}
-        {confirmationPending && <button type="button" className="text-button auth-link" disabled={busy} onClick={resendConfirmation}>Resend confirmation email</button>}
         <button className="primary-button" type="submit" disabled={busy}>
-          {busy ? 'Please wait…' : isRecovery ? 'Update password' : view === 'reset' ? 'Send reset link' : signup ? 'Create account' : 'Log in'}
+          {busy ? t('pleaseWait') : signup ? t('createAccount') : migrating ? t('migrateAccount') : t('logIn')}
           {!busy && <ArrowUpRight size={17} />}
         </button>
-        {view === 'login' && <button type="button" className="text-button auth-link" onClick={() => { setView('reset'); setError(''); setMessage(''); }}>Forgot password?</button>}
-        {!isRecovery && view !== 'reset' && (
-          <p className="auth-switch">
-            {signup ? 'Already have an account?' : 'New to FocusMate?'}
-            <button type="button" onClick={() => { setView(signup ? 'login' : 'signup'); setError(''); setMessage(''); }}>
-              {signup ? 'Log in' : 'Create an account'}
-            </button>
-          </p>
-        )}
-        {view === 'reset' && <button type="button" className="text-button auth-link" onClick={() => { setView('login'); setError(''); setMessage(''); }}>Back to log in</button>}
-        {isRecovery && <button type="button" className="text-button auth-link" onClick={onBack}>Back to log in</button>}
-        {onLocal && <button type="button" className="outline-button auth-local-link" onClick={onLocal}>Use an existing local profile</button>}
-        <small className="privacy-note"><LockKeyhole size={14} /> Passwords are handled by Supabase Auth, never saved in FocusMate profiles.</small>
+        <p className="auth-switch">
+          {migrating ? t('alreadyMigrated') : signup ? t('haveAccount') : t('newToFocusMate')}
+          <button type="button" onClick={() => { setView(migrating || signup ? 'login' : 'signup'); setError(''); setMessage(''); setPin(''); setCurrentPassword(''); }}>
+            {migrating || signup ? t('logIn') : t('createAccount')}
+          </button>
+        </p>
+        {!signup && !migrating && <button className="text-button auth-migrate-link" type="button" onClick={() => { setView('migrate'); setError(''); }}>{t('migrateExisting')}</button>}
+        <p className="auth-reset-help">{migrating ? t('migrationPrivacy') : t('contactAdmin')}</p>
+        {onLocal && <button type="button" className="outline-button auth-local-link" onClick={onLocal}>{t('useLocal')}</button>}
+        <small className="privacy-note"><LockKeyhole size={14} /> {t('pinSecurity')}</small>
       </form>
     </main>
   );

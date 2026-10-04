@@ -197,6 +197,11 @@ function writeProfile(username, profile) {
     username,
   };
   localStorage.setItem(`${PROFILE_PREFIX}${username}`, JSON.stringify(value));
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('focusmate:profile-updated', {
+      detail: { username, profile: value },
+    }));
+  }
   return value;
 }
 
