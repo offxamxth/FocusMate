@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { authenticateWithUsernamePin, validatePinAccount } from '../src/pin-auth.js';
+import {
+  authenticateWithUsernamePin,
+  isUsernameUnavailableMessage,
+  validatePinAccount,
+} from '../src/pin-auth.js';
 import { achievementCatalog } from '../src/achievement-data.js';
 import { supportedLanguages, translate, translateAchievement } from '../src/i18n.js';
 
@@ -20,6 +24,13 @@ test('PIN validation requires a username and signup display name', () => {
   assert.equal(validatePinAccount({ username: ' ', pin: '123456', action: 'login' }), 'Please enter your username.');
   assert.equal(validatePinAccount({ username: 'reader', displayName: ' ', pin: '123456', action: 'signup' }), 'Please enter your display name.');
   assert.equal(validatePinAccount({ username: '', pin: '123456', action: 'migrate' }), '');
+});
+
+test('only the explicit username-conflict response is treated as username unavailable', () => {
+  assert.equal(isUsernameUnavailableMessage('That username is unavailable. Choose another username.'), true);
+  assert.equal(isUsernameUnavailableMessage('Account creation is temporarily unavailable. Please try again later.'), false);
+  assert.equal(isUsernameUnavailableMessage('Account creation is temporarily limited. Please try again later.'), false);
+  assert.equal(isUsernameUnavailableMessage('Database service unavailable.'), false);
 });
 
 test('username/PIN auth sends the PIN only to the auth function and installs its session', async () => {
@@ -176,6 +187,11 @@ test('username/PIN function logs sanitized error details and missing setting nam
     source,
     /console\.error\(\s*(?:body|pin|currentPassword|serviceRoleKey|publishableKey|pinPepper)\b/i,
   );
+  assert.match(source, /async function usernameIsRegistered\(username: string\)/);
+  assert.match(source, /const \{ data, error \} = await admin!\.rpc\(\s*"find_focusmate_user_by_username"/);
+  assert.match(source, /if \(await usernameIsRegistered\(username\)\) \{\s*return response\(409/);
+  assert.match(source, /if \(error\) throw error;\s*throw new Error\("Supabase Auth did not return a user during signup\."\)/);
+  assert.match(source, /Account creation is temporarily limited/);
 });
 
 test('Focus Score UI has been removed while local legacy-data sanitizing stays private to storage', async () => {

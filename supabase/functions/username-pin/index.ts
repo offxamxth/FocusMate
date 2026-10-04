@@ -190,6 +190,15 @@ async function issueSession(email: string, password: string) {
   };
 }
 
+async function usernameIsRegistered(username: string) {
+  const { data, error } = await admin!.rpc(
+    "find_focusmate_user_by_username",
+    { p_username: username },
+  );
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
 async function login(request: Request, username: string, pin: string) {
   const keys = await rateLimitKeys(request, username);
   if (!await consumeRateLimit(keys)) return response(429, { error: genericLoginMessage }, request);
@@ -295,6 +304,10 @@ async function migrate(
 }
 
 async function signup(request: Request, username: string, displayName: string, pin: string, language: string) {
+  if (await usernameIsRegistered(username)) {
+    return response(409, { error: "That username is unavailable. Choose another username." }, request);
+  }
+
   const email = await authBridgeEmail(username);
   const initialPasswordBytes = crypto.getRandomValues(new Uint8Array(32));
   const initialPassword = hex(initialPasswordBytes);
@@ -308,7 +321,11 @@ async function signup(request: Request, username: string, displayName: string, p
     },
   });
   if (error || !data.user) {
-    return response(409, { error: "That username is unavailable. Choose another username." }, request);
+    if (await usernameIsRegistered(username)) {
+      return response(409, { error: "That username is unavailable. Choose another username." }, request);
+    }
+    if (error) throw error;
+    throw new Error("Supabase Auth did not return a user during signup.");
   }
 
   const userId = data.user.id;
@@ -392,7 +409,7 @@ Deno.serve(async (request: Request) => {
     const language = supportedLanguages.has(body?.language) ? body.language : "en";
     const signupSourceKey = await hmacHex(`signup-source:${request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"}`);
     if (!await consumeRateLimit([signupSourceKey], 8, 60 * 60)) {
-      return response(429, { error: "Account creation is temporarily unavailable. Please try again later." }, request);
+      return response(429, { error: "Account creation is temporarily limited. Please try again later." }, request);
     }
     return await signup(request, username, displayName, pin, language);
   } catch (error) {

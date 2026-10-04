@@ -7,6 +7,11 @@ export function validatePinAccount({ username, displayName = '', pin, action }) 
   return '';
 }
 
+export function isUsernameUnavailableMessage(message) {
+  return String(message || '').trim().toLowerCase()
+    === 'that username is unavailable. choose another username.';
+}
+
 export async function authenticateWithUsernamePin(client, credentials) {
   const { data, error } = await client.functions.invoke('username-pin', {
     body: {

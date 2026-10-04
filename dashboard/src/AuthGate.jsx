@@ -10,7 +10,11 @@ import {
   supabaseConfigurationError,
   validCloudUsername,
 } from './lib/supabase.js';
-import { authenticateWithUsernamePin, validatePinAccount } from './pin-auth.js';
+import {
+  authenticateWithUsernamePin,
+  isUsernameUnavailableMessage,
+  validatePinAccount,
+} from './pin-auth.js';
 import { browserLanguage, supportedLanguages, translate } from './i18n.js';
 
 function accountLanguage() {
@@ -291,7 +295,7 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
       const isNetworkError = /network|fetch|connection|timeout/i.test(message);
       setError(isNetworkError
         ? t('networkError')
-        : /unavailable/i.test(message)
+        : isUsernameUnavailableMessage(message)
           ? t('usernameUnavailable')
           : migrating && /does not have a focusmate profile/i.test(message)
             ? t('migrationProfileMissing')
