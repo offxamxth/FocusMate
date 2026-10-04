@@ -1,3 +1,5 @@
+import { localDateKey } from './progress-data.js';
+
 export const achievementCatalog = [
   [
     "first_step",
@@ -330,9 +332,10 @@ export const achievementCatalog = [
 function sessionDays(profile) {
   return [
     ...new Set(
-      profile.session_history
+      [...profile.session_history, ...(profile.focus_timer_history || [])]
+        .filter((item) => Number(item.seconds) > 0)
         .map((item) => String(item.date || "").slice(0, 10))
-        .filter(Boolean),
+        .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)),
     ),
   ]
     .sort()
@@ -341,30 +344,27 @@ function sessionDays(profile) {
 
 function consecutiveStudyDays(days) {
   if (!days.length) return 0;
-  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-  const mostRecent = new Date(`${days[0]}T00:00:00Z`);
-  if ((today - mostRecent) / 86_400_000 > 1) return 0;
-  let streak = 1;
-  for (let index = 1; index < days.length; index += 1) {
-    const previous = new Date(`${days[index - 1]}T00:00:00Z`);
-    const current = new Date(`${days[index]}T00:00:00Z`);
-    if ((previous - current) / 86_400_000 !== 1) break;
+  const latest = days[0];
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (latest !== localDateKey() && latest !== localDateKey(yesterday)) return 0;
+  let streak = 0;
+  let cursor = new Date(`${latest}T12:00:00`);
+  const daySet = new Set(days);
+  while (daySet.has(localDateKey(cursor))) {
     streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
   }
   return streak;
 }
 
 function sessionsThisWeek(sessions) {
   const now = new Date();
-  const weekStart = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
-  weekStart.setUTCDate(
-    weekStart.getUTCDate() - ((weekStart.getUTCDay() + 6) % 7),
-  );
+  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
   return sessions.filter(
     (item) =>
-      new Date(`${String(item.date).slice(0, 10)}T00:00:00Z`) >= weekStart,
+      new Date(`${String(item.date).slice(0, 10)}T12:00:00`) >= weekStart,
   ).length;
 }
 
@@ -566,7 +566,9 @@ export function awardEligibleAchievements(profile, context) {
     hasNewAwards = false;
     for (const [id, title, description, xp] of achievementCatalog) {
       if (
-        profile.achievements.some((item) => item.id === id) ||
+        profile.achievements.some((item) =>
+          typeof item === 'string' ? item === id : item?.id === id,
+        ) ||
         !isEligible(id, profile, context)
       )
         continue;
@@ -584,4 +586,90 @@ export function awardEligibleAchievements(profile, context) {
     }
   }
   return added;
+}
+
+export function achievementProgress(profile, id) {
+  const sessions = Array.isArray(profile.session_history)
+    ? profile.session_history.filter((item) => item && Number(item.seconds) > 0)
+    : [];
+  const days = sessionDays({
+    session_history: sessions,
+    focus_timer_history: Array.isArray(profile.focus_timer_history) ? profile.focus_timer_history : [],
+  });
+  const totalMinutes = Math.floor(
+    (Number(profile.total_study_seconds || 0) + Number(profile.focus_timer_total_seconds || 0)) / 60,
+  );
+  const longestSessionMinutes = Math.floor(
+    sessions.reduce((longest, item) => Math.max(longest, Number(item.seconds) || 0), 0) / 60,
+  );
+  const noPostureAlerts = sessions.filter((item) => item.pose_detected && Number(item.posture_alerts) === 0).length;
+  const noDistanceAlerts = sessions.filter((item) => item.face_detected && Number(item.distance_alerts) === 0).length;
+  const noLookingAwayAlerts = sessions.filter((item) => item.face_detected && Number(item.looking_away_alerts) === 0).length;
+  const cleanSessions = sessions.filter((item) =>
+    item.pose_detected
+    && item.face_detected
+    && Number(item.posture_alerts) === 0
+    && Number(item.distance_alerts) === 0
+    && Number(item.looking_away_alerts) === 0
+    && Number(item.fatigue_signals) === 0,
+  ).length;
+  const goalSessions = sessions.filter((item) => Boolean(item.goal)).length;
+  const uniqueGoals = new Set(sessions.map((item) => item.goal).filter(Boolean)).size;
+  const reflectionCount = Array.isArray(profile.session_reflections) ? profile.session_reflections.length : 0;
+  const records = {
+    first_step: [sessions.length, 1, 'sessions'],
+    locked_in: [sessions.length, 1, 'camera sessions'],
+    time_keeper: [longestSessionMinutes, 15, 'min in one session'],
+    half_hour_hero: [longestSessionMinutes, 30, 'min in one session'],
+    hour_of_focus: [longestSessionMinutes, 60, 'min in one session'],
+    ninety_club: [longestSessionMinutes, 90, 'min in one session'],
+    perfect_estimate: [longestSessionMinutes, 120, 'min in one session'],
+    getting_started: [sessions.length, 3, 'sessions'],
+    focused_mind: [sessions.length, 5, 'sessions'],
+    consistency: [sessions.length, 10, 'sessions'],
+    dedicated_student: [sessions.length, 25, 'sessions'],
+    focus_master: [sessions.length, 50, 'sessions'],
+    two_day_streak: [consecutiveStudyDays(days), 2, 'consecutive days'],
+    three_day_streak: [consecutiveStudyDays(days), 3, 'consecutive days'],
+    seven_day_streak: [consecutiveStudyDays(days), 7, 'consecutive days'],
+    fourteen_day_streak: [consecutiveStudyDays(days), 14, 'consecutive days'],
+    thirty_day_streak: [consecutiveStudyDays(days), 30, 'consecutive days'],
+    posture_pro: [noPostureAlerts, 1, 'sessions without posture alerts'],
+    sit_smart: [noPostureAlerts, 3, 'sessions without posture alerts'],
+    perfect_distance: [noDistanceAlerts, 1, 'sessions without distance alerts'],
+    eyes_forward: [noLookingAwayAlerts, 1, 'sessions without head-turn alerts'],
+    steady_session: [sessions.filter((item) => item.pose_detected && item.face_detected && !Number(item.posture_alerts) && !Number(item.distance_alerts)).length, 1, 'sessions'],
+    clean_session: [cleanSessions, 1, 'sessions without recorded alerts'],
+    sharp_start: [sessions.length === 1 && goalSessions ? 1 : 0, 1, 'first session with a goal'],
+    level_up: [days.length, 2, 'study days'],
+    getting_better: [sessions.filter((item) => item.goal_outcome).length, 3, 'goal check-ins'],
+    focused_week: [sessionsThisWeek(sessions), 5, 'sessions this week'],
+    study_routine: [Math.min(sessions.length, 10), 10, 'sessions'],
+    persistence: [totalMinutes, 120, 'study min'],
+    time_builder: [totalMinutes, 300, 'study min'],
+    study_veteran: [totalMinutes, 600, 'study min'],
+    twenty_hour_club: [totalMinutes, 1200, 'study min'],
+    fifty_hour_club: [totalMinutes, 3000, 'study min'],
+    quick_focus: [longestSessionMinutes, 10, 'min in one session'],
+    long_haul: [longestSessionMinutes, 45, 'min in one session'],
+    keep_going: [sessions.length, 5, 'sessions'],
+    no_quit: [sessions.length, 3, 'sessions'],
+    routine_builder: [days.length, 7, 'study days'],
+    xp_collector: [Number(profile.total_xp || 0), 500, 'XP'],
+    xp_hunter: [Number(profile.total_xp || 0), 1000, 'XP'],
+    xp_champion: [Number(profile.total_xp || 0), 5000, 'XP'],
+    explorer: [uniqueGoals, 1, 'unique study goals'],
+    goal_getter: [goalSessions, 1, 'sessions with a goal'],
+    self_aware: [reflectionCount, 1, 'reflections'],
+    reflection_reader: [reflectionCount, 1, 'reflections'],
+    focusmate_legend: [profile.achievements.length, 20, 'achievements'],
+  };
+  const record = records[id];
+  if (!record) return null;
+  const [value, target, unit] = record;
+  return {
+    current: Math.min(target, Math.max(0, Number(value) || 0)),
+    target,
+    unit,
+  };
 }

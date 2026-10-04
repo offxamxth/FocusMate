@@ -9,9 +9,9 @@ const WASM_URL =
 const LEFT_EYE = [33, 160, 158, 133, 153, 144];
 const RIGHT_EYE = [362, 385, 387, 263, 373, 380];
 const HEAD_TURN_THRESHOLD = 0.24;
-const SHOULDER_VISIBILITY = 0.4;
+const SHOULDER_VISIBILITY = 0.25;
 const SHOULDER_DETECT_FRAMES = 2;
-const SHOULDER_LOSS_FRAMES = 3;
+const SHOULDER_LOSS_FRAMES = 5;
 const SHOULDER_TILT_ACTIVATE_DEGREES = 17;
 const SHOULDER_TILT_CLEAR_DEGREES = 12;
 const SLOUCH_ANGLE_DEGREES = 52;
@@ -29,6 +29,9 @@ export async function createVisionLandmarkers() {
       baseOptions: { modelAssetPath: "/models/pose_landmarker.task" },
       runningMode: "VIDEO",
       numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.4,
+      minTrackingConfidence: 0.4,
     });
     return { face, pose };
   } catch (error) {
@@ -58,6 +61,9 @@ function eyeAspectRatio(landmarks, indices, width, height) {
 }
 
 function visible(point, threshold = SHOULDER_VISIBILITY) {
+  const confidence = Number.isFinite(point?.visibility)
+    ? point.visibility
+    : point?.presence;
   return Boolean(
     point &&
       Number.isFinite(point.x) &&
@@ -66,8 +72,7 @@ function visible(point, threshold = SHOULDER_VISIBILITY) {
       point.x <= 1 &&
       point.y >= 0 &&
       point.y <= 1 &&
-      (point.visibility == null || point.visibility >= threshold) &&
-      (point.presence == null || point.presence >= threshold),
+      (!Number.isFinite(confidence) || confidence >= threshold),
   );
 }
 
@@ -94,6 +99,38 @@ function stableShoulderAvailability(state, currentlyVisible) {
 
   state.shoulderAvailability = availability;
   return availability;
+}
+
+function logShoulderDiagnostics(
+  state,
+  status,
+  leftShoulder,
+  rightShoulder,
+  valid,
+) {
+  if (!import.meta.env?.DEV || state.lastLoggedShoulderStatus === status) return;
+  state.lastLoggedShoulderStatus = status;
+  console.info("[FocusMate camera] Shoulder detection changed", {
+    cameraState: "active",
+    postureState: status,
+    leftShoulder: leftShoulder
+      ? {
+          x: leftShoulder.x,
+          y: leftShoulder.y,
+          visibility: leftShoulder.visibility,
+        }
+      : null,
+    rightShoulder: rightShoulder
+      ? {
+          x: rightShoulder.x,
+          y: rightShoulder.y,
+          visibility: rightShoulder.visibility,
+        }
+      : null,
+    validShoulderFrame: valid,
+    consecutiveValidFrames: state.shoulderAvailability.detectedFrames,
+    consecutiveMissingFrames: state.shoulderAvailability.missingFrames,
+  });
 }
 
 function stableSignal(state, name, active, frames = 2) {
@@ -138,7 +175,7 @@ export function detectMetrics(detectors, video, timestamp) {
   const eyesClosed = ear !== null && ear < 0.2;
 
   const poseResult = detectors.pose.detectForVideo(video, timestamp);
-  const pose = poseResult.poseLandmarks?.[0];
+  const pose = poseResult.landmarks?.[0];
   const leftShoulder = pose?.[11];
   const rightShoulder = pose?.[12];
   const shouldersVisible = visible(leftShoulder) && visible(rightShoulder);
@@ -163,6 +200,13 @@ export function detectMetrics(detectors, video, timestamp) {
   }
   const shoulderAvailability = stableShoulderAvailability(
     postureState,
+    shouldersVisible,
+  );
+  logShoulderDiagnostics(
+    postureState,
+    shoulderAvailability.status,
+    leftShoulder,
+    rightShoulder,
     shouldersVisible,
   );
   const poseDetected = shoulderAvailability.status === "detected";

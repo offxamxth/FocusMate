@@ -1,12 +1,14 @@
 import { awardEligibleAchievements } from './achievement-data.js';
+import { localDateKey, refreshDailyQuests } from './progress-data.js';
 
 const PROFILE_PREFIX = 'focusmate-profile:';
 const LIVE_PREFIX = 'focusmate-live:';
-const PROFILE_SCHEMA_VERSION = 1;
+const PROFILE_SCHEMA_VERSION = 3;
 const cameraSessions = new Map();
 
 function normalizeUsername(value) {
   const username = String(value || '').trim().replace(/^@/, '').toLowerCase();
+  if (/^cloud_[a-f0-9]{32}$/.test(username)) return username;
   return /^[a-z0-9_.-]{1,32}$/.test(username) ? username : '';
 }
 
@@ -21,7 +23,7 @@ function profileStorageKey(username) {
 }
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateKey();
 }
 
 function freshProfile(username, name = 'Focus friend') {
@@ -45,13 +47,20 @@ function freshProfile(username, name = 'Focus friend') {
     focus_timer_date: today(),
     focus_timer_total_seconds: 0,
     focus_timer_history: [],
+    daily_quests: null,
+    daily_quest_claims: [],
     session_preferences: {
       focus_monitoring: true,
       posture_alerts: true,
       mood_checkins: true,
       session_chimes: false,
       session_length_minutes: 25,
-      daily_goal_minutes: 180,
+      daily_goal_minutes: 60,
+      language: 'system',
+      theme: 'system',
+      study_style: 'normal',
+      study_goal_type: 'self-study',
+      time_format: 'system',
     },
   };
 }
@@ -70,26 +79,73 @@ function normalizeXp(value) {
   return Number.isFinite(xp) && xp > 0 ? Math.floor(xp) : 0;
 }
 
+function normalizeSeconds(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+}
+
 export function levelForXp(value) {
   return Math.floor(normalizeXp(value) / 100) + 1;
 }
 
 function readProfile(username) {
   const defaults = freshProfile(username);
+  const storageKey = profileStorageKey(username) || `${PROFILE_PREFIX}${username}`;
+  const storedValue = localStorage.getItem(storageKey);
+  let storedProfile = {};
+  if (storedValue !== null) {
+    try {
+      storedProfile = JSON.parse(storedValue);
+    } catch {
+      throw new Error('FocusMate could not read this saved profile. The original data was left untouched.');
+    }
+    if (!storedProfile || typeof storedProfile !== 'object' || Array.isArray(storedProfile)) {
+      throw new Error('FocusMate could not read this saved profile. The original data was left untouched.');
+    }
+  }
   const profile = {
     ...defaults,
-    ...read(profileStorageKey(username) || `${PROFILE_PREFIX}${username}`, {}),
+    ...storedProfile,
     schema_version: PROFILE_SCHEMA_VERSION,
     username,
   };
   profile.total_xp = normalizeXp(profile.total_xp);
   profile.sessions_completed = normalizeXp(profile.sessions_completed);
   profile.total_study_seconds = normalizeXp(profile.total_study_seconds);
+  profile.focus_timer_seconds_today = normalizeSeconds(profile.focus_timer_seconds_today);
+  profile.focus_timer_total_seconds = normalizeSeconds(profile.focus_timer_total_seconds);
   profile.session_preferences = { ...defaults.session_preferences, ...profile.session_preferences };
+  const preferences = profile.session_preferences;
+  const sessionLength = Number(preferences.session_length_minutes);
+  const dailyGoal = Number(preferences.daily_goal_minutes);
+  preferences.session_length_minutes = Number.isFinite(sessionLength) && sessionLength >= 15 && sessionLength <= 120
+    ? Math.round(sessionLength)
+    : defaults.session_preferences.session_length_minutes;
+  preferences.daily_goal_minutes = Number.isFinite(dailyGoal) && dailyGoal >= 30 && dailyGoal <= 720
+    ? Math.round(dailyGoal)
+    : defaults.session_preferences.daily_goal_minutes;
+  if (!['system', 'en', 'es', 'fr', 'ar', 'hi'].includes(preferences.language)) {
+    preferences.language = defaults.session_preferences.language;
+  }
+  if (!['system', 'light', 'dark'].includes(preferences.theme)) {
+    preferences.theme = defaults.session_preferences.theme;
+  }
+  if (!['quiet', 'normal', 'competitive'].includes(preferences.study_style)) {
+    preferences.study_style = defaults.session_preferences.study_style;
+  }
+  if (!['school', 'university', 'self-study', 'reading', 'coding', 'exam-preparation'].includes(preferences.study_goal_type)) {
+    preferences.study_goal_type = defaults.session_preferences.study_goal_type;
+  }
+  if (!['system', '12-hour', '24-hour'].includes(preferences.time_format)) {
+    preferences.time_format = defaults.session_preferences.time_format;
+  }
   profile.session_wellbeing = { ...defaults.session_wellbeing, ...profile.session_wellbeing };
-  for (const key of ['session_history', 'session_reflections', 'achievements', 'quest_claims', 'tasks', 'focus_timer_history']) {
+  for (const key of ['session_history', 'session_reflections', 'achievements', 'quest_claims', 'tasks', 'focus_timer_history', 'daily_quest_claims']) {
     if (!Array.isArray(profile[key])) profile[key] = [];
   }
+  profile.focus_timer_history = profile.focus_timer_history
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({ ...item, seconds: normalizeSeconds(item.seconds) }));
   const achievementIds = new Set();
   profile.achievements = profile.achievements.filter((item) => {
     if (typeof item === 'string') {
@@ -123,6 +179,16 @@ function readProfile(username) {
   return profile;
 }
 
+function updateDailyQuests(profile, live = {}) {
+  const previousClaims = profile.daily_quest_claims?.length || 0;
+  const result = refreshDailyQuests(profile, live, today());
+  if ((profile.daily_quest_claims?.length || 0) > previousClaims) {
+    awardEligibleAchievements(profile, { type: 'xp' });
+    result.changed = true;
+  }
+  return result.profile;
+}
+
 function writeProfile(username, profile) {
   const value = {
     ...profile,
@@ -139,6 +205,14 @@ function readLive(username) {
   const live = read(key, {});
   if (Object.hasOwn(live, 'focus_score')) {
     delete live.focus_score;
+    localStorage.setItem(key, JSON.stringify(live));
+  }
+  if (live.session_active && !cameraSessions.has(username)) {
+    live.session_active = false;
+    live.session_completed = false;
+    live.session_interrupted = true;
+    live.posture_alert_pending = false;
+    live.status = 'Camera session interrupted after reload';
     localStorage.setItem(key, JSON.stringify(live));
   }
   return live;
@@ -191,6 +265,7 @@ function finishCameraSession(username) {
   const runtime = cameraSessions.get(username);
   const live = readLive(username);
   if (!live.session_active) throw new Error('There is no active camera session to stop.');
+  if (!runtime) throw new Error('This camera session was interrupted and cannot be completed after reloading.');
   const now = Date.now();
   const elapsed = Math.max(0, (now - runtime.startedAt) / 1000);
   const profile = readProfile(username);
@@ -246,6 +321,7 @@ function finishCameraSession(username) {
   const reflection = reflectionFor(live);
   profile.session_reflections.push(reflection);
   profile.session_reflections = profile.session_reflections.slice(-100);
+  updateDailyQuests(profile, live);
   writeProfile(username, profile);
   writeLive(username, live);
   cameraSessions.delete(username);
@@ -339,17 +415,25 @@ export async function api(path, options = {}) {
     if (!username) throw new Error('Enter a username using letters, numbers, dots, dashes, or underscores.');
     const existing = Boolean(profileStorageKey(username));
     if (!existing && !name) throw new Error('Enter your name to create a new profile.');
-    const profile = existing
-      ? writeProfile(username, readProfile(username))
-      : writeProfile(username, freshProfile(username, name));
+    const profile = existing ? readProfile(username) : freshProfile(username, name);
+    updateDailyQuests(profile, readLive(username));
+    writeProfile(username, profile);
     return { profile, live: readLive(username), existing };
   }
 
   const username = requireUsername(url);
-  if (url.pathname === '/api/state' && method === 'GET') return { profile: readProfile(username), live: readLive(username) };
+  if (url.pathname === '/api/state' && method === 'GET') {
+    const profile = readProfile(username);
+    const live = readLive(username);
+    updateDailyQuests(profile, live);
+    writeProfile(username, profile);
+    return { profile, live };
+  }
   if (url.pathname === '/api/state' && method === 'PUT') {
     if (!body.profile || typeof body.profile !== 'object') throw new Error('Profile data is required.');
-    const profile = writeProfile(username, { ...readProfile(username), ...body.profile, username });
+    const profile = { ...readProfile(username), ...body.profile, username };
+    updateDailyQuests(profile, readLive(username));
+    writeProfile(username, profile);
     return { profile };
   }
   if (url.pathname === '/api/timer/credit' && method === 'POST') {
@@ -363,20 +447,15 @@ export async function api(path, options = {}) {
     else profile.focus_timer_history.push({ date: today(), seconds });
     profile.focus_timer_history = profile.focus_timer_history.slice(-730);
     awardEligibleAchievements(profile, { type: 'study_time' });
+    updateDailyQuests(profile, readLive(username));
     return { ok: true, profile: writeProfile(username, profile) };
   }
   if (url.pathname === '/api/quests/claim' && method === 'POST') {
-    const rewards = { focus_sprint: 30, recharge: 15, hydration: 10, reflection: 10 };
-    const reward = rewards[body.quest_id];
-    if (!reward) throw new Error('Unknown quest.');
     const profile = readProfile(username);
-    const live = readLive(username);
-    const completedToday = profile.session_history.filter((item) => String(item.date || '').slice(0, 10) === today()).reduce((total, item) => total + Number(item.seconds || 0), 0);
-    if (body.quest_id === 'focus_sprint' && profile.focus_timer_seconds_today + completedToday < 900 && !(live.session_active && live.session_seconds >= 900)) throw new Error('Complete a 15-minute study session to unlock this quest.');
-    if (profile.quest_claims.some((item) => item.quest_id === body.quest_id && item.date === today())) throw new Error('This quest has already been claimed today.');
-    profile.total_xp += reward;
-    profile.quest_claims.push({ quest_id: body.quest_id, date: today(), xp: reward, claimed_at: new Date().toISOString() });
-    awardEligibleAchievements(profile, { type: 'xp' });
+    updateDailyQuests(profile, readLive(username));
+    const quest = profile.daily_quests.quests.find((item) => item.id === body.quest_id);
+    if (!quest) throw new Error('This quest is not part of today’s set.');
+    if (!quest.completed || !quest.rewardClaimed) throw new Error('Complete this quest using recorded study activity to earn its reward.');
     return { ok: true, profile: writeProfile(username, profile) };
   }
   if (url.pathname === '/api/session/reflection' && method === 'POST') {

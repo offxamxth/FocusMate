@@ -12,6 +12,9 @@ globalThis.localStorage = {
 globalThis.window = { location: { origin: 'http://localhost' } };
 
 const { api, levelForXp } = await import('../src/local-api.js');
+const { dailyFocusSeconds, generateDailyQuests, localDateKey, studyStreak } = await import('../src/progress-data.js');
+const { browserLanguage, textDirection, translate } = await import('../src/i18n.js');
+const { achievementProgress, awardEligibleAchievements } = await import('../src/achievement-data.js');
 const { detectMetrics } = await import('../src/vision.js');
 
 function post(path, body) {
@@ -63,6 +66,63 @@ test('a legacy profile key with different casing cannot be registered as a new p
   assert.equal(signedIn.profile.total_xp, 90);
 });
 
+test('malformed profile data is preserved and reported instead of replaced with defaults', async () => {
+  values.clear();
+  const rawProfile = '{"player_name":';
+  values.set('focusmate-profile:brokenprofile', rawProfile);
+
+  await assert.rejects(
+    api('/api/state?username=brokenprofile'),
+    /original data was left untouched/,
+  );
+  assert.equal(values.get('focusmate-profile:brokenprofile'), rawProfile);
+});
+
+test('personalization preferences persist independently for each profile', async () => {
+  values.clear();
+  await post('/api/login', { username: 'settingsone', name: 'Settings One' });
+  await api('/api/state?username=settingsone', {
+    method: 'PUT',
+    body: JSON.stringify({
+      profile: {
+        session_preferences: {
+          theme: 'light',
+          study_style: 'quiet',
+          study_goal_type: 'coding',
+          time_format: '24-hour',
+        },
+      },
+    }),
+  });
+  await post('/api/login', { username: 'settingstwo', name: 'Settings Two' });
+
+  const firstAgain = await post('/api/login', { username: 'settingsone', name: 'Ignored' });
+  const second = await api('/api/state?username=settingstwo');
+  assert.equal(firstAgain.profile.session_preferences.theme, 'light');
+  assert.equal(firstAgain.profile.session_preferences.study_style, 'quiet');
+  assert.equal(firstAgain.profile.session_preferences.study_goal_type, 'coding');
+  assert.equal(firstAgain.profile.session_preferences.time_format, '24-hour');
+  assert.equal(second.profile.session_preferences.theme, 'system');
+  assert.equal(second.profile.session_preferences.study_style, 'normal');
+});
+
+test('a camera session left active by a reload is interrupted without creating a false completed session', async () => {
+  values.clear();
+  await post('/api/login', { username: 'reloadcamera', name: 'Reload Camera' });
+  await api('/api/webcam/start?username=reloadcamera', {
+    method: 'POST',
+    body: JSON.stringify({ subject: 'Coding', goal: 'Keep the session safe' }),
+  });
+
+  const reloadedApi = await import(`../src/local-api.js?reload=${Date.now()}`);
+  const restored = await reloadedApi.api('/api/state?username=reloadcamera');
+  assert.equal(restored.live.session_active, false);
+  assert.equal(restored.live.session_interrupted, true);
+  assert.equal(restored.live.session_completed, false);
+  assert.equal(restored.profile.session_history.length, 0);
+  assert.match(restored.live.status, /interrupted after reload/);
+});
+
 test('XP, levels, sessions, and achievements persist per username across sign-ins', async () => {
   values.clear();
   await post('/api/login', { username: 'testuser1', name: 'First User' });
@@ -84,13 +144,13 @@ test('XP, levels, sessions, and achievements persist per username across sign-in
     body: JSON.stringify({ profile: { player_name: 'First User' } }),
   });
 
-  const hydrationClaim = await post('/api/quests/claim?username=testuser1', { quest_id: 'hydration' });
-  assert.equal(hydrationClaim.profile.total_xp, 525);
-  assert.equal(hydrationClaim.profile.schema_version, 1);
-  assert.equal(hydrationClaim.profile.achievements.filter((item) => item.id === 'old-achievement').length, 1);
-  assert.ok(hydrationClaim.profile.achievements.some((item) => item.id === 'xp_collector'));
-  assert.equal(levelForXp(hydrationClaim.profile.total_xp), 6);
-  assert.equal(JSON.parse(values.get('focusmate-profile:testuser1')).schema_version, 1);
+  const migrated = (await api('/api/state?username=testuser1')).profile;
+  assert.equal(migrated.total_xp, 490);
+  assert.equal(migrated.schema_version, 3);
+  assert.equal(migrated.achievements.filter((item) => item.id === 'old-achievement').length, 1);
+  assert.equal(migrated.daily_quests.quests.length, 4);
+  assert.equal(levelForXp(migrated.total_xp), 5);
+  assert.equal(JSON.parse(values.get('focusmate-profile:testuser1')).schema_version, 3);
 
   await post('/api/login', { username: 'testuser2', name: 'Second User' });
   await api('/api/state?username=testuser2', {
@@ -99,11 +159,11 @@ test('XP, levels, sessions, and achievements persist per username across sign-in
   });
   const firstAgain = await post('/api/login', { username: 'TESTUSER1', name: 'Replacement Name' });
   assert.equal(firstAgain.existing, true);
-  assert.equal(firstAgain.profile.total_xp, 525);
+  assert.equal(firstAgain.profile.total_xp, 490);
   assert.equal(firstAgain.profile.player_name, 'First User');
   assert.equal(firstAgain.profile.session_history[0].session_id, 'kept-session');
-  assert.ok(firstAgain.profile.achievements.some((item) => item.id === 'xp_collector'));
-  assert.equal(levelForXp(firstAgain.profile.total_xp), 6);
+  assert.ok(firstAgain.profile.achievements.some((item) => item.id === 'old-achievement'));
+  assert.equal(levelForXp(firstAgain.profile.total_xp), 5);
 
   const secondAgain = await post('/api/login', { username: 'testuser2', name: 'Replacement Name' });
   assert.equal(secondAgain.profile.total_xp, 75);
@@ -129,14 +189,130 @@ test('finishing a camera session saves session history, XP, and awards together'
     assert.equal(signedInAgain.profile.session_history.length, 1);
     assert.ok(signedInAgain.profile.total_xp >= 25);
     assert.ok(signedInAgain.profile.achievements.length > 0);
-    assert.equal(
-      signedInAgain.profile.total_xp,
-      stopped.live.focus_challenge_xp + signedInAgain.profile.achievements.reduce((total, item) => total + item.xp, 0),
-    );
+    const sessionXp = signedInAgain.profile.session_history[0].focus_challenge_xp;
+    const questXp = signedInAgain.profile.daily_quest_claims.reduce((total, claim) => total + claim.xp, 0);
+    const achievementXp = signedInAgain.profile.achievements.reduce((total, achievement) => total + achievement.xp, 0);
+    assert.equal(signedInAgain.profile.total_xp, sessionXp + achievementXp + questXp);
     assert.equal(levelForXp(signedInAgain.profile.total_xp), Math.floor(signedInAgain.profile.total_xp / 100) + 1);
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('daily quests are four distinct stable, category-balanced local-day challenges', async () => {
+  values.clear();
+  const first = await post('/api/login', { username: 'questuser', name: 'Quest User' });
+  const today = localDateKey();
+  const quests = first.profile.daily_quests.quests;
+  assert.equal(first.profile.daily_quests.date, today);
+  assert.equal(quests.length, 4);
+  assert.equal(new Set(quests.map((quest) => quest.id)).size, 4);
+  assert.equal(new Set(quests.map((quest) => quest.category)).size, 4);
+  const before = quests.map((quest) => quest.id);
+
+  const afterRefresh = (await api('/api/state?username=questuser')).profile.daily_quests;
+  const afterSignIn = (await post('/api/login', { username: 'QUESTUSER', name: 'Ignored' })).profile.daily_quests;
+  assert.deepEqual(afterRefresh.quests.map((quest) => quest.id), before);
+  assert.deepEqual(afterSignIn.quests.map((quest) => quest.id), before);
+});
+
+test('daily quest rewards are based on actual timer data and are awarded once', async () => {
+  values.clear();
+  const initial = await post('/api/login', { username: 'questreward', name: 'Quest Reward' });
+  const focusQuest = initial.profile.daily_quests.quests.find((quest) => quest.category === 'focus_time');
+  const otherQuestIds = initial.profile.daily_quests.quests.filter((quest) => quest.id !== focusQuest.id).map((quest) => quest.id);
+  const startingXp = initial.profile.total_xp;
+  const seconds = focusQuest.target * 60;
+
+  const credit = await post('/api/timer/credit?username=questreward', { seconds });
+  const earned = credit.profile.daily_quests.quests.find((quest) => quest.id === focusQuest.id);
+  assert.equal(earned.completed, true);
+  assert.equal(earned.rewardClaimed, true);
+  assert.equal(credit.profile.total_xp, startingXp + focusQuest.rewardXP);
+  assert.deepEqual(credit.profile.daily_quests.quests.filter((quest) => quest.id !== focusQuest.id).map((quest) => quest.id), otherQuestIds);
+
+  const nextRead = (await api('/api/state?username=questreward')).profile;
+  assert.equal(nextRead.total_xp, credit.profile.total_xp);
+  assert.equal(nextRead.daily_quest_claims.filter((claim) => claim.quest_id === focusQuest.id && claim.date === localDateKey()).length, 1);
+});
+
+test('daily quest rotation changes by local date and avoids repeating the previous full set', () => {
+  const previous = generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id);
+  const next = generateDailyQuests('rotate-user', '2026-03-11', previous);
+  assert.equal(next.length, 4);
+  assert.notDeepEqual(next.map((quest) => quest.id), previous);
+  assert.notDeepEqual(generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id), next.map((quest) => quest.id));
+});
+
+test('study streak uses recorded local study dates, including timer-only activity', () => {
+  const date = new Date(2026, 2, 10, 12);
+  const profile = {
+    session_history: [{ date: '2026-03-08', seconds: 600 }],
+    focus_timer_history: [{ date: '2026-03-09', seconds: 300 }, { date: '2026-03-10', seconds: 1 }],
+  };
+  assert.equal(studyStreak(profile, date), 3);
+  assert.equal(studyStreak({ ...profile, focus_timer_history: [{ date: '2026-03-07', seconds: 300 }] }, date), 0);
+  assert.equal(studyStreak({ session_history: [], focus_timer_history: [] }, date, 20), 1);
+});
+
+test('malformed saved timer values do not create NaN dashboard statistics', () => {
+  const today = localDateKey();
+  assert.equal(dailyFocusSeconds({
+    focus_timer_date: today,
+    focus_timer_seconds_today: 'not-a-number',
+    session_history: [{ date: today, seconds: 'bad' }],
+  }), 0);
+});
+
+test('language selection supports browser fallback and right-to-left Arabic', () => {
+  assert.equal(browserLanguage(['fr-CA', 'en-US']), 'fr');
+  assert.equal(browserLanguage(['de-DE']), 'en');
+  assert.equal(textDirection('ar'), 'rtl');
+  assert.equal(textDirection('hi'), 'ltr');
+  assert.equal(translate('es', 'quests.focusTitle', { target: 15 }), 'Concéntrate durante 15 minutos');
+});
+
+test('locked achievements show progress calculated only from saved profile activity', () => {
+  const today = localDateKey();
+  const profile = {
+    total_xp: 420,
+    total_study_seconds: 900,
+    focus_timer_total_seconds: 300,
+    sessions_completed: 2,
+    session_history: [
+      { date: today, seconds: 600 },
+      { date: today, seconds: 300 },
+    ],
+    focus_timer_history: [],
+    session_reflections: [],
+    achievements: [],
+  };
+  assert.deepEqual(achievementProgress(profile, 'getting_started'), {
+    current: 2,
+    target: 3,
+    unit: 'sessions',
+  });
+  assert.deepEqual(achievementProgress(profile, 'xp_collector'), {
+    current: 420,
+    target: 500,
+    unit: 'XP',
+  });
+  assert.equal(achievementProgress(profile, 'unknown-achievement'), null);
+});
+
+test('legacy string achievements are not awarded a second time', () => {
+  const profile = {
+    total_xp: 15,
+    sessions_completed: 1,
+    total_study_seconds: 60,
+    session_history: [{ seconds: 60, date: localDateKey() }],
+    session_reflections: [],
+    focus_timer_history: [],
+    achievements: ['first_step'],
+  };
+  const added = awardEligibleAchievements(profile, { type: 'session' });
+  assert.equal(added.some((item) => item.id === 'first_step'), false);
+  assert.equal(profile.total_xp >= 15, true);
 });
 
 function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0.1, shoulderVisibility = 0.9, shoulderPresence = 0.9 } = {}) {
@@ -154,7 +330,7 @@ function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0
   let currentPose = points;
   return {
     face: { detectForVideo: () => ({ faceLandmarks: [face] }) },
-    pose: { detectForVideo: () => ({ poseLandmarks: currentPose ? [currentPose] : [] }) },
+    pose: { detectForVideo: () => ({ landmarks: currentPose ? [currentPose] : [] }) },
     setPose(pose) { currentPose = pose; },
     points,
   };
@@ -189,7 +365,7 @@ test('a sustained, clearly tilted shoulder line is still detected', () => {
   assert.equal(detectMetrics(detectors, video, 2).status, 'Reframe to align shoulders');
 });
 
-test('temporary shoulder landmark loss is smoothed and genuine loss is reported after three frames', () => {
+test('temporary shoulder landmark loss is smoothed and sustained loss is reported after five frames', () => {
   const detectors = visionFixture({ earVisibility: 0.9 });
   detectMetrics(detectors, video, 1);
   const established = detectMetrics(detectors, video, 2);
@@ -207,14 +383,16 @@ test('temporary shoulder landmark loss is smoothed and genuine loss is reported 
   assert.equal(firstMiss.pose_detection_status, 'temporarily-missing');
   assert.equal(firstMiss.status, 'Shoulders temporarily not detected');
   assert.equal(secondMiss.posture, established.posture);
-  const sustainedMiss = detectMetrics(detectors, video, 5);
+  assert.equal(detectMetrics(detectors, video, 5).pose_detection_status, 'temporarily-missing');
+  assert.equal(detectMetrics(detectors, video, 6).pose_detection_status, 'temporarily-missing');
+  const sustainedMiss = detectMetrics(detectors, video, 7);
   assert.equal(sustainedMiss.pose_detected, false);
   assert.equal(sustainedMiss.pose_detection_status, 'missing');
   assert.equal(sustainedMiss.status, 'Reframe to include shoulders');
 
   detectors.setPose(detectors.points);
-  assert.equal(detectMetrics(detectors, video, 6).pose_detection_status, 'missing');
-  assert.equal(detectMetrics(detectors, video, 7).pose_detection_status, 'detected');
+  assert.equal(detectMetrics(detectors, video, 8).pose_detection_status, 'missing');
+  assert.equal(detectMetrics(detectors, video, 9).pose_detection_status, 'detected');
 });
 
 test('transient shoulder loss does not clear an active posture alert', () => {
@@ -222,19 +400,21 @@ test('transient shoulder loss does not clear an active posture alert', () => {
   detectMetrics(detectors, video, 1);
   assert.equal(detectMetrics(detectors, video, 2).status, 'Reframe to align shoulders');
   const missingShoulders = detectors.points.map((point) => ({ ...point }));
-  missingShoulders[11].presence = 0.1;
-  missingShoulders[12].presence = 0.1;
+  missingShoulders[11].visibility = 0.1;
+  missingShoulders[12].visibility = 0.1;
   detectors.setPose(missingShoulders);
   assert.equal(detectMetrics(detectors, video, 3).status, 'Shoulders temporarily not detected');
   assert.equal(detectMetrics(detectors, video, 4).status, 'Shoulders temporarily not detected');
-  assert.equal(detectMetrics(detectors, video, 5).status, 'Reframe to include shoulders');
+  assert.equal(detectMetrics(detectors, video, 5).status, 'Shoulders temporarily not detected');
+  assert.equal(detectMetrics(detectors, video, 6).status, 'Shoulders temporarily not detected');
+  assert.equal(detectMetrics(detectors, video, 7).status, 'Reframe to include shoulders');
   detectors.setPose(detectors.points);
-  detectMetrics(detectors, video, 6);
-  assert.equal(detectMetrics(detectors, video, 7).status, 'Reframe to align shoulders');
+  detectMetrics(detectors, video, 8);
+  assert.equal(detectMetrics(detectors, video, 9).status, 'Reframe to align shoulders');
 });
 
 test('shoulders are checked before warning and confidence and frame bounds are respected', () => {
-  const detectors = visionFixture({ shoulderVisibility: 0.4, shoulderPresence: 0.4 });
+  const detectors = visionFixture({ shoulderVisibility: 0.3, shoulderPresence: 0.1 });
   const first = detectMetrics(detectors, video, 1);
   assert.equal(first.pose_detection_status, 'checking');
   assert.equal(first.status, 'Checking for shoulders');
@@ -246,5 +426,17 @@ test('shoulders are checked before warning and confidence and frame bounds are r
   detectors.setPose(outOfFrame);
   assert.equal(detectMetrics(detectors, video, 3).pose_detected, true);
   assert.equal(detectMetrics(detectors, video, 4).pose_detected, true);
-  assert.equal(detectMetrics(detectors, video, 5).pose_detected, false);
+  assert.equal(detectMetrics(detectors, video, 5).pose_detected, true);
+  assert.equal(detectMetrics(detectors, video, 6).pose_detected, true);
+  assert.equal(detectMetrics(detectors, video, 7).pose_detected, false);
+});
+
+test('PoseLandmarker landmarks result keeps face and distance detection available', () => {
+  const detectors = visionFixture({ earVisibility: 0.9 });
+  const first = detectMetrics(detectors, video, 1);
+  const second = detectMetrics(detectors, video, 2);
+  assert.equal(first.face_detected, true);
+  assert.equal(second.pose_detected, true);
+  assert.equal(second.pose_detection_status, 'detected');
+  assert.equal(second.distance_status, 'Good');
 });

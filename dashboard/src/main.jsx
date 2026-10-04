@@ -1,8 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, levelForXp } from './local-api.js';
-import { achievementCatalog } from './achievement-data.js';
+import { achievementCatalog, achievementProgress } from './achievement-data.js';
+import AuthGate from './AuthGate.jsx';
 import { createVisionLandmarkers, detectMetrics } from './vision.js';
+import { claimTimerCompletion, playSessionCompletionBeep } from './timer-completion.js';
+import { supabase, updatePrivateProfile } from './lib/supabase.js';
+import { dailyFocusSeconds, localDateKey, studyStreak, weekStudyDays } from './progress-data.js';
+import { browserLanguage, supportedLanguages, textDirection, translate } from './i18n.js';
 import ContactPage from './ContactPage.jsx';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
@@ -22,13 +27,6 @@ const pages = [
   { id: 'session-preferences', label: 'Session preferences', group: 'Build good habits', icon: Settings2 },
   { id: 'profile', label: 'Profile & wellbeing', group: 'Build good habits', icon: UserRound },
   { id: 'contact', label: 'Contact Us', group: 'Build good habits', icon: CircleHelp },
-];
-
-const quests = [
-  { id: 'focus_sprint', title: 'The deep-work sprint', description: 'Spend 15 minutes with one task and no distractions.', reward: 30, icon: '◎' },
-  { id: 'recharge', title: 'The recharge break', description: 'Step away, stretch, or rest your eyes for a moment.', reward: 15, icon: '↗' },
-  { id: 'hydration', title: 'A little hydration', description: 'Have a glass of water before your next study block.', reward: 10, icon: '◌' },
-  { id: 'reflection', title: 'A small reflection', description: 'Write one thing that went well today.', reward: 10, icon: '✳' },
 ];
 
 const achievements = achievementCatalog;
@@ -103,12 +101,12 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-function App() {
-  const [username, setUsername] = useState(localStorage.getItem('focusmate-user') || '');
+function FocusMateApp({ account = null, onCloudSignOut = null, onCloudLogin = null }) {
+  const [username, setUsername] = useState(account?.storageUsername || localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
   const [live, setLive] = useState({});
   const [page, setPage] = useState(pageFromLocation);
-  const [loading, setLoading] = useState(Boolean(username));
+  const [loading, setLoading] = useState(Boolean(account?.storageUsername || username));
   const [notice, setNotice] = useState('');
   const [camera, setCamera] = useState(null);
   const [cameraState, setCameraState] = useState(
@@ -118,15 +116,44 @@ function App() {
   const [stream, setStream] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem('focusmate-theme') || 'dark');
+  const language = profile?.session_preferences?.language && profile.session_preferences.language !== 'system'
+    ? profile.session_preferences.language
+    : browserLanguage();
   const videoRef = useRef(null);
   const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
   const postureNoticeRef = useRef('');
 
+  const presentProfile = (value) => account
+    ? { ...value, username: account.username }
+    : value;
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('focusmate-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    const preference = profile?.session_preferences?.theme || 'system';
+    if (preference !== 'system') {
+      setTheme(preference);
+      return undefined;
+    }
+    const media = window.matchMedia?.('(prefers-color-scheme: light)');
+    if (!media) {
+      setTheme('dark');
+      return undefined;
+    }
+    const syncTheme = () => setTheme(media.matches ? 'light' : 'dark');
+    syncTheme();
+    media.addEventListener?.('change', syncTheme);
+    return () => media.removeEventListener?.('change', syncTheme);
+  }, [profile?.username, profile?.session_preferences?.theme]);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dir = textDirection(language);
+  }, [language]);
 
   useEffect(() => {
     const syncPage = () => setPage(pageFromLocation());
@@ -149,7 +176,13 @@ function App() {
     setLoading(true);
     api(`/api/state?username=${encodeURIComponent(username)}`)
       .then((data) => {
-        if (current) { setProfile(data.profile); setLive(data.live); }
+        if (current) {
+          setProfile(presentProfile(data.profile));
+          setLive(data.live);
+          if (data.live.session_interrupted) {
+            setNotice('Your camera session was interrupted by a reload. Only the last recorded session time was kept.');
+          }
+        }
       })
       .catch((error) => {
         if (current) { setNotice(error.message); setUsername(''); localStorage.removeItem('focusmate-user'); }
@@ -163,7 +196,7 @@ function App() {
     let current = true;
     const timer = window.setInterval(() => {
       api(`/api/state?username=${encodeURIComponent(username)}`)
-        .then((data) => { if (current) { setLive(data.live); setProfile(data.profile); } })
+        .then((data) => { if (current) { setLive(data.live); setProfile(presentProfile(data.profile)); } })
         .catch(() => {});
     }, 2200);
     return () => { current = false; window.clearInterval(timer); };
@@ -238,15 +271,35 @@ function App() {
   }, [stream, camera, username]);
 
   const updateProfile = async (change) => {
-    setProfile((current) => current ? { ...current, ...change } : current);
+    setProfile((current) => current ? presentProfile({ ...current, ...change }) : current);
     try {
       await saveProfile(username, change);
-    } catch (error) { setNotice(error.message); }
+      if (account && (Object.hasOwn(change, 'player_name') || Object.hasOwn(change, 'session_preferences'))) {
+        await updatePrivateProfile(supabase, account.id, change);
+      }
+    } catch (error) {
+      setNotice(account
+        ? `Your local changes were saved, but the cloud profile could not be updated: ${error.message}`
+        : error.message);
+    }
   };
 
   const inform = (message) => {
     setNotice(message);
     window.setTimeout(() => setNotice(''), 3600);
+  };
+
+  const toggleTheme = () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+    if (profile) {
+      updateProfile({
+        session_preferences: {
+          ...profile.session_preferences,
+          theme: nextTheme,
+        },
+      });
+    }
   };
 
   useEffect(() => {
@@ -259,7 +312,7 @@ function App() {
   const login = async (name, handle) => {
     const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ name, username: handle }) });
     setUsername(data.profile.username);
-    localStorage.setItem('focusmate-user', data.profile.username);
+    if (!account) localStorage.setItem('focusmate-user', data.profile.username);
     setProfile(data.profile);
     setLive(data.live);
     const destination = window.location.pathname.replace(/\/+$/, '') === '/contact' ? 'contact' : 'overview';
@@ -267,8 +320,25 @@ function App() {
     window.history.replaceState({}, '', destination === 'contact' ? '/contact' : '/#overview');
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (live.session_active) {
+      try {
+        const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
+        setLive(data.live || {});
+      } catch (error) {
+        inform(`The active camera session could not be saved: ${error.message}`);
+        return;
+      }
+    }
     if (stream) stream.getTracks().forEach((track) => track.stop());
+    if (account && onCloudSignOut) {
+      try {
+        await onCloudSignOut();
+      } catch (error) {
+        inform(`You could not be signed out: ${error.message}`);
+      }
+      return;
+    }
     setStream(null); setCamera(null); setProfile(null); setUsername('');
     setCameraState(navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable');
     setCameraError('');
@@ -315,7 +385,7 @@ function App() {
   };
 
   if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>Opening your study space</span></div>;
-  if (!profile) return <Welcome onLogin={login} notice={notice} />;
+  if (!profile) return <Welcome onLogin={login} onCloudLogin={onCloudLogin} notice={notice} />;
 
   const current = pages.find((item) => item.id === page) || pages[0];
   const xp = Number(profile.total_xp || 0);
@@ -327,12 +397,12 @@ function App() {
   };
 
   return (
-    <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
+    <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`} data-study-style={profile.session_preferences?.study_style || 'normal'}>
       <aside className="sidebar">
         <div className="sidebar-top">
           <a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a>
           <div className="sidebar-actions">
-            <button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>
+            <button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={toggleTheme}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
             </button>
             <button className="icon-button collapse-button" aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'} title={collapsed ? 'Expand navigation' : 'Collapse navigation'} onClick={() => setCollapsed((value) => !value)}><ChevronDown size={17} /></button>
@@ -365,20 +435,20 @@ function App() {
       </aside>
 
       <main className="main-area">
-        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label="Switch profile"><LogOut size={18} /></button></div></header>
+        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label="Switch profile"><LogOut size={18} /></button></div></header>
         <PageHeading page={current} profile={profile} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
-        {page === 'overview' && <Overview profile={profile} live={live} onNavigate={changePage} onWater={() => updateProfile({ water_glasses_today: Number(profile.water_glasses_today || 0) + 1 })} />}
+        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} />
         </div>
         {page === 'insights' && <Insights profile={profile} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} />}
-        {page === 'quests' && <Quests profile={profile} onClaim={async (id) => { const data = await api(`/api/quests/claim?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ quest_id: id }) }); setProfile(data.profile); }} />}
+        {page === 'quests' && <Quests profile={profile} language={language} />}
         {page === 'session-preferences' && <Preferences profile={profile} onSave={updateProfile} />}
-        {page === 'profile' && <Profile profile={profile} onSave={updateProfile} onExport={() => downloadProfile(profile)} />}
-        {page === 'contact' && <ContactPage username={username} />}
+        {page === 'profile' && <Profile profile={profile} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
+        {page === 'contact' && <ContactPage username={account?.username || username} />}
         <footer className="page-footer">FocusMate <span>·</span> Progress, not perfection. Be kind to yourself.</footer>
       </main>
       <nav className="mobile-nav" aria-label="Primary navigation">{pages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} title={item.label}><Icon size={19} /><small>{item.label === 'My Progress' ? 'Progress' : item.label.replace(' room', '')}</small></button>; })}</nav>
@@ -386,7 +456,7 @@ function App() {
   );
 }
 
-function Welcome({ onLogin, notice }) {
+function Welcome({ onLogin, onCloudLogin, notice }) {
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [error, setError] = useState(notice || '');
@@ -429,7 +499,7 @@ function Welcome({ onLogin, notice }) {
   };
   const checking = usernameStatus === 'checking';
   const canSubmit = usernameStatus === 'existing' || (usernameStatus === 'available' && Boolean(name.trim()));
-  return <main className="welcome-page"><div className="welcome-art"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span><div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div><p>A quieter place to do your best work.</p><div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>YOUR STUDY SPACE</span></div></div><form className="welcome-form" onSubmit={submit}><div className="welcome-kicker">A FRESH START, AT YOUR PACE</div><h1>Make room for<br />your best work.</h1><p>Sign in with your username, or create a new local profile.</p><label>Username<input autoComplete="username" maxLength="33" value={handle} onChange={(event) => { setHandle(event.target.value); setError(''); }} placeholder="letters, numbers, . _ -" required /></label><div className="username-feedback" aria-live="polite">{checking ? 'Checking username…' : usernameStatus === 'existing' ? 'Welcome back. Your saved profile will be opened.' : usernameStatus === 'available' ? 'This username is available. Add your name to create a profile.' : usernameStatus === 'invalid' ? 'Use 1–32 letters, numbers, dots, dashes, or underscores.' : ''}</div>{usernameStatus === 'available' && <label>Your name<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<button className="primary-button" type="submit" disabled={!canSubmit}>{usernameStatus === 'existing' ? 'Sign in to your profile' : 'Create profile'} <ArrowUpRight size={17} /></button><small className="privacy-note"><LockKeyhole size={14} /> Your profile stays on this computer.</small></form></main>;
+  return <main className="welcome-page"><div className="welcome-art"><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="welcome-cross">✳</span><div className="welcome-wordmark">focus<span>mate</span><i>✳</i></div><p>A quieter place to do your best work.</p><div className="welcome-art-meta"><span>01 / TAKE A BREATH</span><span>YOUR STUDY SPACE</span></div></div><form className="welcome-form" onSubmit={submit}><div className="welcome-kicker">A FRESH START, AT YOUR PACE</div><h1>Make room for<br />your best work.</h1><p>Sign in with your username, or create a new local profile.</p><label>Username<input autoComplete="username" maxLength="33" value={handle} onChange={(event) => { setHandle(event.target.value); setError(''); }} placeholder="letters, numbers, . _ -" required /></label><div className="username-feedback" aria-live="polite">{checking ? 'Checking username…' : usernameStatus === 'existing' ? 'Welcome back. Your saved profile will be opened.' : usernameStatus === 'available' ? 'This username is available. Add your name to create a profile.' : usernameStatus === 'invalid' ? 'Use 1–32 letters, numbers, dots, dashes, or underscores.' : ''}</div>{usernameStatus === 'available' && <label>Your name<input autoComplete="name" maxLength="80" value={name} onChange={(event) => setName(event.target.value)} placeholder="How should we call you?" required /></label>}{error && <div className="form-error" role="alert">{error}</div>}<button className="primary-button" type="submit" disabled={!canSubmit}>{usernameStatus === 'existing' ? 'Sign in to your profile' : 'Create profile'} <ArrowUpRight size={17} /></button>{onCloudLogin && <button className="outline-button auth-local-link" type="button" onClick={onCloudLogin}>Sign in with email</button>}<small className="privacy-note"><LockKeyhole size={14} /> Your profile stays on this computer.</small></form></main>;
 }
 
 function PageHeading({ page, profile }) {
@@ -439,7 +509,7 @@ function PageHeading({ page, profile }) {
     insights: ['MY PROGRESS', 'See how you’re building your rhythm.', 'Review recorded camera signals, study time, and completed sessions.'],
     'session-results': ['SESSION RESULTS', 'A reflection on your session.', 'A short review based only on the final statistics recorded by FocusMate.'],
     achievements: ['ACHIEVEMENTS', 'Small wins add up.', 'Earn badges for showing up, building routines, and reaching your own study milestones.'],
-    quests: ['DAILY QUESTS', 'Tiny wins count.', 'Optional, kind-to-yourself challenges. Claim a quest once per day for a little bonus XP.'],
+    quests: ['DAILY QUESTS', 'Build momentum with real study activity.', 'Four local-day challenges, saved with your profile. Session-only camera challenges are clearly identified.'],
     'session-preferences': ['SESSION PREFERENCES', 'Set your session up your way.', 'Choose how FocusMate monitors, reminds, and supports your study time.'],
     profile: ['YOUR SPACE', 'Make it yours.', 'Your name, wellbeing notes, and saved progress stay in your local FocusMate profile.'],
     contact: ['HELP & SUPPORT', 'Need help? We’re here.', 'Get help with technical problems, report bugs, or share feedback with the FocusMate team.'],
@@ -452,96 +522,160 @@ function Stat({ label, value, note, icon: Icon }) {
   return <div className="stat-card"><div className="stat-top"><span>{label}</span>{Icon && <Icon size={17} />}</div><strong>{value}</strong><small>{note}</small></div>;
 }
 
-function Overview({ profile, live, onNavigate, onWater }) {
+function Overview({ profile, live, language, onNavigate, onSave }) {
+  const now = new Date();
+  const hour = now.getHours();
+  const greetingKey = hour < 12 ? 'dashboard.morning' : hour < 18 ? 'dashboard.afternoon' : 'dashboard.evening';
+  const name = String(profile.player_name || '').trim();
   const xp = Number(profile.total_xp || 0);
   const level = levelForXp(xp);
-  const todayTotal = Number(profile.focus_timer_seconds_today || 0) + Number(live.session_seconds || 0);
-  const target = Number(profile.session_preferences?.daily_goal_minutes || 180) * 60;
-  const nextGoal = profile.session_preferences?.daily_goal_minutes || 180;
-  const quickActions = [
-    { label: 'Focus sprint', detail: 'Start a 25-minute block', onClick: () => onNavigate('focus-room') },
-    { label: 'Hydration', detail: 'Log a glass of water', onClick: onWater },
-    { label: 'Progress', detail: 'Review your session trend', onClick: () => onNavigate('insights') },
-  ];
+  const levelProgress = xp % 100;
+  const goalMinutes = Math.max(1, Number(profile.session_preferences?.daily_goal_minutes || 60));
+  const todaySeconds = dailyFocusSeconds(profile, live, localDateKey(now));
+  const goalPercent = Math.min(100, todaySeconds / (goalMinutes * 60) * 100);
+  const streak = studyStreak(profile, now, live.session_active ? Number(live.session_seconds || 0) : 0);
+  const week = weekStudyDays(profile, now);
+  const unlocked = new Set((profile.achievements || []).map((item) => typeof item === 'string' ? item : item?.id));
+  const achievementCount = achievementCatalog.filter(([id]) => unlocked.has(id)).length;
+  const nextAchievement = achievementCatalog.find(([id]) => !unlocked.has(id));
+  const languageNames = {
+    en: 'English', es: 'Español', fr: 'Français', ar: 'العربية', hi: 'हिन्दी',
+  };
+  const updateGoal = (value) => {
+    const sessionPreferences = { ...profile.session_preferences, daily_goal_minutes: Number(value) };
+    onSave({ session_preferences: sessionPreferences });
+  };
+  const hourCount = Math.floor(todaySeconds / 3600);
+  const minuteCount = Math.floor((todaySeconds % 3600) / 60);
 
   return (
     <div className="page-content">
-      <section className="overview-intro">
+      <section className="overview-intro overview-hero">
         <div>
-          <span className="eyebrow">A GENTLER KIND OF PRODUCTIVITY</span>
-          <h2>One thing at a time.</h2>
-          <p>Your next small step is enough. Choose a task, settle into a focus block, and let progress take care of itself.</p>
-          <div className="feature-pills">
-            <span>Low-pressure plans</span>
-            <span>Gentle momentum</span>
-            <span>Local-first</span>
-          </div>
-          <button className="primary-button" onClick={() => onNavigate('focus-room')}><Focus size={17} /> Start a focus session</button>
-        </div>
-        <div className="intro-meta">
-          <div className="pulse-card">
-            <span>LEVEL {level}</span>
-            <strong>{xp.toLocaleString()}</strong>
-            <small>XP earned</small>
-          </div>
-          <div className="intro-stamp"><span>✳</span><small>YOU’RE RIGHT<br />WHERE YOU NEED<br />TO BE</small></div>
+          <span className="eyebrow">{translate(language, 'dashboard.today')}</span>
+          <h2>{name ? `${translate(language, greetingKey)}, ${name} 👋` : `${translate(language, 'dashboard.welcome')} 👋`}</h2>
+          <p>{translate(language, 'dashboard.heroText')}</p>
+          <button className="primary-button" onClick={() => onNavigate('focus-room')}><Focus size={17} /> {translate(language, 'dashboard.startSession')}</button>
         </div>
       </section>
 
-      <div className="stats-grid">
-        <Stat label="Study streak" value={`${profile.sessions_completed ? Math.max(1, Math.min(30, Number(profile.sessions_completed)) % 8 + 1) : 0} days`} note="Keep showing up for yourself" icon={Flame} />
-        <Stat label="Study sessions" value={Number(profile.sessions_completed || 0)} note="Every session counts" icon={BookOpen} />
-        <Stat label="Focus time today" value={`${Math.floor(todayTotal / 3600)}h ${Math.floor((todayTotal % 3600) / 60)}m`} note={`Daily intention · ${nextGoal} minutes`} icon={Clock3} />
-      </div>
-
-      <div className="quick-actions-grid">
-        {quickActions.map((action) => (
-          <button key={action.label} className="quick-card" onClick={action.onClick}>
-            <span>{action.label}</span>
-            <small>{action.detail}</small>
-          </button>
-        ))}
-      </div>
-
-      <div className="content-columns">
-        <section className="surface-panel daily-panel">
-          <div className="section-heading">
-            <div><span className="eyebrow">A LITTLE MOMENTUM</span><h3>Your daily intention</h3></div>
-            <span className="ring-meter" style={{ '--progress': `${Math.min(100, Math.round((todayTotal / target) * 100))}%` }}><b>{Math.min(100, Math.round((todayTotal / target) * 100))}%</b></span>
-          </div>
-          <div className="progress-track"><span style={{ width: `${Math.min(100, (todayTotal / target) * 100)}%` }} /></div>
-          <div className="progress-caption"><span>{Math.floor(todayTotal / 60)} min focused</span><span>{nextGoal} min daily goal</span></div>
-          <div className="water-row">
-            <div className="water-icon"><Droplets size={18} /></div>
-            <div><strong>A small check-in</strong><small>{Number(profile.water_glasses_today || 0)} glasses of water today</small></div>
-            <button className="outline-button" onClick={onWater}><Plus size={15} /> Glass of water</button>
-          </div>
+      <div className="overview-metrics">
+        <section className="surface-panel overview-goal">
+          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.goal')}</span><h3>{hourCount ? `${hourCount}h ` : ''}{minuteCount} / {goalMinutes} min</h3></div><span className="ring-meter" style={{ '--progress': `${goalPercent}%` }}><b>{Math.round(goalPercent)}%</b></span></div>
+          <div className="progress-track" role="progressbar" aria-label={translate(language, 'dashboard.goal')} aria-valuemin="0" aria-valuemax={goalMinutes} aria-valuenow={Math.min(goalMinutes, Math.floor(todaySeconds / 60))}><span style={{ width: `${goalPercent}%` }} /></div>
+          <label className="goal-select">{translate(language, 'dashboard.setGoal')}<select value={goalMinutes} onChange={(event) => updateGoal(event.target.value)} aria-label={translate(language, 'dashboard.setGoal')}>
+            {[30, 60, 90, 120, ...( [30, 60, 90, 120].includes(goalMinutes) ? [] : [goalMinutes] )].sort((a, b) => a - b).map((minutes) => <option value={minutes} key={minutes}>{minutes} min</option>)}
+          </select></label>
         </section>
-
-        <section className="surface-panel buddy-panel">
-          <span className="eyebrow">YOUR STUDY BUDDY</span>
-          <h3>{live.session_active ? 'Here with you.' : 'Ready when you are.'}</h3>
-          <p>{live.session_active ? 'Your camera session is active. Keep your attention on the work in front of you.' : 'Webcam monitoring is optional. Your timer and task list work without it.'}</p>
-          <div className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? 'Live session' : 'Camera off'}</div>
-          <button className="text-button" onClick={() => onNavigate('focus-room')}>Go to focus room <ArrowUpRight size={15} /></button>
+        <Stat label={translate(language, 'dashboard.studyTime')} value={`${hourCount ? `${hourCount}h ` : ''}${minuteCount}m`} note={live.session_active ? 'Active camera session included' : 'Completed timer and camera study time'} icon={Clock3} />
+        <Stat label={translate(language, 'dashboard.focusScore')} value={translate(language, 'dashboard.noScore')} note={translate(language, 'dashboard.noScoreHelp')} icon={Activity} />
+        <Stat label={translate(language, 'dashboard.studyStreak')} value={`${streak} ${streak === 1 ? 'day' : 'days'}`} note={translate(language, 'dashboard.streakNote')} icon={Flame} />
+        <section className="surface-panel overview-xp">
+          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.xpLevel')}</span><h3>Level {level}</h3></div><strong>{xp.toLocaleString(language)} XP</strong></div>
+          <div className="progress-track" role="progressbar" aria-label={`Level ${level} progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={levelProgress}><span style={{ width: `${levelProgress}%` }} /></div>
+          <small>{levelProgress} / 100 XP · {100 - levelProgress} {translate(language, 'dashboard.toNextLevel')}</small>
+        </section>
+        <section className="surface-panel overview-achievements">
+          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.achievements')}</span><h3>{achievementCount} / {achievementCatalog.length} {translate(language, 'dashboard.unlocked')}</h3></div><Trophy size={19} /></div>
+          {nextAchievement ? <p>Next: {nextAchievement[1]}</p> : <p>{translate(language, 'quests.completedAll')}</p>}
+          <button className="text-button" onClick={() => onNavigate('achievements')}>{translate(language, 'dashboard.viewAchievements')} <ArrowUpRight size={15} /></button>
         </section>
       </div>
 
-      <div className="recharge-strip">
-        <div><span className="eyebrow">A FEW WAYS TO RECHARGE</span><h3>Rest belongs in the plan.</h3></div>
-        <div className="recharge-items"><span><Coffee size={17} /> Step away for a moment</span><span><Moon size={17} /> Rest your eyes</span><span><Heart size={17} /> Notice what’s going well</span></div>
-      </div>
+      <section className="surface-panel streak-panel">
+        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.week')}</span><h3><Flame size={17} /> {streak} day {translate(language, 'dashboard.studyStreak').toLowerCase()}</h3></div><small>{translate(language, 'dashboard.streakNote')}</small></div>
+        <div className="week-calendar" aria-label={translate(language, 'dashboard.week')}>
+          {week.map((day) => <div key={day.date} aria-label={`${day.date}: ${day.completed ? 'study completed' : 'no study recorded'}`} className={day.completed ? 'completed' : ''}><span>{day.label}</span><strong>{day.completed ? '✓' : '·'}</strong></div>)}
+        </div>
+      </section>
+
+      <DailyQuests profile={profile} language={language} onViewAll={() => onNavigate('quests')} />
     </div>
   );
 }
 
+const questIcons = {
+  focus_time: Focus,
+  session_count: BookOpen,
+  session_xp: Sparkles,
+  camera_alerts: Activity,
+};
+
+function questCopy(quest, language) {
+  const target = quest.target;
+  if (quest.category === 'focus_time') return {
+    title: translate(language, 'quests.focusTitle', { target }),
+    description: translate(language, 'quests.focusDescription'),
+    unit: 'min',
+    max: target,
+    current: Math.floor(Number(quest.progress || 0)),
+  };
+  if (quest.category === 'session_count') return {
+    title: translate(language, 'quests.sessionsTitle', { target }),
+    description: translate(language, 'quests.sessionsDescription'),
+    unit: 'sessions',
+    max: target,
+    current: Math.floor(Number(quest.progress || 0)),
+  };
+  if (quest.category === 'session_xp') return {
+    title: translate(language, 'quests.xpTitle', { target }),
+    description: translate(language, 'quests.xpDescription'),
+    unit: 'XP',
+    max: target,
+    current: Math.floor(Number(quest.progress || 0)),
+  };
+  const signal = translate(language, `quests.${quest.signal === 'posture_alerts' ? 'posture' : quest.signal === 'distance_alerts' ? 'distance' : 'lookingAway'}`);
+  return {
+    title: translate(language, 'quests.alertsTitle', { signal }),
+    description: translate(language, 'quests.alertsDescription', { signal }),
+    unit: 'sessions',
+    max: 1,
+    current: Number(quest.progress || 0),
+  };
+}
+
+function DailyQuests({ profile, language, onViewAll }) {
+  const daily = profile.daily_quests;
+  if (!daily || !Array.isArray(daily.quests) || daily.quests.length !== 4) {
+    return <section className="surface-panel daily-quests" role="alert"><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.unavailable')}</p></section>;
+  }
+  const completed = daily.quests.filter((quest) => quest.completed).length;
+  return <section className="daily-quests">
+    <div className="section-heading">
+      <div><span className="eyebrow">{translate(language, 'quests.available')}</span><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.subtitle')}</p></div>
+      {onViewAll && <button className="outline-button" onClick={onViewAll}>{translate(language, 'quests.viewAll')}</button>}
+    </div>
+    <div className="quest-grid">
+      {daily.quests.map((quest) => {
+        const copy = questCopy(quest, language);
+        const Icon = questIcons[quest.category] || Award;
+        const difficulty = translate(language, `quests.${String(quest.difficulty || 'Easy').toLowerCase()}`);
+        return <article className={`daily-quest-card ${quest.completed ? 'is-complete' : ''}`} key={quest.id}>
+          <div className="daily-quest-top"><span className="quest-symbol"><Icon size={18} /></span><span className="difficulty-pill">{difficulty}</span></div>
+          <h4>{copy.title}</h4>
+          <p>{copy.description}</p>
+          {quest.category === 'camera_alerts' && <small className="quest-requirement">{translate(language, 'quests.cameraRequired')}</small>}
+          <div className="quest-progress-copy"><span>{translate(language, 'quests.progress')}</span><strong>{copy.current} / {copy.max} {copy.unit}</strong></div>
+          <div className="progress-track" role="progressbar" aria-label={copy.title} aria-valuemin="0" aria-valuemax={copy.max} aria-valuenow={Math.min(copy.max, copy.current)}><span style={{ width: `${Math.min(100, copy.current / copy.max * 100)}%` }} /></div>
+          <div className="quest-card-footer"><span className="xp-pill">+{quest.rewardXP} XP</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.completed ? <><Check size={15} /> {translate(language, 'quests.completed')}</> : translate(language, 'quests.inProgress')}</span></div>
+          {quest.completed && <small className="quest-reward-note">+{quest.rewardXP} XP {translate(language, 'quests.earned')}</small>}
+        </article>;
+      })}
+    </div>
+    {completed === 4 && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, 'quests.completedAll')}</strong><span>{translate(language, 'quests.congratulations')}</span></div>}
+  </section>;
+}
+
 function TimerPanel({ profile, username, onNotice }) {
   const defaultDuration = Number(profile.session_preferences?.session_length_minutes || 25);
+  const durations = [...new Set([15, 25, 45, 60, 90, 120, defaultDuration])].sort((a, b) => a - b);
   const [duration, setDuration] = useState(defaultDuration);
   const [remaining, setRemaining] = useState(defaultDuration * 60);
   const [running, setRunning] = useState(false);
+  const [completed, setCompleted] = useState(false);
   const started = useRef(0);
   const creditedSeconds = useRef(0);
+  const completionHandled = useRef(false);
   const chimeContext = useRef(null);
   const playChime = () => {
     if (!profile.session_preferences?.session_chimes || chimeContext.current?.state !== 'running') return;
@@ -564,23 +698,42 @@ function TimerPanel({ profile, username, onNotice }) {
     return () => window.clearInterval(interval);
   }, [running]);
   useEffect(() => {
+    if (!running) {
+      setDuration(defaultDuration);
+      setRemaining(defaultDuration * 60);
+    }
+  }, [defaultDuration]);
+  useEffect(() => {
     if (remaining !== 0 || !running) return;
-    playChime();
+    if (!claimTimerCompletion(completionHandled)) return;
+    setCompleted(true);
     setRunning(false);
+    void playSessionCompletionBeep(chimeContext.current);
     const secondsToCredit = Math.max(0, duration * 60 - creditedSeconds.current);
     creditedSeconds.current = 0;
     api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: secondsToCredit }) })
-      .then(() => onNotice('Block complete. Your study time has been saved.'))
+      .then(() => onNotice('Your focus session is complete. Your study time has been saved.'))
       .catch((error) => onNotice(error.message));
   }, [remaining, running, duration, username, onNotice]);
-  const chooseDuration = (value) => { if (!running) { creditedSeconds.current = 0; setDuration(value); setRemaining(value * 60); } };
+  const chooseDuration = (value) => { if (!running) { completionHandled.current = false; setCompleted(false); creditedSeconds.current = 0; setDuration(value); setRemaining(value * 60); } };
   const start = () => {
     started.current = Date.now();
-    if (profile.session_preferences?.session_chimes) {
+    completionHandled.current = false;
+    setCompleted(false);
+    if (!chimeContext.current) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (AudioContextClass && !chimeContext.current) chimeContext.current = new AudioContextClass();
-      chimeContext.current?.resume().then(playChime);
+      if (AudioContextClass) {
+        try {
+          chimeContext.current = new AudioContextClass();
+        } catch {
+          chimeContext.current = null;
+        }
+      }
     }
+    const resumeAudio = chimeContext.current?.resume();
+    resumeAudio?.then(() => {
+      if (profile.session_preferences?.session_chimes) playChime();
+    }).catch(() => {});
     setRunning(true);
   };
   const pause = async () => {
@@ -590,10 +743,10 @@ function TimerPanel({ profile, username, onNotice }) {
     try { await api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: elapsed }) }); }
     catch (error) { onNotice(error.message); }
   };
-  const reset = () => { creditedSeconds.current = 0; setRunning(false); setRemaining(duration * 60); };
+  const reset = () => { completionHandled.current = false; creditedSeconds.current = 0; setCompleted(false); setRunning(false); setRemaining(duration * 60); };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
-  return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">A CALM LITTLE POMODORO</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{[15, 25, 45, 60, 90, 120].map((item) => <option key={item} value={item}>{item} minutes</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`Timer ${minutes} minutes ${seconds} seconds`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">A steady pace is a good pace</p><div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> Pause</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? 'Resume' : 'Start focus'}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> Reset</button></div><small className="muted-note">This timer is a gentle guide; it does not control or record webcam sessions.</small></section>;
+  return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">A CALM LITTLE POMODORO</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} minutes</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`Timer ${minutes} minutes ${seconds} seconds`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">A steady pace is a good pace</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 Session complete!</strong><span>Your focus session has ended.</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> Pause</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? 'Resume' : 'Start focus'}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> Reset</button></div><small className="muted-note">This timer is a gentle guide; it does not control or record webcam sessions.</small></section>;
 }
 
 function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username, cameraState, cameraError }) {
@@ -621,38 +774,111 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
 }
 
 function Insights({ profile }) {
-  const rows = [...(profile.session_history || [])].filter((row) => row && row.date).reverse();
+  const rows = [...(Array.isArray(profile.session_history) ? profile.session_history : [])]
+    .filter((row) => row && row.date && Number(row.seconds) > 0)
+    .reverse();
+  const timeFormat = profile.session_preferences?.time_format || 'system';
+  const sessionStartTime = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const options = { hour: 'numeric', minute: '2-digit' };
+    if (timeFormat !== 'system') options.hour12 = timeFormat === '12-hour';
+    return date.toLocaleTimeString(undefined, options);
+  };
+  const timerHistory = Array.isArray(profile.focus_timer_history) ? profile.focus_timer_history : [];
   const sessions = Number(profile.sessions_completed || 0);
   const seconds = Number(profile.total_study_seconds || 0) + Number(profile.focus_timer_total_seconds || 0);
-  const alertsFor = (item) => Number(item.posture_alerts || 0) + Number(item.distance_alerts || 0) + Number(item.looking_away_alerts || 0) + Number(item.fatigue_signals || 0);
-  const maxAlerts = Math.max(1, ...rows.map(alertsFor));
-  const totalAlerts = rows.reduce((total, item) => total + alertsFor(item), 0);
-  const week = Array.from({ length: 7 }, (_, index) => { const day = new Date(); day.setDate(day.getDate() - 6 + index); const key = day.toISOString().slice(0, 10); const historySeconds = rows.filter((item) => String(item.date).slice(0, 10) === key).reduce((total, item) => total + Number(item.seconds || 0), 0); const timerSeconds = (profile.focus_timer_history || []).filter((item) => item.date === key).reduce((total, item) => total + Number(item.seconds || 0), 0); return { label: day.toLocaleDateString(undefined, { weekday: 'short' }), value: Math.floor((historySeconds + timerSeconds) / 60) }; });
+  const alertsFor = (item) => ({
+    posture: Math.max(0, Number(item.posture_alerts) || 0),
+    distance: Math.max(0, Number(item.distance_alerts) || 0),
+    lookingAway: Math.max(0, Number(item.looking_away_alerts) || 0),
+    fatigue: Math.max(0, Number(item.fatigue_signals) || 0),
+  });
+  const totalAlerts = rows.reduce((total, item) => total + Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0), 0);
+  const week = weekStudyDays(profile).map((day) => {
+    const cameraSeconds = rows.filter((item) => String(item.date).slice(0, 10) === day.date)
+      .reduce((total, item) => total + Number(item.seconds || 0), 0);
+    const timerSeconds = timerHistory.filter((item) => item.date === day.date)
+      .reduce((total, item) => total + Number(item.seconds || 0), 0);
+    return { ...day, value: Math.floor((cameraSeconds + timerSeconds) / 60) };
+  });
+  const weekStart = new Date(`${week[0].date}T12:00:00`);
+  weekStart.setDate(weekStart.getDate() - 7);
+  const priorWeekKeys = new Set(Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(weekStart);
+    day.setDate(day.getDate() + index);
+    return localDateKey(day);
+  }));
+  const priorWeekSeconds = rows.filter((item) => priorWeekKeys.has(String(item.date).slice(0, 10)))
+    .reduce((total, item) => total + Number(item.seconds || 0), 0)
+    + timerHistory.filter((item) => priorWeekKeys.has(item.date))
+      .reduce((total, item) => total + Number(item.seconds || 0), 0);
+  const priorWeekMinutes = priorWeekSeconds / 60;
+  const thisWeekMinutes = week.reduce((total, day) => total + day.value, 0);
+  const bestDay = [...week].filter((day) => day.value > 0).sort((a, b) => b.value - a.value)[0];
+  const alertTotals = rows.reduce((total, row) => {
+    const alerts = alertsFor(row);
+    return {
+      posture: total.posture + alerts.posture,
+      distance: total.distance + alerts.distance,
+      lookingAway: total.lookingAway + alerts.lookingAway,
+      fatigue: total.fatigue + alerts.fatigue,
+    };
+  }, { posture: 0, distance: 0, lookingAway: 0, fatigue: 0 });
+  const averageCameraMinutes = rows.length
+    ? Math.round(rows.reduce((total, item) => total + Number(item.seconds || 0), 0) / rows.length / 60)
+    : 0;
+  const periods = [
+    { name: 'morning', start: 5, end: 12 },
+    { name: 'afternoon', start: 12, end: 18 },
+    { name: 'evening', start: 18, end: 24 },
+    { name: 'night', start: 0, end: 5 },
+  ];
+  const timedSessions = rows.map((item) => ({ ...item, start: item.session_started_at ? new Date(item.session_started_at) : null }))
+    .filter((item) => item.start && Number.isFinite(item.start.getTime()));
+  const strongestPeriod = timedSessions.length >= 3
+    ? periods.map((period) => {
+      const samples = timedSessions.filter((item) => item.start.getHours() >= period.start && item.start.getHours() < period.end);
+      return { ...period, count: samples.length, average: samples.length ? samples.reduce((sum, item) => sum + Number(item.seconds || 0), 0) / samples.length : 0 };
+    }).filter((period) => period.count > 0).sort((a, b) => b.average - a.average)[0]
+    : null;
   const maxWeek = Math.max(30, ...week.map((day) => day.value));
-  const exportCsv = () => { const columns = ['Date', 'Subject', 'Goal', 'Task', 'Study time', 'Recorded camera alerts', 'XP earned']; const lines = [columns, ...rows.map((item) => [item.date, item.subject || '', item.goal || '', item.task_text || '', `${Math.floor(Number(item.seconds || 0) / 60)} min`, alertsFor(item), item.xp || 0])].map((row) => row.map((field) => `"${String(field).replaceAll('"', '""')}"`).join(',')); downloadText('focusmate-session-history.csv', lines.join('\n'), 'text/csv'); };
+  const exportCsv = () => { const columns = ['Date', 'Subject', 'Goal', 'Task', 'Study time', 'Recorded camera alerts', 'XP earned']; const lines = [columns, ...rows.map((item) => [item.date, item.subject || '', item.goal || '', item.task_text || '', `${Math.floor(Number(item.seconds || 0) / 60)} min`, Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0), item.xp || 0])].map((row) => row.map((field) => `"${String(field).replaceAll('"', '""')}"`).join(',')); downloadText('focusmate-session-history.csv', lines.join('\n'), 'text/csv'); };
   return (
     <div className="page-content">
       <div className="stats-grid insights-stats">
-        <Stat label="Camera sessions" value={rows.length} note="Completed optional sessions" icon={Activity} />
-        <Stat label="Sessions" value={sessions} note="Completed study sessions" icon={BookOpen} />
-        <Stat label="Total study time" value={`${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m`} note="Webcam and timer-only study" icon={Clock3} />
-        <Stat label="Study-day streak" value={`${sessions ? Math.min(7, sessions) : 0} days`} note="Your recent study rhythm" icon={Flame} />
+        <Stat label="Completed sessions" value={sessions} note={`${rows.length} with optional camera data`} icon={BookOpen} />
+        <Stat label="Study time this week" value={`${thisWeekMinutes} min`} note="Recorded local-calendar days" icon={Clock3} />
+        <Stat label="Study-day streak" value={`${studyStreak(profile)} days`} note="Only saved study activity counts" icon={Flame} />
+        <Stat label="Average camera session" value={rows.length ? `${averageCameraMinutes} min` : 'Not enough data'} note="Based on completed camera sessions" icon={Activity} />
       </div>
       <div className="content-columns chart-columns">
         <section className="surface-panel chart-panel">
-          <div className="section-heading"><div><span className="eyebrow">RECENT SESSIONS</span><h3>Recorded camera alerts</h3></div><span className="chart-legend"><i /> Alert count</span></div>
-          {rows.length ? <div className="trend-chart">{rows.slice(0, 12).reverse().map((item, index) => <div className="trend-column" key={`${item.date}-${index}`}><span className="trend-tooltip">{alertsFor(item)}</span><i style={{ height: `${Math.max(6, alertsFor(item) / maxAlerts * 100)}%` }} /><small>{new Date(item.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></div>)}</div> : <div className="empty-state">Recorded camera alerts will appear here after an optional camera session.</div>}
-          <p className="muted-note">Alerts are camera observations only. They are not a measure of concentration or mental state.</p>
+          <div className="section-heading"><div><span className="eyebrow">LOCAL CALENDAR WEEK</span><h3>Focus time</h3></div><span className="chart-legend mint"><i /> Study minutes</span></div>
+          {thisWeekMinutes ? <div className="week-chart">{week.map((day) => <div className="week-column" key={day.date}><span>{day.value || ''}</span><i style={{ height: `${Math.max(3, day.value / maxWeek * 100)}%` }} /><small>{day.label}</small></div>)}</div> : <div className="empty-state">Not enough data yet. Complete a focus session to start your weekly chart.</div>}
+          <p className="muted-note">{thisWeekMinutes} minutes this week · saved timer and camera-session time</p>
         </section>
-        <section className="surface-panel chart-panel">
-          <div className="section-heading"><div><span className="eyebrow">LAST 7 DAYS</span><h3>Study time</h3></div><span className="chart-legend mint"><i /> Study minutes</span></div>
-          <div className="week-chart">{week.map((day) => <div className="week-column" key={day.label}><span>{day.value || ''}</span><i style={{ height: `${Math.max(3, day.value / maxWeek * 100)}%` }} /><small>{day.label}</small></div>)}</div>
-          <p className="muted-note">{week.reduce((sum, day) => sum + day.value, 0)} minutes this week · webcam sessions and timer-only study</p>
+        <section className="surface-panel analytics-detail">
+          <span className="eyebrow">RECORDED CAMERA SIGNALS</span><h3>Session alerts</h3>
+          {rows.length ? <dl className="analytics-list"><div><dt>Posture alerts</dt><dd>{alertTotals.posture}</dd></div><div><dt>Looking-away signals</dt><dd>{alertTotals.lookingAway}</dd></div><div><dt>Distance alerts</dt><dd>{alertTotals.distance}</dd></div><div><dt>Fatigue-related signals</dt><dd>{alertTotals.fatigue}</dd></div></dl> : <div className="empty-state">Camera alert analytics appear after a completed optional camera session.</div>}
+          <p className="muted-note">These are heuristic visual signals, not a measure of concentration or mental state.</p>
         </section>
       </div>
+      <section className="surface-panel personal-insights">
+        <span className="eyebrow">PERSONAL INSIGHTS</span><h3>What your saved activity shows</h3>
+        {!seconds ? <div className="empty-state">Not enough data yet. Complete a few sessions to unlock insights.</div> : <div className="insight-list">
+          {bestDay && <p><strong>Your best study day</strong><span>{new Date(`${bestDay.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })} had the most recorded study time this week ({bestDay.value} min).</span></p>}
+          {priorWeekMinutes > 0 && thisWeekMinutes !== Math.round(priorWeekMinutes) && <p><strong>{thisWeekMinutes > priorWeekMinutes ? 'Study time is up' : 'A gentler week'}</strong><span>{Math.abs(Math.round((thisWeekMinutes - priorWeekMinutes) / priorWeekMinutes * 100))}% {thisWeekMinutes > priorWeekMinutes ? 'more' : 'less'} saved study time than last week.</span></p>}
+          {strongestPeriod && <p><strong>Your longest sessions are often in the {strongestPeriod.name}</strong><span>Based on average duration across {timedSessions.length} completed camera sessions.</span></p>}
+          {rows.length > 0 && !strongestPeriod && <p><strong>Keep studying</strong><span>Complete a few more camera sessions to compare session duration by time of day.</span></p>}
+          <p><strong>Focus score trend</strong><span>Not available: FocusMate does not record a validated focus score.</span></p>
+          {totalAlerts > 0 && <p><strong>Camera signal summary</strong><span>{totalAlerts} visual-signal alerts are recorded across your camera sessions.</span></p>}
+        </div>}
+      </section>
       <section className="history-section">
         <div className="section-heading"><div><span className="eyebrow">YOUR HISTORY</span><h3>Saved sessions</h3></div><button className="outline-button" onClick={exportCsv}><ArrowUpRight size={15} /> Download CSV</button></div>
-        {rows.length ? <div className="table-wrap"><table><thead><tr><th>Date</th><th>Subject</th><th>Goal</th><th>Study time</th><th>Recorded camera alerts</th><th>XP earned</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(item.date).toLocaleDateString()}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} min</td><td>{alertsFor(item)}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">Your story starts whenever you do. Complete a webcam session to see it reflected here.</div>}
+        {rows.length ? <div className="table-wrap"><table><thead><tr><th>Date &amp; time</th><th>Subject</th><th>Goal</th><th>Study time</th><th>Camera alerts</th><th>XP earned</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(`${String(item.date).slice(0, 10)}T12:00:00`).toLocaleDateString()}{sessionStartTime(item.session_started_at) && <small>{sessionStartTime(item.session_started_at)}</small>}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} min</td><td>{Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0)}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">No focus sessions yet. Complete your first optional camera session to see session history.</div>}
       </section>
     </div>
   );
@@ -683,44 +909,245 @@ function SessionResults({ live, profile, username, onProfile, onGoal }) {
 }
 
 function Achievements({ profile }) {
-  const earned = new Set((profile.achievements || []).map((item) => item.id));
+  const earnedRecords = new Map((profile.achievements || []).map((item) => [
+    typeof item === 'string' ? item : item?.id,
+    typeof item === 'string' ? null : item,
+  ]));
+  const earned = new Set(earnedRecords.keys());
   const groups = [...new Set(achievements.map((item) => item[4]))];
   const count = achievements.filter((item) => earned.has(item[0])).length;
-  return <div className="page-content"><section className="achievement-progress surface-panel"><div><span className="eyebrow">YOUR COLLECTION</span><h3>{count} of {achievements.length} unlocked</h3></div><div className="progress-track"><span style={{ width: `${count / achievements.length * 100}%` }} /></div></section>{groups.map((group) => { const entries = achievements.filter((item) => item[4] === group); return <section className="achievement-group" key={group}><div className="section-heading"><div><span className="eyebrow">{String(group).toUpperCase()}</span><h3>{group}</h3></div><span className="group-count">{entries.filter((item) => earned.has(item[0])).length} / {entries.length}</span></div><div className="achievement-grid">{entries.map(([id, title, description, reward]) => <article className={`achievement-card ${earned.has(id) ? 'earned' : ''}`} key={id}><div className="achievement-symbol">{earned.has(id) ? <Trophy size={18} /> : <LockKeyhole size={17} />}</div><div><h4>{title}</h4><p>{description}</p><small>{earned.has(id) ? 'Unlocked' : 'Reward'} · +{reward} XP</small></div></article>)}</div></section>; })}</div>;
+  return (
+    <div className="page-content">
+      <section className="achievement-progress surface-panel">
+        <div><span className="eyebrow">YOUR COLLECTION</span><h3>{count} of {achievements.length} unlocked</h3></div>
+        <div className="progress-track" role="progressbar" aria-label="Achievements unlocked" aria-valuemin="0" aria-valuemax={achievements.length} aria-valuenow={count}>
+          <span style={{ width: `${count / achievements.length * 100}%` }} />
+        </div>
+      </section>
+      {groups.map((group) => {
+        const entries = achievements.filter((item) => item[4] === group);
+        return (
+          <section className="achievement-group" key={group}>
+            <div className="section-heading">
+              <div><span className="eyebrow">{String(group).toUpperCase()}</span><h3>{group}</h3></div>
+              <span className="group-count">{entries.filter((item) => earned.has(item[0])).length} / {entries.length}</span>
+            </div>
+            <div className="achievement-grid">
+              {entries.map(([id, title, description, reward]) => {
+                const record = earnedRecords.get(id);
+                const progress = record ? null : achievementProgress(profile, id);
+                const earnedAt = record?.earned_at && new Date(record.earned_at);
+                const earnedDate = earnedAt && Number.isFinite(earnedAt.getTime())
+                  ? earnedAt.toLocaleDateString()
+                  : '';
+                return (
+                  <article className={`achievement-card ${record || earned.has(id) ? 'earned' : ''}`} key={id}>
+                    <div className="achievement-symbol">{earned.has(id) ? <Trophy size={18} /> : <LockKeyhole size={17} />}</div>
+                    <div>
+                      <h4>{title}</h4>
+                      <p>{description}</p>
+                      {earned.has(id)
+                        ? <small>{earnedDate ? `Unlocked ${earnedDate}` : 'Unlocked'} · +{reward} XP</small>
+                        : <>
+                          <small>Reward · +{reward} XP</small>
+                          {progress && (
+                            <div className="achievement-progress-detail">
+                              <span>{progress.current} / {progress.target} {progress.unit}</span>
+                              <div className="progress-track" role="progressbar" aria-label={`${title} progress`} aria-valuemin="0" aria-valuemax={progress.target} aria-valuenow={progress.current}>
+                                <span style={{ width: `${progress.current / progress.target * 100}%` }} />
+                              </div>
+                            </div>
+                          )}
+                        </>}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
-function Quests({ profile, onClaim }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const claims = profile.quest_claims || [];
-  const claimed = (id) => claims.some((item) => item.quest_id === id && item.date === today);
-  const count = quests.filter((quest) => claimed(quest.id)).length;
-  const [busy, setBusy] = useState('');
-  const claim = async (id) => { setBusy(id); try { await onClaim(id); } catch (error) { window.alert(error.message); } finally { setBusy(''); } };
-  return <div className="page-content"><section className="quest-progress"><div><span className="eyebrow">TODAY’S QUESTS</span><strong>{count} <small>/ {quests.length} claimed</small></strong></div><div className="progress-track"><span style={{ width: `${count / quests.length * 100}%` }} /></div></section><div className="quest-list">{quests.map((quest) => <article className="quest-card" key={quest.id}><span className="quest-symbol">{quest.icon}</span><div className="quest-copy"><h3>{quest.title}</h3><p>{quest.description}</p></div><span className="xp-pill">+{quest.reward} XP</span>{claimed(quest.id) ? <span className="claimed-label"><Check size={15} /> Claimed</span> : <button className="outline-button" disabled={Boolean(busy)} onClick={() => claim(quest.id)}>{busy === quest.id ? 'Saving…' : 'Claim reward'}</button>}</article>)}</div><p className="muted-note">Self-care quests are self-reported. Take breaks because they feel right for you, not for a reward.</p></div>;
+function Quests({ profile, language }) {
+  return <div className="page-content"><DailyQuests profile={profile} language={language} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data; no self-report or unsupported focus score is used.</p></div>;
 }
 
 function Preferences({ profile, onSave }) {
-  const defaults = { focus_monitoring: true, posture_alerts: true, mood_checkins: true, session_chimes: false, session_length_minutes: 25, daily_goal_minutes: 180 };
+  const defaults = {
+    focus_monitoring: true,
+    posture_alerts: true,
+    mood_checkins: true,
+    session_chimes: false,
+    session_length_minutes: 25,
+    daily_goal_minutes: 60,
+    language: 'system',
+    theme: 'system',
+    study_style: 'normal',
+    study_goal_type: 'self-study',
+    time_format: 'system',
+  };
   const [preferences, setPreferences] = useState({ ...defaults, ...(profile.session_preferences || {}) });
   const [saved, setSaved] = useState(false);
   const set = (key, value) => setPreferences((current) => ({ ...current, [key]: value }));
   const save = async () => { await onSave({ session_preferences: preferences }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
   const rows = [['focus_monitoring', 'Focus monitoring', 'Enable optional in-browser face, eye, posture, and distance estimates'], ['posture_alerts', 'Posture alerts', 'Show one gentle reminder after two minutes of slouching'], ['mood_checkins', 'Mood check-ins', 'Ask how I feel before my first camera session each day'], ['session_chimes', 'Session chimes', 'Play a soft tone when the focus timer starts and completes']];
-  return <div className="page-content settings-layout"><section className="surface-panel settings-panel"><div className="settings-heading"><span className="eyebrow">MONITORING & REMINDERS</span><h3>Support that feels right.</h3><p>These choices stay with your local profile and can be changed at any time.</p></div>{rows.map(([key, title, description]) => <label className="setting-row" key={key}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} /><i className="toggle-track" /></label>)}<div className="number-settings"><label>Default focus block <span><input type="number" min="15" max="120" step="5" value={preferences.session_length_minutes} onChange={(event) => set('session_length_minutes', Number(event.target.value))} /> min</span></label><label>Daily study goal <span><input type="number" min="30" max="720" step="15" value={preferences.daily_goal_minutes} onChange={(event) => set('daily_goal_minutes', Number(event.target.value))} /> min</span></label></div><button className="primary-button" onClick={save}><Check size={16} /> {saved ? 'Saved' : 'Save preferences'}</button></section><section className="surface-panel profile-summary"><span className="eyebrow">YOUR PROFILE</span><div className="summary-person"><div className="avatar">{(profile.player_name || 'F')[0].toUpperCase()}</div><div><strong>{profile.player_name}</strong><small>@{profile.username}</small></div></div><dl><div><dt>Rank</dt><dd>Level {levelForXp(profile.total_xp)}</dd></div><div><dt>Session length</dt><dd>{preferences.session_length_minutes} minutes</dd></div><div><dt>Daily goal</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div></dl></section></div>;
+  const language = preferences.language !== 'system' && supportedLanguages.includes(preferences.language) ? preferences.language : browserLanguage();
+  const selectedLanguage = supportedLanguages.includes(preferences.language) ? preferences.language : 'system';
+  const preferenceSelect = (key, title, values) => (
+    <label className="language-setting" key={key}>
+      <span><strong>{title}</strong></span>
+      <select value={key === 'language' ? selectedLanguage : preferences[key]} onChange={(event) => set(key, event.target.value)} aria-label={title}>
+        {values.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+    </label>
+  );
+  const sessionPresets = [15, 25, 45];
+  const selectedSessionLength = sessionPresets.includes(Number(preferences.session_length_minutes))
+    ? String(preferences.session_length_minutes)
+    : 'custom';
+  const selectedDailyGoal = [30, 60, 90, 120].includes(Number(preferences.daily_goal_minutes))
+    ? String(preferences.daily_goal_minutes)
+    : 'custom';
+  return (
+    <div className="page-content settings-layout">
+      <section className="surface-panel settings-panel">
+        <div className="settings-heading">
+          <span className="eyebrow">PERSONALIZE YOUR SPACE</span>
+          <h3>Support that feels right.</h3>
+          <p>These choices stay with your local profile and can be changed at any time.</p>
+        </div>
+        {preferenceSelect('language', translate(language, 'preferences.language'), [
+          ['system', translate(language, 'preferences.systemLanguage')],
+          ...supportedLanguages.map((code) => [code, translate(language, `language.${code}`)]),
+        ])}
+        {preferenceSelect('theme', translate(language, 'preferences.theme'), [
+          ['system', translate(language, 'preferences.themeSystem')],
+          ['light', translate(language, 'preferences.themeLight')],
+          ['dark', translate(language, 'preferences.themeDark')],
+        ])}
+        {preferenceSelect('study_style', translate(language, 'preferences.studyStyle'), [
+          ['quiet', translate(language, 'preferences.quiet')],
+          ['normal', translate(language, 'preferences.normal')],
+          ['competitive', translate(language, 'preferences.competitive')],
+        ])}
+        {preferenceSelect('study_goal_type', translate(language, 'preferences.mainGoal'), [
+          ['school', translate(language, 'preferences.school')],
+          ['university', translate(language, 'preferences.university')],
+          ['self-study', translate(language, 'preferences.selfStudy')],
+          ['reading', translate(language, 'preferences.reading')],
+          ['coding', translate(language, 'preferences.coding')],
+          ['exam-preparation', translate(language, 'preferences.examPreparation')],
+        ])}
+        {preferenceSelect('time_format', translate(language, 'preferences.timeFormat'), [
+          ['system', translate(language, 'preferences.themeSystem')],
+          ['12-hour', translate(language, 'preferences.twelveHour')],
+          ['24-hour', translate(language, 'preferences.twentyFourHour')],
+        ])}
+        {rows.map(([key, title, description]) => (
+          <label className="setting-row" key={key}>
+            <span><strong>{title}</strong><small>{description}</small></span>
+            <input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+        ))}
+        <div className="number-settings">
+          <label>
+            {translate(language, 'preferences.sessionLength')}
+            <span>
+              <select
+                value={selectedSessionLength}
+                onChange={(event) => set('session_length_minutes', event.target.value === 'custom' ? 30 : Number(event.target.value))}
+                aria-label={translate(language, 'preferences.sessionLength')}
+              >
+                {sessionPresets.map((minutes) => <option value={minutes} key={minutes}>{minutes} {translate(language, 'preferences.minutes')}</option>)}
+                <option value="custom">{translate(language, 'preferences.custom')}</option>
+              </select>
+              {selectedSessionLength === 'custom' && (
+                <input
+                  type="number"
+                  min="15"
+                  max="120"
+                  step="5"
+                  value={preferences.session_length_minutes}
+                  onChange={(event) => set('session_length_minutes', Number(event.target.value))}
+                  aria-label={`${translate(language, 'preferences.sessionLength')} · ${translate(language, 'preferences.custom')}`}
+                />
+              )}
+            </span>
+          </label>
+          <label>
+            {translate(language, 'preferences.dailyGoal')}
+            <span>
+              <select
+                value={selectedDailyGoal}
+                onChange={(event) => set('daily_goal_minutes', event.target.value === 'custom' ? 150 : Number(event.target.value))}
+                aria-label={translate(language, 'preferences.dailyGoal')}
+              >
+                {[30, 60, 90, 120].map((minutes) => <option value={minutes} key={minutes}>{minutes} {translate(language, 'preferences.minutes')}</option>)}
+                <option value="custom">{translate(language, 'preferences.custom')}</option>
+              </select>
+              {selectedDailyGoal === 'custom' && (
+                <input
+                  type="number"
+                  min="30"
+                  max="720"
+                  step="15"
+                  value={preferences.daily_goal_minutes}
+                  onChange={(event) => set('daily_goal_minutes', Number(event.target.value))}
+                  aria-label={`${translate(language, 'preferences.dailyGoal')} · ${translate(language, 'preferences.custom')}`}
+                />
+              )}
+            </span>
+          </label>
+        </div>
+        <button className="primary-button" onClick={save}><Check size={16} /> {saved ? 'Saved' : 'Save preferences'}</button>
+      </section>
+      <section className="surface-panel profile-summary">
+        <span className="eyebrow">YOUR PROFILE</span>
+        <div className="summary-person">
+          <div className="avatar">{(profile.player_name || 'F')[0].toUpperCase()}</div>
+          <div><strong>{profile.player_name}</strong><small>@{profile.username}</small></div>
+        </div>
+        <dl>
+          <div><dt>Rank</dt><dd>Level {levelForXp(profile.total_xp)}</dd></div>
+          <div><dt>Study style</dt><dd>{preferences.study_style}</dd></div>
+          <div><dt>Session length</dt><dd>{preferences.session_length_minutes} minutes</dd></div>
+          <div><dt>Daily goal</dt><dd>{Math.floor(preferences.daily_goal_minutes / 60)}h {String(preferences.daily_goal_minutes % 60).padStart(2, '0')}m</dd></div>
+        </dl>
+      </section>
+    </div>
+  );
 }
 
-function Profile({ profile, onSave, onExport }) {
+function Profile({ profile, onSave, onExport, cloudAccount }) {
   const [name, setName] = useState(profile.player_name || '');
   const [sleep, setSleep] = useState(profile.session_wellbeing?.sleep_hours || 0);
   const [water, setWater] = useState(profile.water_glasses_today || 0);
   const [reflection, setReflection] = useState(profile.session_wellbeing?.reflection || '');
   const [saved, setSaved] = useState(false);
   const save = async (event) => { event.preventDefault(); const wellbeing = { ...profile.session_wellbeing, sleep_hours: Number(sleep), water_glasses: Number(water), reflection: reflection.slice(0, 500) }; await onSave({ player_name: name, water_glasses_today: Number(water), session_wellbeing: wellbeing }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
-  return <div className="page-content settings-layout"><form className="surface-panel profile-form" onSubmit={save}><span className="eyebrow">A LITTLE ABOUT YOU</span><h3>Your profile, at your pace.</h3><label>What should we call you?<input maxLength="80" value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-grid"><label>Sleep last night (hours)<input type="number" min="0" max="24" step="0.5" value={sleep} onChange={(event) => setSleep(event.target.value)} /></label><label>Water glasses today<input type="number" min="0" max="100" value={water} onChange={(event) => setWater(event.target.value)} /></label></div><label>A note to yourself<textarea maxLength="500" rows="4" value={reflection} onChange={(event) => setReflection(event.target.value)} placeholder="What would help you feel supported today?" /></label><button className="primary-button" type="submit"><Check size={16} /> {saved ? 'Saved' : 'Save check-in'}</button></form><section className="surface-panel data-panel"><span className="eyebrow">YOUR DATA, YOUR CHOICE</span><h3>Local by default.</h3><p>Your profile and completed-session history are stored in this browser's localStorage. They do not sync between browsers or devices, and clearing this site's data can remove them. localhost and your Vercel site have separate profiles. Camera frames are processed in your browser and are not saved.</p><button className="outline-button full-button" onClick={onExport}><ArrowUpRight size={15} /> Export profile as JSON</button><div className="privacy-card"><LockKeyhole size={17} /><span>Your username selects local data; it is not a password or secure authentication.</span></div></section></div>;
+  return <div className="page-content settings-layout"><form className="surface-panel profile-form" onSubmit={save}><span className="eyebrow">A LITTLE ABOUT YOU</span><h3>Your profile, at your pace.</h3>{cloudAccount && <div className="cloud-profile-note">Signed in with {cloudAccount.email}. Your account and profile preferences use Supabase; study sessions, quests, XP, achievements, and wellbeing notes remain in this browser and are not yet synchronized.</div>}<label>What should we call you?<input maxLength="80" value={name} onChange={(event) => setName(event.target.value)} /></label><div className="form-grid"><label>Sleep last night (hours)<input type="number" min="0" max="24" step="0.5" value={sleep} onChange={(event) => setSleep(event.target.value)} /></label><label>Water glasses today<input type="number" min="0" max="100" value={water} onChange={(event) => setWater(event.target.value)} /></label></div><label>A note to yourself<textarea maxLength="500" rows="4" value={reflection} onChange={(event) => setReflection(event.target.value)} placeholder="What would help you feel supported today?" /></label><button className="primary-button" type="submit"><Check size={16} /> {saved ? 'Saved' : 'Save check-in'}</button></form><section className="surface-panel data-panel"><span className="eyebrow">YOUR DATA, YOUR CHOICE</span><h3>Local by default.</h3><p>Your profile and completed-session history are stored in this browser's localStorage. They do not sync between browsers or devices, and clearing this site's data can remove them. localhost and your Vercel site have separate profiles. Camera frames are analyzed in this browser and are not saved or sent to FocusMate. Completed camera sessions store duration and counts of posture, distance, head-turn, and eye-closure signals in your local profile. The app downloads MediaPipe code from jsDelivr; support forms are sent separately to Web3Forms.</p><button className="outline-button full-button" onClick={onExport}><ArrowUpRight size={15} /> Export profile as JSON</button><div className="privacy-card"><LockKeyhole size={17} /><span>{cloudAccount ? 'Your email password is managed by Supabase Auth. Your local username is not a password.' : 'Your username selects local data; it is not a password or secure authentication.'}</span></div></section></div>;
 }
 
 function downloadText(filename, contents, type) { const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([contents], { type })); link.download = filename; link.click(); URL.revokeObjectURL(link.href); }
 function downloadProfile(profile) { downloadText('focusmate-profile.json', JSON.stringify(profile, null, 2), 'application/json'); }
+
+function App() {
+  return (
+    <AuthGate>
+      {({ account, onCloudSignOut, onCloudLogin }) => (
+        <FocusMateApp
+          account={account}
+          onCloudSignOut={onCloudSignOut}
+          onCloudLogin={onCloudLogin}
+        />
+      )}
+    </AuthGate>
+  );
+}
 
 const container = document.getElementById('root');
 const root = window.focusmateRoot || createRoot(container);
