@@ -76,6 +76,33 @@ function postureStatusText(state, live) {
   return live.pose_detected ? live.posture || 'Unknown' : 'Checking for shoulders';
 }
 
+class AppErrorBoundary extends React.Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    if (import.meta.env.DEV) console.error('FocusMate render error:', error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <main className="welcome-page">
+        <section className="welcome-form" role="alert">
+          <div className="welcome-kicker">FOCUSMATE NEEDS A MOMENT</div>
+          <h1>Your profile is still saved.</h1>
+          <p>Something went wrong while opening this page. Reload FocusMate to try again. Your saved profile and progress have not been deleted.</p>
+          {import.meta.env.DEV && <pre>{this.state.error.message}</pre>}
+          <button className="primary-button" onClick={() => window.location.reload()}>Reload FocusMate</button>
+        </section>
+      </main>
+    );
+  }
+}
+
 function App() {
   const [username, setUsername] = useState(localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
@@ -343,7 +370,7 @@ function App() {
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} onNavigate={changePage} onWater={() => updateProfile({ water_glasses_today: Number(profile.water_glasses_today || 0) + 1 })} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
-          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} />
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} />
         </div>
         {page === 'insights' && <Insights profile={profile} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
@@ -569,7 +596,7 @@ function TimerPanel({ profile, username, onNotice }) {
   return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">A CALM LITTLE POMODORO</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{[15, 25, 45, 60, 90, 120].map((item) => <option key={item} value={item}>{item} minutes</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`Timer ${minutes} minutes ${seconds} seconds`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">A steady pace is a good pace</p><div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> Pause</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? 'Resume' : 'Start focus'}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> Reset</button></div><small className="muted-note">This timer is a gentle guide; it does not control or record webcam sessions.</small></section>;
 }
 
-function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username }) {
+function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username, cameraState, cameraError }) {
   const [tasks, setTasks] = useState(profile.tasks || []);
   const [newTask, setNewTask] = useState('');
   const [subject, setSubject] = useState('Mathematics');
@@ -698,4 +725,4 @@ function downloadProfile(profile) { downloadText('focusmate-profile.json', JSON.
 const container = document.getElementById('root');
 const root = window.focusmateRoot || createRoot(container);
 window.focusmateRoot = root;
-root.render(<App />);
+root.render(<AppErrorBoundary><App /></AppErrorBoundary>);
