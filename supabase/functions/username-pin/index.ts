@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const allowedOrigins = new Set([
   "https://getfocusmate.vercel.app",
+  "https://focus-mate-fph9wppxm-cyb3r-amxths-projects.vercel.app",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);

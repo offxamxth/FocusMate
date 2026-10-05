@@ -152,6 +152,23 @@ test('every visible contact form string is translated in all supported languages
   }
 });
 
+test('every Friends screen label is translated in all supported languages', async () => {
+  const source = await readFile(new URL('../src/SocialPage.jsx', import.meta.url), 'utf8');
+  const keys = [...source.matchAll(/\bt\('([^']+)'/g)].map((match) => `social.${match[1]}`);
+  for (const language of supportedLanguages) {
+    for (const key of new Set(keys)) {
+      assert.notEqual(translate(language, key), key, `${language} is missing ${key}`);
+    }
+    for (const key of [
+      'nav.friends', 'nav.social', 'heading.friendsEyebrow', 'heading.friendsTitle',
+      'heading.friendsText', 'social.presenceOnline', 'social.presenceOffline',
+      'social.presenceConnecting', 'social.presenceUnavailable',
+    ]) {
+      assert.notEqual(translate(language, key), key, `${language} is missing ${key}`);
+    }
+  }
+});
+
 test('PIN migration database objects are inaccessible to browser roles', async () => {
   const sql = await readFile(
     new URL('../../supabase/migrations/20261004140000_username_pin_auth.sql', import.meta.url),

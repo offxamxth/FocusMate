@@ -106,12 +106,14 @@ Shared focus sessions are controlled by the active room host through
 authenticated, row-locked RPCs; clients only interpolate a visual timer from
 database timestamps and re-fetch room state after Realtime updates.
 
-Apply the room foundation and server-authoritative timer migrations after the
-profile migrations above, in this order:
+Apply the social and room migrations after the profile migrations above, in
+order:
 
-1. `supabase/migrations/20261004190000_social_foundation.sql` (room schema)
-2. `supabase/migrations/20261004220000_focus_room_foundation.sql`
-3. `supabase/migrations/20261004230000_room_timer_state_machine.sql`
+1. `supabase/migrations/20261004190000_social_foundation.sql`
+2. `supabase/migrations/20261004200000_friend_system.sql`
+3. `supabase/migrations/20261004210000_presence_authorization.sql`
+4. `supabase/migrations/20261004220000_focus_room_foundation.sql`
+5. `supabase/migrations/20261004230000_room_timer_state_machine.sql`
 
 The room snapshot exposes `status`, `created_at`, `capacity`, `host_id`,
 session duration, start/active-segment/pause/break/finish timestamps,
@@ -122,6 +124,43 @@ break time and paused time do not count as focus. A break reaching zero does
 not mutate room state automatically; the host explicitly resumes or finishes.
 Only the active host can control the shared session. A finished room session
 cannot be restarted; create another room for a new session.
+
+### Safe staging migration workflow
+
+The staging project is `knglawdgbafxscbbrkzi`. Always name that project
+explicitly for every remote migration command; do not rely on whichever
+project happens to be linked:
+
+```powershell
+supabase projects list --output-format json
+supabase link --project-ref knglawdgbafxscbbrkzi
+$link = Get-Content 'supabase\.temp\linked-project.json' -Raw | ConvertFrom-Json
+if ($link.ref -ne 'knglawdgbafxscbbrkzi') { throw 'Supabase CLI is not linked to staging.' }
+supabase migration list --project-ref knglawdgbafxscbbrkzi
+```
+
+Confirm the project list contains the staging ref and distinguish it from
+production before continuing. Create and review a migration locally, then
+inspect the exact staging plan before applying anything:
+
+```powershell
+supabase migration new room_timer_state_machine
+supabase db push --dry-run --project-ref knglawdgbafxscbbrkzi --skip-vault
+```
+
+Stop if the dry run includes any unexpected migration or the target is not
+unambiguously staging. Only after reviewing the SQL and planned migration list,
+apply with the same explicit target and Vault safeguard, then compare the
+ledger again:
+
+```powershell
+supabase db push --project-ref knglawdgbafxscbbrkzi --skip-vault
+supabase migration list --project-ref knglawdgbafxscbbrkzi
+```
+
+Never use `--linked` or omit `--project-ref` for a remote migration operation.
+`--skip-vault` prevents a schema push from synchronizing Vault secrets.
+
 ## Optional Supabase username/PIN accounts
 
 Local username profiles continue to work when Supabase is not configured.
@@ -177,10 +216,11 @@ Forgotten PIN recovery currently requires an administrator-assisted reset.
 The profile row is protected by owner-only RLS. Cloud profile snapshots are
 also owner-writable JSON, which enables cross-device continuity but is not a
 server-authoritative rewards ledger: a technically capable signed-in user can
-tamper with their own XP or session history. The app has private rooms with
-host-controlled, server-authoritative shared focus sessions; it does not
-have a global leaderboard. Apply and test migrations and Auth settings in
-the appropriate Supabase project before enabling cloud users. Configure only
+tamper with their own XP or session history. FocusMate has private room and
+friend foundations, including host-controlled, server-authoritative shared
+focus sessions; it does not have a global leaderboard. Apply and test
+migrations and Auth settings in the appropriate Supabase project before
+enabling cloud users. Configure only
 `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel; do not add
 server-side Edge Function secrets to the frontend project.
 

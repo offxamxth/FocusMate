@@ -177,6 +177,67 @@ test('username/PIN service role has only the profile columns needed for account 
   assert.doesNotMatch(sql, /grant all|using\s*\(\s*true\s*\)/i);
 });
 
+test('social foundation enables RLS and exposes no direct table writes', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261004190000_social_foundation.sql', import.meta.url),
+    'utf8',
+  );
+  for (const table of ['friendships', 'focus_rooms', 'focus_room_members']) {
+    assert.match(sql, new RegExp(`create table public\\.${table}\\b`, 'i'));
+    assert.match(sql, new RegExp(`alter table public\\.${table} enable row level security`, 'i'));
+  }
+  assert.match(sql, /friendships_one_row_per_pair unique \(user_low, user_high\)/i);
+  assert.match(sql, /friendships_distinct_users check \(requester_id <> recipient_id\)/i);
+  assert.match(sql, /room_code ~ '\^\[A-Z0-9\]\{6\}\$'/i);
+  assert.match(sql, /primary key \(room_id, user_id\)/i);
+  assert.match(sql, /using \(\(select auth\.uid\(\)\) in \(requester_id, recipient_id\)\)/i);
+  assert.match(sql, /public\.is_focus_room_member\(room_id\)/i);
+  assert.match(sql, /grant select on table public\.friendships, public\.focus_rooms, public\.focus_room_members\s+to authenticated/i);
+  assert.match(sql, /alter publication supabase_realtime add table public\./i);
+  assert.doesNotMatch(sql, /grant (?:all|insert|update|delete)|to anon|using\s*\(\s*true\s*\)/i);
+});
+
+test('friend RPCs bind identity to auth.uid and keep mutations authorization-checked', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261004200000_friend_system.sql', import.meta.url),
+    'utf8',
+  );
+  for (const functionName of [
+    'search_focusmate_users',
+    'list_focusmate_friends',
+    'list_focusmate_friend_requests',
+    'send_focusmate_friend_request',
+    'respond_focusmate_friend_request',
+    'cancel_focusmate_friend_request',
+    'remove_focusmate_friend',
+  ]) {
+    assert.match(sql, new RegExp(`create or replace function public\\.${functionName}\\b`, 'i'));
+    assert.match(sql, new RegExp(`grant execute on function public\\.${functionName}`, 'i'));
+  }
+  assert.match(sql, /where lower\(profile\.username\) = normalized_username/i);
+  assert.match(sql, /perform pg_catalog\.pg_advisory_xact_lock/i);
+  assert.match(sql, /existing_status = 'pending' and existing_requester = current_user_id/i);
+  assert.match(sql, /recipient_id = current_user_id\s+and status = 'pending'/i);
+  assert.match(sql, /requester_id = current_user_id\s+and status = 'pending'/i);
+  assert.match(sql, /status = 'accepted'\s+and current_user_id in \(requester_id, recipient_id\)/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.[^(]+\([^;]+to anon/i);
+});
+
+test('presence authorization is private, friend-scoped, and owner-published', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261004210000_presence_authorization.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /on realtime\.messages\s+for select\s+to authenticated/i);
+  assert.match(sql, /realtime\.messages\.extension = 'presence'/i);
+  assert.match(sql, /friendship\.status = 'accepted'/i);
+  assert.match(sql, /realtime\.topic\(\) = 'focusmate-presence:' \|\| friendship\.recipient_id::text/i);
+  assert.match(sql, /realtime\.topic\(\) = 'focusmate-presence:' \|\| friendship\.requester_id::text/i);
+  assert.match(sql, /on realtime\.messages\s+for insert\s+to authenticated/i);
+  assert.match(sql, /with check\s*\(\s*realtime\.messages\.extension = 'presence'\s+and realtime\.topic\(\) = 'focusmate-presence:' \|\| \(select auth\.uid\(\)\)::text/i);
+  assert.doesNotMatch(sql, /to anon|using\s*\(\s*true\s*\)|with check\s*\(\s*true\s*\)/i);
+});
+
 test('timer completion guard permits one completion and safely ignores blocked audio', async () => {
   const state = { current: false };
   assert.equal(claimTimerCompletion(state), true);

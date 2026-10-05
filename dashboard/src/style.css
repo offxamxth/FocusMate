@@ -745,6 +745,58 @@ html[dir='rtl'] .daily-quest-card, html[dir='rtl'] .overview-metrics { text-alig
   .auth-page .welcome-art { min-height: 190px; }
   .auth-page .welcome-art-meta { display: none; }
   .auth-form { padding-inline: 19px; }
+}
+
+.social-page { display: grid; gap: 14px; }
+.social-search-panel, .social-list-panel { min-width: 0; padding: 18px; }
+.social-search-panel .section-heading { align-items: flex-start; }
+.social-search-panel .section-heading h2 { margin: 6px 0; color: var(--ink); font: 700 19px Manrope, sans-serif; }
+.social-search-panel .section-heading p { max-width: 560px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.social-search-form { display: flex; align-items: end; gap: 9px; margin-top: 17px; }
+.social-search-input { display: grid; flex: 1; gap: 6px; color: var(--soft); font-size: 10px; font-weight: 600; }
+.social-input-wrap { min-width: 0; min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-strong); color: var(--muted); }
+.social-input-wrap:focus-within { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(168,240,208,.12); }
+.social-input-wrap input { width: 100%; min-width: 0; min-height: 38px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 12px; }
+.social-input-wrap input:focus-visible { outline: 0; }
+.social-search-form .primary-button, .social-user-action .outline-button { min-height: 42px; white-space: nowrap; }
+.social-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.social-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.social-list-heading > div { display: flex; align-items: center; gap: 8px; color: var(--mint); }
+.social-list-heading h2 { margin: 0; color: var(--ink); font: 700 13px Manrope, sans-serif; }
+.social-count { min-width: 24px; height: 24px; display: grid; place-items: center; padding: 0 6px; border: 1px solid var(--line); border-radius: 20px; color: var(--soft); font-size: 10px; }
+.social-list { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.social-user-card { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.social-search-panel > .social-user-card { margin-top: 13px; }
+.social-avatar { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; border: 1px solid rgba(168,240,208,.2); border-radius: 50%; background: var(--quiet); color: var(--mint); font-size: 13px; font-weight: 700; }
+.social-user-copy { min-width: 0; display: grid; flex: 1; gap: 3px; }
+.social-user-copy strong { overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.social-user-copy span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.social-user-copy .social-presence { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.social-presence i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+.social-presence.is-online { color: #71d8a8; }
+.social-presence.is-offline, .social-presence.is-unavailable { color: var(--muted); }
+.social-presence.is-connecting { color: var(--lime); }
+.social-user-action { display: flex; justify-content: flex-end; }
+.social-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.social-state svg { color: var(--mint); }
+.social-actions { display: flex; gap: 5px; }
+.social-accept-button { color: var(--mint); }
+.social-decline-button, .social-remove-button { color: var(--muted); }
+.social-cancel-button { min-height: 32px; padding: 5px 8px; font-size: 9px; }
+.social-empty { min-height: 100px; display: grid; align-content: center; justify-items: center; gap: 6px; padding: 18px 8px; color: var(--muted); text-align: center; }
+.social-empty strong { color: var(--soft); font-size: 11px; }
+.social-empty span, .social-inline-status { margin: 0; font-size: 10px; line-height: 1.5; text-align: center; }
+.social-inline-status { padding: 12px 0; color: var(--muted); }
+.social-message { padding: 10px 12px; border: 1px solid rgba(168,240,208,.24); border-radius: 6px; background: var(--quiet); color: var(--soft); font-size: 10px; line-height: 1.5; }
+.social-message.is-error { border-color: rgba(248,131,131,.35); background: rgba(248,131,131,.08); color: #ffb5b5; }
+.social-spin { animation: social-spin 1s linear infinite; }
+@keyframes social-spin { to { transform: rotate(360deg); } }
+html[dir='rtl'] .social-list-heading,
+html[dir='rtl'] .social-search-form,
+html[dir='rtl'] .social-user-card { direction: rtl; }
+html[dir='rtl'] .social-user-action { margin-inline-start: auto; }
+html[dir='rtl'] .social-user-copy { text-align: right; }
+
 .room-foundation { margin-bottom: 15px; }
 .room-foundation-panel { min-width: 0; padding: 18px; }
 .room-foundation-heading { align-items: flex-start; }
@@ -806,14 +858,20 @@ html[dir='rtl'] .daily-quest-card, html[dir='rtl'] .overview-metrics { text-alig
 html[dir='rtl'] .room-participant { direction: rtl; }
 
 @media (max-width: 760px) {
+  .social-columns { grid-template-columns: minmax(0, 1fr); }
   .room-entry-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 440px) {
+  .social-search-panel, .social-list-panel { padding: 14px; }
   .room-foundation-panel { padding: 14px; }
+  .social-search-form { align-items: stretch; flex-direction: column; }
+  .social-search-form .primary-button { justify-content: center; }
+  .social-request-card { flex-wrap: wrap; }
+  .social-request-card .social-actions, .social-request-card .social-cancel-button { margin-inline-start: auto; }
+  .social-user-action .outline-button { min-height: 34px; padding-inline: 8px; font-size: 9px; }
   .room-code-banner { align-items: flex-start; flex-direction: column; }
   .room-session-controls { align-items: stretch; }
   .room-session-controls select, .room-session-controls button { flex: 1 1 100%; max-width: none; }
   .room-participant { flex-wrap: wrap; }
   .room-participant-status { margin-inline-start: auto; }
-}
 }

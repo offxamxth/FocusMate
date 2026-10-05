@@ -18,19 +18,21 @@ import {
   translate,
   translateAchievement,
 } from './i18n.js';
+import SocialPage from './SocialPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
 import ContactPage from './ContactPage.jsx';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, LockKeyhole, LogOut, Moon,
   Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles, Sun, Timer, Trophy,
-  UserRound, Video, VideoOff, X,
+  UserRound, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import './style.css';
 
 const pages = [
   { id: 'overview', label: 'nav.overview', group: 'nav.yourSpace', icon: Home },
   { id: 'focus-room', label: 'nav.focusRoom', group: 'nav.yourSpace', icon: Timer },
+  { id: 'friends', label: 'nav.friends', group: 'nav.social', icon: Users, requiresCloud: true },
   { id: 'insights', label: 'nav.progress', group: 'nav.yourSpace', icon: BarChart3 },
   { id: 'session-results', label: 'nav.sessionResults', group: 'nav.yourSpace', icon: Sparkles },
   { id: 'achievements', label: 'nav.achievements', group: 'nav.habits', icon: Trophy },
@@ -189,6 +191,13 @@ function FocusMateApp({
       window.removeEventListener('hashchange', syncPage);
     };
   }, []);
+
+  useEffect(() => {
+    if (!account && page === 'friends') {
+      setPage('overview');
+      window.history.replaceState({}, '', '/#overview');
+    }
+  }, [account, page]);
 
   useEffect(() => {
     if (!username) {
@@ -412,11 +421,14 @@ function FocusMateApp({
   if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>{translate(language, 'app.opening')}</span></div>;
   if (!profile) return <Welcome onLogin={login} onCloudLogin={onCloudLogin} cloudConfigurationError={cloudConfigurationError} notice={notice} />;
 
-  const current = pages.find((item) => item.id === page) || pages[0];
+  const visiblePages = pages.filter((item) => !item.requiresCloud || Boolean(account));
+  const visibleGroups = ['nav.yourSpace', 'nav.habits', ...(account ? ['nav.social'] : [])];
+  const current = visiblePages.find((item) => item.id === page) || visiblePages[0];
   const xp = Number(profile.total_xp || 0);
   const level = levelForXp(xp);
   const focusActive = Boolean(live.session_active);
   const changePage = (id) => {
+    if (!visiblePages.some((item) => item.id === id)) return;
     setPage(id);
     window.history.replaceState({}, '', id === 'contact' ? '/contact' : `/#${id}`);
   };
@@ -443,10 +455,10 @@ function FocusMateApp({
           <div className="level-track"><span style={{ width: `${xp % 100}%` }} /></div>
           <small>{100 - (xp % 100)} XP {translate(language, 'app.toNextLevel')}</small>
         </div>
-        {['nav.yourSpace', 'nav.habits'].map((group) => (
+        {visibleGroups.map((group) => (
           <nav className="nav-group" key={group} aria-label={translate(language, group)}>
             <span className="nav-label">{translate(language, group)}</span>
-            {pages.filter((item) => item.group === group).map((item) => {
+            {visiblePages.filter((item) => item.group === group).map((item) => {
               const Icon = item.icon;
               return <button key={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} onClick={() => changePage(item.id)} title={translate(language, item.label)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined}><Icon size={18} /><span>{translate(language, item.label)}</span>{item.id === 'focus-room' && focusActive && <i className="live-dot" />}</button>;
             })}
@@ -464,6 +476,7 @@ function FocusMateApp({
         <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
+        {page === 'friends' && account && <SocialPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <RoomFoundation account={account} language={language} />
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
@@ -477,7 +490,7 @@ function FocusMateApp({
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
-      <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>{pages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined} title={translate(language, item.label)}><Icon size={19} /><small>{translate(language, item.label)}</small></button>; })}</nav>
+      <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>{visiblePages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined} title={translate(language, item.label)}><Icon size={19} /><small>{translate(language, item.label)}</small></button>; })}</nav>
     </div>
   );
 }
@@ -582,6 +595,7 @@ function PageHeading({ page, profile, language }) {
   const content = {
     overview: ['heading.overviewEyebrow', 'heading.overviewTitle', 'heading.overviewText'],
     'focus-room': ['heading.focusEyebrow', 'heading.focusTitle', 'heading.focusText'],
+    friends: ['heading.friendsEyebrow', 'heading.friendsTitle', 'heading.friendsText'],
     insights: ['heading.progressEyebrow', 'heading.progressTitle', 'heading.progressText'],
     'session-results': ['heading.resultsEyebrow', 'heading.resultsTitle', 'heading.resultsText'],
     achievements: ['heading.achievementsEyebrow', 'heading.achievementsTitle', 'heading.achievementsText'],

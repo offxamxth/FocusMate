@@ -16,6 +16,7 @@ import {
   validatePinAccount,
 } from './pin-auth.js';
 import { browserLanguage, supportedLanguages, translate } from './i18n.js';
+import { startOwnPresence } from './presence.js';
 
 function accountLanguage() {
   const saved = localStorage.getItem('focusmate-language');
@@ -46,6 +47,7 @@ export default function AuthGate({ children }) {
   const [profileAttempt, setProfileAttempt] = useState(0);
   const [profileError, setProfileError] = useState('');
   const [localMode, setLocalMode] = useState(!supabaseConfigured);
+  const [presenceState, setPresenceState] = useState('offline');
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -74,6 +76,22 @@ export default function AuthGate({ children }) {
       listener.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!supabase || !userId) {
+      setPresenceState('offline');
+      return undefined;
+    }
+
+    setPresenceState('connecting');
+    try {
+      return startOwnPresence(supabase, userId, setPresenceState);
+    } catch {
+      setPresenceState('unavailable');
+      return undefined;
+    }
+  }, [session?.user?.id]);
 
   useEffect(() => {
     if (!supabase || !session?.user) return undefined;
@@ -232,6 +250,7 @@ export default function AuthGate({ children }) {
       displayName: profile.display_name,
       storageUsername: profile.storageUsername,
       profile,
+      presenceState,
     },
     onCloudSignOut: signOut,
     onCloudLogin: null,
