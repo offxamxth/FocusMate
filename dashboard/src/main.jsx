@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { api, levelForXp } from './local-api.js';
 import { achievementCatalog, achievementProgress } from './achievement-data.js';
 import AuthGate from './AuthGate.jsx';
-import { createVisionLandmarkers, detectMetrics } from './vision.js';
 import { claimTimerCompletion, playSessionCompletionBeep } from './timer-completion.js';
 import {
   supabase,
@@ -247,6 +246,7 @@ function FocusMateApp({
     let busy = false;
     let analysisFailed = false;
     let detectors = visionRef.current;
+    let detectFrameMetrics;
     let timeout;
     const analyze = async () => {
       if (stopped || busy) return;
@@ -257,7 +257,7 @@ function FocusMateApp({
       }
       busy = true;
       try {
-        const metrics = detectMetrics(detectors, video, performance.now());
+        const metrics = detectFrameMetrics(detectors, video, performance.now());
         const data = await api(`/api/camera/telemetry?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(metrics) });
         if (!stopped) {
           setLive(data.live);
@@ -281,6 +281,8 @@ function FocusMateApp({
     };
     const loadAndAnalyze = async () => {
       try {
+        const { createVisionLandmarkers, detectMetrics } = await import('./vision.js');
+        detectFrameMetrics = detectMetrics;
         if (!detectors) {
           detectors = await createVisionLandmarkers();
           visionRef.current = detectors;
@@ -390,6 +392,7 @@ function FocusMateApp({
     setCameraState('starting');
     setCameraError('');
     try {
+      const { createVisionLandmarkers } = await import('./vision.js');
       nextStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
       detectors = await createVisionLandmarkers();
       const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(plan) });

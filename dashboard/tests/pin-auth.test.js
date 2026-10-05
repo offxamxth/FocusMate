@@ -217,3 +217,11 @@ test('Focus Score UI has been removed while local legacy-data sanitizing stays p
   assert.doesNotMatch(main, /focus score|focus_score/i);
   assert.doesNotMatch(contact, /focus score|focus_score/i);
 });
+
+test('MediaPipe is loaded on demand when camera analysis starts', async () => {
+  const main = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const cameraStart = main.slice(main.indexOf('const startCamera'), main.indexOf('const stopCamera'));
+  assert.doesNotMatch(main, /from ['"]\.\/vision\.js['"]/);
+  assert.match(main, /await import\(['"]\.\/vision\.js['"]\)/);
+  assert.match(cameraStart, /await import\(['"]\.\/vision\.js['"]\)/);
+});

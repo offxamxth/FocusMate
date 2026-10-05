@@ -7,7 +7,7 @@ FocusMate is a study and focus application with a React dashboard, optional in-b
 - `start_focusmate.py` – launches the React dashboard locally
 - `dashboard/src/` – React interface and page components
 - `dashboard/src/local-api.js` – browser-local profile, session, timer, and quest storage
-- `dashboard/src/vision.js` – in-browser MediaPipe face and posture estimates
+- `dashboard/src/vision.js` – on-demand in-browser MediaPipe face and posture estimates for camera sessions
 - `dashboard/src/ContactPage.jsx` – Contact Us, Bug Report, and Feedback forms
 - `dashboard/public/models/` – face and pose models served with the app
 - `focus_detector.py` and `webcam_detection/` – legacy standalone Python webcam tools; not used by the React dashboard or Vercel
