@@ -18,6 +18,7 @@ import {
   translate,
   translateAchievement,
 } from './i18n.js';
+import RoomFoundation from './RoomFoundation.jsx';
 import ContactPage from './ContactPage.jsx';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
@@ -464,6 +465,7 @@ function FocusMateApp({
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
+          <RoomFoundation account={account} language={language} />
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}

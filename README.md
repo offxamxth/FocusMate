@@ -96,6 +96,32 @@ profile/wellbeing settings. The interface supports English, Spanish, French,
 Arabic (RTL), and Hindi. The webcam is optional; the timer and task list work
 without it. Use the sidebar to switch between pages.
 
+## Focus Rooms foundation
+
+The private room foundation creates rooms, joins by invitation code, lists
+active participants, and records leave/host-close transitions. Room reads and
+membership changes use authenticated RPCs; direct browser writes are not
+granted. Room presence uses private, membership-authorized Realtime channels.
+Shared focus sessions are controlled by the active room host through
+authenticated, row-locked RPCs; clients only interpolate a visual timer from
+database timestamps and re-fetch room state after Realtime updates.
+
+Apply the room foundation and server-authoritative timer migrations after the
+profile migrations above, in this order:
+
+1. `supabase/migrations/20261004190000_social_foundation.sql` (room schema)
+2. `supabase/migrations/20261004220000_focus_room_foundation.sql`
+3. `supabase/migrations/20261004230000_room_timer_state_machine.sql`
+
+The room snapshot exposes `status`, `created_at`, `capacity`, `host_id`,
+session duration, start/active-segment/pause/break/finish timestamps,
+accumulated active-focus seconds, a database-generated `server_now`, and
+participant identity, role, `joined_at`, and `left_at`. Session timestamps use
+`timestamptz`. The server accumulates focus time on pause, break, and finish;
+break time and paused time do not count as focus. A break reaching zero does
+not mutate room state automatically; the host explicitly resumes or finishes.
+Only the active host can control the shared session. A finished room session
+cannot be restarted; create another room for a new session.
 ## Optional Supabase username/PIN accounts
 
 Local username profiles continue to work when Supabase is not configured.
@@ -151,9 +177,10 @@ Forgotten PIN recovery currently requires an administrator-assisted reset.
 The profile row is protected by owner-only RLS. Cloud profile snapshots are
 also owner-writable JSON, which enables cross-device continuity but is not a
 server-authoritative rewards ledger: a technically capable signed-in user can
-tamper with their own XP or session history. The app does not provide realtime
-rooms, friends, or a global leaderboard. Apply and test migrations and Auth
-settings in the Supabase project before enabling cloud users. Configure only
+tamper with their own XP or session history. The app has private rooms with
+host-controlled, server-authoritative shared focus sessions; it does not
+have a global leaderboard. Apply and test migrations and Auth settings in
+the appropriate Supabase project before enabling cloud users. Configure only
 `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel; do not add
 server-side Edge Function secrets to the frontend project.
 
