@@ -1,8 +1,21 @@
 import { createClient } from '@supabase/supabase-js';
 
 const environment = import.meta.env || {};
-const supabaseUrl = environment.VITE_SUPABASE_URL || '';
-const supabasePublishableKey = environment.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+
+export function normalizeSupabaseConfiguration(url, publishableKey) {
+  return {
+    url: String(url || '').trim(),
+    publishableKey: String(publishableKey || '').trim(),
+  };
+}
+
+const {
+  url: supabaseUrl,
+  publishableKey: supabasePublishableKey,
+} = normalizeSupabaseConfiguration(
+  environment.VITE_SUPABASE_URL,
+  environment.VITE_SUPABASE_PUBLISHABLE_KEY,
+);
 
 function tokenRole(key) {
   const parts = String(key).split('.');

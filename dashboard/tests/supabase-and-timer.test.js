@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   authErrorMessage,
   localIdentityForAuthUser,
+  normalizeSupabaseConfiguration,
   supabase,
   supabaseConfigured,
   supabaseConfigurationIssue,
@@ -26,6 +27,16 @@ test('Supabase auth validation and account-local storage identities are bounded'
 });
 
 test('Supabase configuration requires the project URL and a public key, never a secret key', () => {
+  assert.deepEqual(
+    normalizeSupabaseConfiguration(
+      ' https://qdvxfpzoychtgfenfjrs.supabase.co ',
+      ' sb_publishable_public-test ',
+    ),
+    {
+      url: 'https://qdvxfpzoychtgfenfjrs.supabase.co',
+      publishableKey: 'sb_publishable_public-test',
+    },
+  );
   assert.match(supabaseConfigurationIssue('', ''), /VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY/);
   assert.match(
     supabaseConfigurationIssue('https://qdvxfpzoychtgfenfjrs.supabase.co', ''),
