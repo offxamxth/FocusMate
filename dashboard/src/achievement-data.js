@@ -1,4 +1,5 @@
 import { localDateKey } from './progress-data.js';
+import { isDetectionSignalMonitored } from './session-detection.js';
 
 export const achievementCatalog = [
   [
@@ -419,30 +420,35 @@ function isEligible(id, profile, context) {
     case "posture_pro":
       return (
         context.type === "session" &&
+        isDetectionSignalMonitored(current, "slouching") &&
         current.pose_detected &&
         !current.posture_alerts
       );
     case "sit_smart":
       return (
         context.type === "session" &&
-        sessions.filter((item) => item.pose_detected && !item.posture_alerts)
+        sessions.filter((item) => isDetectionSignalMonitored(item, "slouching") && item.pose_detected && !item.posture_alerts)
           .length >= 3
       );
     case "perfect_distance":
       return (
         context.type === "session" &&
+        isDetectionSignalMonitored(current, "distance_alert") &&
         current.face_detected &&
         !current.distance_alerts
       );
     case "eyes_forward":
       return (
         context.type === "session" &&
+        isDetectionSignalMonitored(current, "looking_away") &&
         current.face_detected &&
         !current.looking_away_alerts
       );
     case "steady_session":
       return (
         context.type === "session" &&
+        isDetectionSignalMonitored(current, "slouching") &&
+        isDetectionSignalMonitored(current, "distance_alert") &&
         current.pose_detected &&
         current.face_detected &&
         !current.posture_alerts &&
@@ -451,12 +457,18 @@ function isEligible(id, profile, context) {
     case "clean_session":
       return (
         context.type === "session" &&
+        isDetectionSignalMonitored(current, "slouching") &&
+        isDetectionSignalMonitored(current, "distance_alert") &&
+        isDetectionSignalMonitored(current, "looking_away") &&
+        isDetectionSignalMonitored(current, "eyes_closed") &&
+        isDetectionSignalMonitored(current, "face_missing") &&
         current.pose_detected &&
         current.face_detected &&
         !current.posture_alerts &&
         !current.distance_alerts &&
         !current.looking_away_alerts &&
-        !current.fatigue_signals
+        !current.fatigue_signals &&
+        !current.face_missing_alerts
       );
     case "sharp_start":
       return (
@@ -602,16 +614,22 @@ export function achievementProgress(profile, id) {
   const longestSessionMinutes = Math.floor(
     sessions.reduce((longest, item) => Math.max(longest, Number(item.seconds) || 0), 0) / 60,
   );
-  const noPostureAlerts = sessions.filter((item) => item.pose_detected && Number(item.posture_alerts) === 0).length;
-  const noDistanceAlerts = sessions.filter((item) => item.face_detected && Number(item.distance_alerts) === 0).length;
-  const noLookingAwayAlerts = sessions.filter((item) => item.face_detected && Number(item.looking_away_alerts) === 0).length;
+  const noPostureAlerts = sessions.filter((item) => isDetectionSignalMonitored(item, "slouching") && item.pose_detected && Number(item.posture_alerts) === 0).length;
+  const noDistanceAlerts = sessions.filter((item) => isDetectionSignalMonitored(item, "distance_alert") && item.face_detected && Number(item.distance_alerts) === 0).length;
+  const noLookingAwayAlerts = sessions.filter((item) => isDetectionSignalMonitored(item, "looking_away") && item.face_detected && Number(item.looking_away_alerts) === 0).length;
   const cleanSessions = sessions.filter((item) =>
-    item.pose_detected
+    isDetectionSignalMonitored(item, "slouching")
+    && isDetectionSignalMonitored(item, "distance_alert")
+    && isDetectionSignalMonitored(item, "looking_away")
+    && isDetectionSignalMonitored(item, "eyes_closed")
+    && isDetectionSignalMonitored(item, "face_missing")
+    && item.pose_detected
     && item.face_detected
     && Number(item.posture_alerts) === 0
     && Number(item.distance_alerts) === 0
     && Number(item.looking_away_alerts) === 0
-    && Number(item.fatigue_signals) === 0,
+    && Number(item.fatigue_signals) === 0
+    && Number(item.face_missing_alerts || 0) === 0,
   ).length;
   const goalSessions = sessions.filter((item) => Boolean(item.goal)).length;
   const uniqueGoals = new Set(sessions.map((item) => item.goal).filter(Boolean)).size;
@@ -638,7 +656,7 @@ export function achievementProgress(profile, id) {
     sit_smart: [noPostureAlerts, 3, 'sessions without posture alerts'],
     perfect_distance: [noDistanceAlerts, 1, 'sessions without distance alerts'],
     eyes_forward: [noLookingAwayAlerts, 1, 'sessions without head-turn alerts'],
-    steady_session: [sessions.filter((item) => item.pose_detected && item.face_detected && !Number(item.posture_alerts) && !Number(item.distance_alerts)).length, 1, 'sessions'],
+    steady_session: [sessions.filter((item) => isDetectionSignalMonitored(item, "slouching") && isDetectionSignalMonitored(item, "distance_alert") && item.pose_detected && item.face_detected && !Number(item.posture_alerts) && !Number(item.distance_alerts)).length, 1, 'sessions'],
     clean_session: [cleanSessions, 1, 'sessions without recorded alerts'],
     sharp_start: [sessions.length === 1 && goalSessions ? 1 : 0, 1, 'first session with a goal'],
     level_up: [days.length, 2, 'study days'],

@@ -12,10 +12,23 @@ globalThis.localStorage = {
 globalThis.window = { location: { origin: 'http://localhost' } };
 
 const { api, levelForXp } = await import('../src/local-api.js');
-const { dailyFocusSeconds, generateDailyQuests, localDateKey, studyStreak } = await import('../src/progress-data.js');
+const {
+  dailyFocusSeconds,
+  generateDailyQuests,
+  localDateKey,
+  refreshDailyQuests,
+  studyStreak,
+} = await import('../src/progress-data.js');
 const { browserLanguage, textDirection, translate } = await import('../src/i18n.js');
 const { achievementProgress, awardEligibleAchievements } = await import('../src/achievement-data.js');
 const { detectMetrics } = await import('../src/vision.js');
+const {
+  defaultDetectionConfiguration,
+  isDetectionOverlayEnabled,
+  isDetectionSignalMonitored,
+  normalizeDetectionConfiguration,
+  visionTasksForConfiguration,
+} = await import('../src/session-detection.js');
 
 function post(path, body) {
   return api(path, { method: 'POST', body: JSON.stringify(body) });
@@ -244,6 +257,37 @@ test('daily quest rotation changes by local date and avoids repeating the previo
   assert.notDeepEqual(generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id), next.map((quest) => quest.id));
 });
 
+test('camera-alert quests treat disabled session signals as unmonitored, not zero alerts', async () => {
+  values.clear();
+  const initial = await post('/api/login', { username: 'quest-exclusion', name: 'Quest Exclusion' });
+  const date = localDateKey();
+  const disabledProfile = JSON.parse(JSON.stringify(initial.profile));
+  const disabledQuest = disabledProfile.daily_quests.quests.find((quest) => quest.category === 'camera_alerts');
+  disabledQuest.signal = 'posture_alerts';
+  disabledProfile.session_history.push({
+    date,
+    seconds: 1,
+    posture_alerts: null,
+    detection_configuration: { ...defaultDetectionConfiguration, monitor_posture: false },
+  });
+  refreshDailyQuests(disabledProfile, {}, date);
+  const disabledAfter = disabledProfile.daily_quests.quests.find((quest) => quest.id === disabledQuest.id);
+  assert.equal(disabledAfter.progress, 0);
+  assert.equal(disabledAfter.completed, false);
+  assert.equal(disabledAfter.rewardClaimed, false);
+  assert.equal(disabledProfile.daily_quest_claims.some((claim) => claim.quest_id === disabledQuest.id), false);
+
+  const legacyProfile = JSON.parse(JSON.stringify(initial.profile));
+  const legacyQuest = legacyProfile.daily_quests.quests.find((quest) => quest.category === 'camera_alerts');
+  legacyQuest.signal = 'posture_alerts';
+  legacyProfile.session_history.push({ date, seconds: 1, posture_alerts: 0 });
+  refreshDailyQuests(legacyProfile, {}, date);
+  const legacyAfter = legacyProfile.daily_quests.quests.find((quest) => quest.id === legacyQuest.id);
+  assert.equal(legacyAfter.progress, 1);
+  assert.equal(legacyAfter.completed, true);
+  assert.equal(legacyAfter.rewardClaimed, true);
+});
+
 test('study streak uses recorded local study dates, including timer-only activity', () => {
   const date = new Date(2026, 2, 10, 12);
   const profile = {
@@ -270,6 +314,30 @@ test('language selection supports browser fallback and right-to-left Arabic', ()
   assert.equal(textDirection('ar'), 'rtl');
   assert.equal(textDirection('hi'), 'ltr');
   assert.equal(translate('es', 'quests.focusTitle', { target: 15 }), 'Concéntrate durante 15 minutos');
+});
+
+test('detection settings, overlay, and result labels have localized text in every supported language', () => {
+  const keys = [
+    'preferences.detectionHeading',
+    'preferences.lookingAwayMonitoring',
+    'preferences.postureMonitoring',
+    'preferences.eyeClosureMonitoring',
+    'preferences.faceMissingMonitoring',
+    'preferences.distanceMonitoring',
+    'preferences.detectionOverlaySetting',
+    'focus.detectionOverlay',
+    'focus.notMonitored',
+    'results.signalCounts',
+    'results.faceMissing',
+    'insights.unmonitoredNote',
+  ];
+  for (const language of ['en', 'es', 'fr', 'ar', 'hi']) {
+    for (const key of keys) {
+      assert.notEqual(translate(language, key), key, `${language}:${key}`);
+    }
+  }
+  assert.notEqual(translate('es', 'preferences.postureMonitoring'), translate('en', 'preferences.postureMonitoring'));
+  assert.notEqual(translate('fr', 'results.notMonitored'), translate('en', 'results.notMonitored'));
 });
 
 test('locked achievements show progress calculated only from saved profile activity', () => {
@@ -313,6 +381,191 @@ test('legacy string achievements are not awarded a second time', () => {
   const added = awardEligibleAchievements(profile, { type: 'session' });
   assert.equal(added.some((item) => item.id === 'first_step'), false);
   assert.equal(profile.total_xp >= 15, true);
+});
+
+test('legacy sessions default to prior all-enabled monitoring and preserve completion XP', () => {
+  const legacy = { seconds: 900, posture_alerts: 0, distance_alerts: 0 };
+  for (const signal of ['slouching', 'distance_alert', 'looking_away', 'eyes_closed', 'face_missing']) {
+    assert.equal(isDetectionSignalMonitored(legacy, signal), true);
+  }
+  assert.deepEqual(normalizeDetectionConfiguration(), defaultDetectionConfiguration);
+  assert.equal(normalizeDetectionConfiguration({ posture_alerts: false }).posture_reminders, false);
+  assert.equal(visionTasksForConfiguration({ ...defaultDetectionConfiguration, monitor_face_missing: false }).face, true);
+});
+
+test('all detection exclusions skip both detector tasks, while overlay visibility remains independent', () => {
+  const configuration = Object.fromEntries(
+    Object.keys(defaultDetectionConfiguration).map((key) => [key, false]),
+  );
+  let faceCalls = 0;
+  let poseCalls = 0;
+  const metrics = detectMetrics({
+    face: { detectForVideo() { faceCalls += 1; throw new Error('face detector should be skipped'); } },
+    pose: { detectForVideo() { poseCalls += 1; throw new Error('pose detector should be skipped'); } },
+  }, video, 1, configuration);
+  assert.equal(faceCalls, 0);
+  assert.equal(poseCalls, 0);
+  assert.equal(metrics.face_detected, null);
+  assert.equal(metrics.posture, 'Not monitored');
+  assert.equal(visionTasksForConfiguration(configuration).face, false);
+  assert.equal(visionTasksForConfiguration(configuration).pose, false);
+  assert.equal(isDetectionOverlayEnabled(configuration), false);
+  assert.equal(isDetectionOverlayEnabled({ ...configuration, show_detection_overlay: true }), true);
+  assert.equal(isDetectionOverlayEnabled({ ...configuration, show_detection_overlay: true }, true), false);
+  assert.equal(visionTasksForConfiguration({ ...configuration, show_detection_overlay: true }).face, true);
+});
+
+test('each disabled event is suppressed while other enabled event counts and the session snapshot persist', async () => {
+  const originalNow = Date.now;
+  let now = 100_000;
+  Date.now = () => now;
+  const signals = [
+    ['monitor_looking_away', 'looking_away_alerts'],
+    ['monitor_posture', 'posture_alerts'],
+    ['monitor_eye_closure', 'fatigue_signals'],
+    ['monitor_face_missing', 'face_missing_alerts'],
+    ['monitor_distance', 'distance_alerts'],
+  ];
+  const metricSet = {
+    face_detected: false,
+    looking_away: true,
+    eyes_closed: true,
+    posture: 'Slouching',
+    posture_angle: 40,
+    pose_detected: true,
+    pose_detection_status: 'detected',
+    distance_status: 'Too Far',
+    ear: 0.1,
+  };
+  const earnedXp = [];
+  const achievementsBySetting = [];
+  try {
+    for (const [disabledSetting, disabledField] of signals) {
+      values.clear();
+      const username = 'exclude-signal-test';
+      await post('/api/login', { username, name: 'Signal Test' });
+      const configuration = { ...defaultDetectionConfiguration, [disabledSetting]: false };
+      const started = await post(`/api/webcam/start?username=${username}`, {
+        subject: 'Coding',
+        goal: 'Test exclusions',
+        session_configuration: configuration,
+      });
+      assert.deepEqual(started.live.session_configuration, configuration);
+      assert.deepEqual(
+        (await api(`/api/state?username=${username}`)).profile.active_session_plan.detection_configuration,
+        configuration,
+      );
+
+      await api(`/api/state?username=${username}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          profile: {
+            session_preferences: {
+              ...configuration,
+              [disabledSetting]: true,
+            },
+          },
+        }),
+      });
+
+      now += 1_000;
+      await post(`/api/camera/telemetry?username=${username}`, metricSet);
+      now += 3_000;
+      const telemetry = await post(`/api/camera/telemetry?username=${username}`, {
+        ...metricSet,
+        face_detected: true,
+        looking_away: false,
+        eyes_closed: false,
+        posture: 'Good',
+        distance_status: 'Good',
+      });
+      const finished = await post(`/api/webcam/stop?username=${username}`, {});
+      const fieldBySetting = Object.fromEntries(signals.map(([setting, field]) => [setting, field]));
+      assert.equal(telemetry.live.session_configuration[disabledSetting], false);
+      assert.equal(telemetry.live[fieldBySetting[disabledSetting]], null);
+      for (const [setting, field] of signals) {
+        assert.equal(finished.live[field], setting === disabledSetting ? null : 1, `${setting} event count`);
+      }
+      const history = (await api(`/api/state?username=${username}`)).profile.session_history[0];
+      assert.equal(history.detection_configuration[disabledSetting], false);
+      assert.equal(history[disabledField], null);
+      const savedProfile = (await api(`/api/state?username=${username}`)).profile;
+      earnedXp.push(savedProfile.total_xp);
+      achievementsBySetting.push(`${disabledSetting}=${savedProfile.achievements.map((item) => item.id).join('|')}`);
+    }
+    assert.equal(new Set(earnedXp).size, 1, `disabling different signals must not change XP rewards: ${earnedXp.join(', ')}; ${achievementsBySetting.join('; ')}`);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('all optional event signals disabled remain Not monitored and never become zero-event results', async () => {
+  values.clear();
+  await post('/api/login', { username: 'multiple-exclusions', name: 'Multiple Exclusions' });
+  const configuration = {
+    ...defaultDetectionConfiguration,
+    monitor_looking_away: false,
+    monitor_posture: false,
+    monitor_eye_closure: false,
+    monitor_face_missing: false,
+    monitor_distance: false,
+  };
+  await post('/api/webcam/start?username=multiple-exclusions', {
+    session_configuration: configuration,
+  });
+  const telemetry = await post('/api/camera/telemetry?username=multiple-exclusions', {
+    face_detected: false,
+    looking_away: true,
+    eyes_closed: true,
+    posture: 'Slouching',
+    distance_status: 'Too Far',
+  });
+  assert.equal(telemetry.live.posture_alerts, null);
+  assert.equal(telemetry.live.fatigue_signals, null);
+  assert.equal(telemetry.live.face_missing_alerts, null);
+  assert.equal(telemetry.live.distance_alerts, null);
+  assert.equal(telemetry.live.looking_away_alerts, null);
+  assert.equal(telemetry.live.posture, 'Not monitored');
+  await post('/api/webcam/stop?username=multiple-exclusions', {});
+});
+
+test('disabled detection signals cannot grant no-alert achievements; legacy records remain eligible', () => {
+  const base = {
+    total_xp: 0,
+    sessions_completed: 1,
+    total_study_seconds: 600,
+    session_history: [],
+    session_reflections: [],
+    focus_timer_history: [],
+    achievements: [],
+  };
+  const disabledSession = {
+    seconds: 600,
+    pose_detected: true,
+    face_detected: true,
+    posture_alerts: null,
+    distance_alerts: null,
+    looking_away_alerts: null,
+    fatigue_signals: null,
+    detection_configuration: {
+      ...defaultDetectionConfiguration,
+      monitor_posture: false,
+      monitor_distance: false,
+      monitor_looking_away: false,
+      monitor_eye_closure: false,
+    },
+  };
+  const disabledProfile = { ...base, session_history: [disabledSession] };
+  assert.deepEqual(achievementProgress(disabledProfile, 'posture_pro'), {
+    current: 0,
+    target: 1,
+    unit: 'sessions without posture alerts',
+  });
+  assert.equal(awardEligibleAchievements(disabledProfile, { type: 'session', live: disabledSession })
+    .some((achievement) => ['posture_pro', 'perfect_distance', 'eyes_forward', 'clean_session'].includes(achievement.id)), false);
+
+  const legacyProfile = { ...base, session_history: [{ ...disabledSession, detection_configuration: undefined, posture_alerts: 0 }] };
+  assert.equal(achievementProgress(legacyProfile, 'posture_pro').current, 1);
 });
 
 function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0.1, shoulderVisibility = 0.9, shoulderPresence = 0.9 } = {}) {

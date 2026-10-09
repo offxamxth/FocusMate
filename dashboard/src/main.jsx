@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, levelForXp } from './local-api.js';
 import { achievementCatalog, achievementProgress } from './achievement-data.js';
@@ -27,6 +27,12 @@ import {
   UserRound, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import './style.css';
+import {
+  defaultDetectionConfiguration,
+  isDetectionOverlayEnabled,
+  isDetectionSignalMonitored,
+  normalizeDetectionConfiguration,
+} from './session-detection.js';
 
 const pages = [
   { id: 'overview', label: 'nav.overview', group: 'nav.yourSpace', icon: Home },
@@ -42,6 +48,111 @@ const pages = [
 ];
 
 const achievements = achievementCatalog;
+const cameraSignalSubscribers = new Set();
+
+function publishCameraSignals(live) {
+  cameraSignalSubscribers.forEach((subscriber) => subscriber(live));
+}
+
+const CameraDetectionOverlay = memo(function CameraDetectionOverlay({ live, configuration, language }) {
+  const [signals, setSignals] = useState(live);
+  const [hidden, setHidden] = useState(false);
+  const [technical, setTechnical] = useState(false);
+  const t = (key) => translate(language, `focus.${key}`);
+
+  useEffect(() => {
+    const update = (value) => setSignals(value);
+    cameraSignalSubscribers.add(update);
+    return () => cameraSignalSubscribers.delete(update);
+  }, []);
+  useEffect(() => setSignals((current) => ({
+    ...live,
+    ...(current.session_id === live.session_id
+      ? Object.fromEntries(['ear', 'head_turn_ratio', 'posture_angle', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']
+        .filter((key) => current[key] !== undefined)
+        .map((key) => [key, current[key]]))
+      : {}),
+  })), [
+    live.face_detected,
+    live.looking_away,
+    live.eyes_closed,
+    live.posture,
+    live.ear,
+    live.head_turn_ratio,
+    live.posture_angle,
+    live.shoulder_tilt_angle,
+    live.distance_ratio,
+    live.thresholds,
+    live.last_updated,
+  ]);
+  useEffect(() => {
+    setHidden(false);
+    setTechnical(false);
+  }, [live.session_id]);
+
+  const monitoredValue = (enabled, value) => !enabled
+    ? t('notMonitored')
+    : value === null || value === undefined ? t('waitingSignals') : value;
+  const faceEnabled = configuration.monitor_face_missing;
+  const faceValue = !faceEnabled
+    ? t('notMonitored')
+    : signals.face_detected === null || signals.face_detected === undefined
+      ? t('waitingSignals') : signals.face_detected ? t('detected') : t('notDetected');
+  const lookingValue = monitoredValue(
+    configuration.monitor_looking_away,
+    signals.looking_away === null || signals.looking_away === undefined
+      ? null : signals.looking_away ? t('yes') : t('no'),
+  );
+  const postureValue = monitoredValue(
+    configuration.monitor_posture,
+    signals.posture && signals.posture !== 'Unknown' && signals.posture !== 'Not monitored'
+      ? translate(language, `focus.postureState.${signals.posture}`) : null,
+  );
+  const eyesValue = monitoredValue(
+    configuration.monitor_eye_closure,
+    signals.eyes_closed === null || signals.eyes_closed === undefined
+      ? null : signals.eyes_closed ? t('detected') : t('notDetected'),
+  );
+  const distanceValue = monitoredValue(
+    configuration.monitor_distance,
+    signals.distance_status && signals.distance_status !== 'Unknown' && signals.distance_status !== 'Not monitored'
+      ? translate(language, `focus.distanceState.${signals.distance_status === 'Too Far' ? 'tooFar' : 'good'}`)
+      : null,
+  );
+
+  if (!isDetectionOverlayEnabled(configuration)) return null;
+  return (
+    <>
+      {hidden ? (
+        <button className="detection-overlay-show" onClick={() => setHidden(false)}>{t('showOverlay')}</button>
+      ) : (
+        <section className="detection-overlay" aria-label={t('detectionOverlay')}>
+          <div className="detection-overlay-heading">
+            <strong>{t('detectionOverlay')}</strong>
+            <button className="detection-overlay-action" onClick={() => setHidden(true)}>{t('hideOverlay')}</button>
+          </div>
+          <dl>
+            <div><dt>{t('face')}</dt><dd>{faceValue}</dd></div>
+            <div><dt>{t('lookingAway')}</dt><dd>{lookingValue}</dd></div>
+            <div><dt>{t('posture')}</dt><dd>{postureValue}</dd></div>
+            <div><dt>{t('eyeClosure')}</dt><dd>{eyesValue}</dd></div>
+            <div><dt>{t('screenDistance')}</dt><dd>{distanceValue}</dd></div>
+          </dl>
+          <button className="detection-overlay-action" aria-expanded={technical} onClick={() => setTechnical((value) => !value)}>{technical ? t('hideTechnical') : t('showTechnical')}</button>
+          {technical && (
+            <dl className="detection-technical">
+              <div><dt>EAR</dt><dd>{configuration.monitor_eye_closure ? signals.ear ?? '—' : t('notMonitored')} {configuration.monitor_eye_closure && <small>{t('below')} {signals.thresholds?.ear_closed_below ?? 0.2}</small>}</dd></div>
+              <div><dt>{t('headTurnProxy')}</dt><dd>{configuration.monitor_looking_away ? signals.head_turn_ratio ?? '—' : t('notMonitored')} {configuration.monitor_looking_away && <small>{t('threshold')} {signals.thresholds?.head_turn_ratio_above ?? 0.24}</small>}</dd></div>
+              <div><dt>{t('postureAngle')}</dt><dd>{configuration.monitor_posture ? signals.posture_angle ?? '—' : t('notMonitored')} {configuration.monitor_posture && <small>{t('below')} {signals.thresholds?.slouch_angle_below_degrees ?? 52}°</small>}</dd></div>
+              <div><dt>{t('shoulderTilt')}</dt><dd>{configuration.monitor_posture ? signals.shoulder_tilt_angle ?? '—' : t('notMonitored')} {configuration.monitor_posture && <small>{signals.thresholds?.shoulder_tilt_activate_degrees ?? 17}° / {signals.thresholds?.shoulder_tilt_clear_degrees ?? 12}°</small>}</dd></div>
+              <div><dt>{t('screenDistance')}</dt><dd>{configuration.monitor_distance ? signals.distance_ratio ?? '—' : t('notMonitored')} {configuration.monitor_distance && <small>{t('below')} {signals.thresholds?.distance_face_width_below ?? 0.12}</small>}</dd></div>
+            </dl>
+          )}
+        </section>
+      )}
+    </>
+  );
+});
 
 function pageFromLocation() {
   if (window.location.pathname.replace(/\/+$/, '') === '/contact') return 'contact';
@@ -63,7 +174,7 @@ function cameraStatusText(state, live, language) {
   if (state === 'analysis-unavailable') return t('cameraAnalysisUnavailable');
   if (state !== 'active') return t('cameraOff');
   if (!live.last_updated) return t('waitingSignals');
-  if (!live.face_detected) return t('faceNotDetected');
+  if (live.face_detected === false) return t('faceNotDetected');
   if (live.pose_detection_status === 'temporarily-missing') return t('shouldersTemporary');
   if (live.pose_detection_status === 'checking') return t('checkingShoulders');
   if (live.pose_detection_status === 'missing') return t('includeShoulders');
@@ -257,10 +368,11 @@ function FocusMateApp({
       }
       busy = true;
       try {
-        const metrics = detectFrameMetrics(detectors, video, performance.now());
+        const configuration = camera?.live?.session_configuration || defaultDetectionConfiguration;
+        const metrics = detectFrameMetrics(detectors, video, performance.now(), configuration);
         const data = await api(`/api/camera/telemetry?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(metrics) });
         if (!stopped) {
-          setLive(data.live);
+          publishCameraSignals({ ...data.live, ...metrics });
           if (analysisFailed) {
             analysisFailed = false;
             setCameraState('active');
@@ -284,7 +396,7 @@ function FocusMateApp({
         const { createVisionLandmarkers, detectMetrics } = await import('./vision.js');
         detectFrameMetrics = detectMetrics;
         if (!detectors) {
-          detectors = await createVisionLandmarkers();
+          detectors = await createVisionLandmarkers(camera?.live?.session_configuration || defaultDetectionConfiguration);
           visionRef.current = detectors;
         }
         if (!stopped) analyze();
@@ -300,8 +412,8 @@ function FocusMateApp({
     return () => {
       stopped = true;
       window.clearTimeout(timeout);
-      detectors?.face.close();
-      detectors?.pose.close();
+      detectors?.face?.close();
+      detectors?.pose?.close();
       if (visionRef.current === detectors) visionRef.current = null;
     };
   }, [stream, camera, username]);
@@ -339,11 +451,14 @@ function FocusMateApp({
   };
 
   useEffect(() => {
-    if (!live.posture_alert_pending || !profile?.session_preferences?.posture_alerts) return;
+    const reminderEnabled = live.session_configuration
+      ? live.session_configuration.posture_reminders
+      : profile?.session_preferences?.posture_alerts;
+    if (!live.posture_alert_pending || !reminderEnabled) return;
     if (postureNoticeRef.current === live.session_id) return;
     postureNoticeRef.current = live.session_id;
     inform('A gentle posture check-in: relax your shoulders or take a short stretch.');
-  }, [live.posture_alert_pending, live.session_id, profile?.session_preferences?.posture_alerts]);
+  }, [live.posture_alert_pending, live.session_id, live.session_configuration?.posture_reminders, profile?.session_preferences?.posture_alerts]);
 
   const login = async (name, handle) => {
     const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ name, username: handle }) });
@@ -384,6 +499,9 @@ function FocusMateApp({
   const startCamera = async (plan) => {
     let nextStream;
     let detectors;
+    const sessionConfiguration = normalizeDetectionConfiguration(
+      plan.session_configuration || profile.session_preferences,
+    );
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraState('unavailable');
       setCameraError('This browser does not provide webcam access. Use a supported browser on HTTPS or localhost.');
@@ -394,14 +512,17 @@ function FocusMateApp({
     try {
       const { createVisionLandmarkers } = await import('./vision.js');
       nextStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
-      detectors = await createVisionLandmarkers();
-      const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(plan) });
+      detectors = await createVisionLandmarkers(sessionConfiguration);
+      const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        body: JSON.stringify({ ...plan, session_configuration: sessionConfiguration }),
+      });
       visionRef.current = detectors;
       setCameraState('active');
       setCamera(data); setLive(data.live); setStream(nextStream); inform(data.message);
     } catch (error) {
-      detectors?.face.close();
-      detectors?.pose.close();
+      detectors?.face?.close();
+      detectors?.pose?.close();
       nextStream?.getTracks().forEach((track) => track.stop());
       const permissionDenied = !nextStream && ['NotAllowedError', 'SecurityError'].includes(error.name);
       setCameraState(permissionDenied ? 'permission-denied' : nextStream ? 'analysis-unavailable' : 'unavailable');
@@ -845,6 +966,11 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
+  const sessionConfiguration = normalizeDetectionConfiguration(
+    live.session_active && live.session_configuration
+      ? live.session_configuration
+      : profile.session_preferences,
+  );
   useEffect(() => setTasks(profile.tasks || []), [profile.tasks]);
   const addTask = (event) => { event.preventDefault(); if (!newTask.trim()) return; const next = [...tasks, { id: String(Date.now()), text: newTask.trim(), done: false }].slice(-100); setTasks(next); onUpdateProfile({ tasks: next }); setNewTask(''); };
   const toggleTask = (id) => { const next = tasks.map((task) => task.id === id ? { ...task, done: !task.done } : task); setTasks(next); onUpdateProfile({ tasks: next }); };
@@ -854,9 +980,9 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   return <div className="page-content">
     <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} language={language} />
       <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">{t('optionalCamera')}</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? t('live') : t('cameraOff')}</span></div><h3>{t('studyBuddy')}</h3><p className="panel-copy">{t('cameraIntro')}</p>
-        {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> {t('stopCamera')}</button></div> : <div className="camera-placeholder"><Video size={25} /><span>{t('cameraPreview')}</span><small>{t('cameraLocal')}</small></div>}
-        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood })}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
-        {stream && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div><div><small>{t('posture')}</small><strong>{postureStatusText(cameraState, live, language)}</strong></div><div><small>{t('headTurn')}</small><strong>{!live.face_detected ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn')}</strong></div><div><small>{t('face')}</small><strong>{live.face_detected ? t('detected') : t('notDetected')}</strong></div><p>{t('cameraSignalsNote')}</p></div>}
+        {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div><CameraDetectionOverlay live={live} configuration={sessionConfiguration} language={language} /><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> {t('stopCamera')}</button></div> : <div className="camera-placeholder"><Video size={25} /><span>{t('cameraPreview')}</span><small>{t('cameraLocal')}</small></div>}
+        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood, session_configuration: sessionConfiguration })}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
+        {stream && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div><div><small>{t('posture')}</small><strong>{sessionConfiguration.monitor_posture ? postureStatusText(cameraState, live, language) : t('notMonitored')}</strong></div><div><small>{t('headTurn')}</small><strong>{sessionConfiguration.monitor_looking_away ? live.looking_away === null || live.looking_away === undefined ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn') : t('notMonitored')}</strong></div><div><small>{t('face')}</small><strong>{sessionConfiguration.monitor_face_missing ? live.face_detected ? t('detected') : t('notDetected') : t('notMonitored')}</strong></div><p>{t('cameraSignalsNote')}</p></div>}
         {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
       </section>
     </div>
@@ -882,12 +1008,17 @@ function Insights({ profile, language }) {
   const sessions = Number(profile.sessions_completed || 0);
   const seconds = Number(profile.total_study_seconds || 0) + Number(profile.focus_timer_total_seconds || 0);
   const alertsFor = (item) => ({
-    posture: Math.max(0, Number(item.posture_alerts) || 0),
-    distance: Math.max(0, Number(item.distance_alerts) || 0),
-    lookingAway: Math.max(0, Number(item.looking_away_alerts) || 0),
-    fatigue: Math.max(0, Number(item.fatigue_signals) || 0),
+    posture: isDetectionSignalMonitored(item, 'slouching') ? Math.max(0, Number(item.posture_alerts) || 0) : null,
+    distance: isDetectionSignalMonitored(item, 'distance_alert') ? Math.max(0, Number(item.distance_alerts) || 0) : null,
+    lookingAway: isDetectionSignalMonitored(item, 'looking_away') ? Math.max(0, Number(item.looking_away_alerts) || 0) : null,
+    fatigue: isDetectionSignalMonitored(item, 'eyes_closed') ? Math.max(0, Number(item.fatigue_signals) || 0) : null,
+    faceMissing: isDetectionSignalMonitored(item, 'face_missing') ? Math.max(0, Number(item.face_missing_alerts) || 0) : null,
   });
-  const totalAlerts = rows.reduce((total, item) => total + Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0), 0);
+  const alertTotalFor = (item) => Object.values(alertsFor(item))
+    .filter(Number.isFinite)
+    .reduce((sum, count) => sum + count, 0);
+  const hasMonitoredSignals = (item) => Object.values(alertsFor(item)).some(Number.isFinite);
+  const totalAlerts = rows.reduce((total, item) => total + alertTotalFor(item), 0);
   const week = weekStudyDays(profile).map((day) => {
     const cameraSeconds = rows.filter((item) => String(item.date).slice(0, 10) === day.date)
       .reduce((total, item) => total + Number(item.seconds || 0), 0);
@@ -969,7 +1100,7 @@ function Insights({ profile, language }) {
       </section>
       <section className="history-section">
         <div className="section-heading"><div><span className="eyebrow">{t('yourHistory')}</span><h3>{t('savedSessions')}</h3></div><button className="outline-button" onClick={exportCsv}><ArrowUpRight size={15} /> {t('downloadCsv')}</button></div>
-        {rows.length ? <div className="table-wrap"><table><thead><tr><th>{t('dateTime')}</th><th>{t('subject')}</th><th>{t('goal')}</th><th>{t('studyTime')}</th><th>{t('cameraAlerts')}</th><th>{t('xpEarned')}</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(`${String(item.date).slice(0, 10)}T12:00:00`).toLocaleDateString(language)}{sessionStartTime(item.session_started_at) && <small>{sessionStartTime(item.session_started_at)}</small>}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} {translate(language, 'preferences.minutes')}</td><td>{Object.values(alertsFor(item)).reduce((sum, count) => sum + count, 0)}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div> : <div className="empty-state">{t('historyEmpty')}</div>}
+        {rows.length ? <><p className="muted-note">{t('unmonitoredNote')}</p><div className="table-wrap"><table><thead><tr><th>{t('dateTime')}</th><th>{t('subject')}</th><th>{t('goal')}</th><th>{t('studyTime')}</th><th>{t('cameraAlerts')}</th><th>{t('xpEarned')}</th></tr></thead><tbody>{rows.slice(0, 50).map((item, index) => <tr key={`${item.date}-${index}`}><td>{new Date(`${String(item.date).slice(0, 10)}T12:00:00`).toLocaleDateString(language)}{sessionStartTime(item.session_started_at) && <small>{sessionStartTime(item.session_started_at)}</small>}</td><td>{item.subject || '—'}</td><td>{item.goal || item.task_text || '—'}</td><td>{Math.floor(Number(item.seconds || 0) / 60)} {translate(language, 'preferences.minutes')}</td><td>{hasMonitoredSignals(item) ? alertTotalFor(item) : translate(language, 'focus.notMonitored')}</td><td>{item.xp || 0}</td></tr>)}</tbody></table></div></> : <div className="empty-state">{t('historyEmpty')}</div>}
       </section>
     </div>
   );
@@ -979,11 +1110,24 @@ function SessionResults({ live, profile, username, onProfile, onGoal, language }
   const t = (key, values) => translate(language, `results.${key}`, values);
   const [outcome, setOutcome] = useState(live.goal_outcome || '');
   const completed = live.session_completed;
-  const totalAlerts = Number(live.posture_alerts || 0) + Number(live.distance_alerts || 0) + Number(live.looking_away_alerts || 0) + Number(live.fatigue_signals || 0);
+  const configuration = normalizeDetectionConfiguration(live.session_configuration);
+  const resultSignals = [
+    ['posture', configuration.monitor_posture, live.posture_alerts],
+    ['distance', configuration.monitor_distance, live.distance_alerts],
+    ['lookingAway', configuration.monitor_looking_away, live.looking_away_alerts],
+    ['eyeClosure', configuration.monitor_eye_closure, live.fatigue_signals],
+    ['faceMissing', configuration.monitor_face_missing, live.face_missing_alerts],
+  ];
+  const totalAlerts = resultSignals.reduce(
+    (total, [, monitored, count]) => total + (monitored ? Number(count) || 0 : 0),
+    0,
+  );
   const reflection = (profile.session_reflections || []).find((item) => item.session_id === live.session_id);
   const generatedReflection = reflection?.source === 'Local summary' && reflection.stats?.alert_counts;
   const reflectionMinutes = Number(reflection?.stats?.duration_minutes || Math.round(Number(live.session_seconds || 0) / 60));
-  const highestSignal = Object.entries(reflection?.stats?.alert_counts || {}).sort((left, right) => right[1] - left[1])[0];
+  const highestSignal = Object.entries(reflection?.stats?.alert_counts || {})
+    .filter(([, value]) => Number.isFinite(value))
+    .sort((left, right) => right[1] - left[1])[0];
   const reflectionSummary = generatedReflection
     ? t('signalSummary', { count: totalAlerts })
     : reflection?.summary || t('signalSummary', { count: totalAlerts });
@@ -1007,7 +1151,11 @@ function SessionResults({ live, profile, username, onProfile, onGoal, language }
     <div className="page-content">
       {!completed ? <div className="surface-panel reflection-empty"><span className="reflection-icon"><Sparkles size={22} /></span><h3>{t('waiting')}</h3><p>{t('waitingText')}</p></div> : <>
         <div className="reflection-banner"><span className="reflection-icon"><Sparkles size={22} /></span><div><span className="eyebrow">{t('eyebrow')}</span><h2>{t('title')}</h2><p>{reflectionSummary}</p></div><span className="local-badge"><ShieldCheck size={14} /> {t('localSummary')}</span></div>
-        <div className="stats-grid result-stats"><Stat label={t('duration')} value={`${Math.round(Number(live.session_seconds || 0) / 60)} ${translate(language, 'preferences.minutes')}`} note={t('buddyTime')} icon={Clock3} /><Stat label={t('cameraAlerts')} value={totalAlerts} note={t('visibleCounts')} icon={Activity} /><Stat label={t('posture')} value={live.pose_detected ? live.posture || t('unknown') : t('notAvailable')} note={live.pose_detected ? t('visibleLandmarks') : live.pose_detection_status === 'missing' ? t('shouldersMissing') : t('shouldersUnavailable')} icon={UserRound} /></div>
+        <div className="stats-grid result-stats"><Stat label={t('duration')} value={`${Math.round(Number(live.session_seconds || 0) / 60)} ${translate(language, 'preferences.minutes')}`} note={t('buddyTime')} icon={Clock3} /><Stat label={t('cameraAlerts')} value={totalAlerts} note={t('visibleCounts')} icon={Activity} /><Stat label={t('posture')} value={!configuration.monitor_posture ? t('notMonitored') : live.pose_detected ? translate(language, `focus.postureState.${live.posture || 'Unknown'}`) : t('notAvailable')} note={!configuration.monitor_posture ? t('notMonitored') : live.pose_detected ? t('visibleLandmarks') : live.pose_detection_status === 'missing' ? t('shouldersMissing') : t('shouldersUnavailable')} icon={UserRound} /></div>
+        <section className="surface-panel result-signal-counts" aria-label={t('signalCounts')}>
+          <span className="eyebrow">{t('signalCounts')}</span>
+          <dl>{resultSignals.map(([name, monitored, count]) => <div key={name}><dt>{t(name)}</dt><dd>{monitored ? Number(count) || 0 : t('notMonitored')}</dd></div>)}</dl>
+        </section>
         <div className="content-columns"><section className="surface-panel reflection-list"><span className="eyebrow">{t('wentWell')}</span><h3>{t('giveCredit')}</h3>{whatWentWell.map((item) => <p key={item}>{item}</p>)}</section><section className="surface-panel reflection-list"><span className="eyebrow">{t('tryNext')}</span><h3>{t('smallIdea')}</h3>{tryNext.map((item) => <p key={item}>{item}</p>)}</section></div>
         {live.study_goal && <section className="goal-checkin surface-panel"><span className="eyebrow">{t('sessionGoal')}</span><h3>{live.study_goal}</h3><label>{t('howGo')}<select value={outcome} onChange={(event) => saveOutcome(event.target.value)}><option value="">{t('chooseOne')}</option><option value="Yes">{t('yes')}</option><option value="Partially">{t('partially')}</option><option value="Not yet">{t('notYet')}</option></select></label>{outcome && <small className="saved-note"><Check size={14} /> {t('savedCheckin', { outcome: t(outcome.toLowerCase().replace(' ', '')) })}</small>}</section>}
       </>}
@@ -1089,6 +1237,7 @@ function Preferences({ profile, onSave }) {
   const defaults = {
     focus_monitoring: true,
     posture_alerts: true,
+    ...defaultDetectionConfiguration,
     mood_checkins: true,
     session_chimes: false,
     session_length_minutes: 25,
@@ -1116,6 +1265,14 @@ function Preferences({ profile, onSave }) {
     ['posture_alerts', 'postureAlerts', 'postureHelp'],
     ['mood_checkins', 'moodCheckins', 'moodHelp'],
     ['session_chimes', 'sessionChimes', 'chimesHelp'],
+  ];
+  const detectionRows = [
+    ['monitor_looking_away', 'lookingAwayMonitoring', 'lookingAwayMonitoringHelp'],
+    ['monitor_posture', 'postureMonitoring', 'postureMonitoringHelp'],
+    ['monitor_eye_closure', 'eyeClosureMonitoring', 'eyeClosureMonitoringHelp'],
+    ['monitor_face_missing', 'faceMissingMonitoring', 'faceMissingMonitoringHelp'],
+    ['monitor_distance', 'distanceMonitoring', 'distanceMonitoringHelp'],
+    ['show_detection_overlay', 'detectionOverlaySetting', 'detectionOverlayHelp'],
   ];
   const language = preferences.language !== 'system' && supportedLanguages.includes(preferences.language) ? preferences.language : browserLanguage();
   const selectedLanguage = supportedLanguages.includes(preferences.language) ? preferences.language : 'system';
@@ -1170,6 +1327,17 @@ function Preferences({ profile, onSave }) {
           ['24-hour', translate(language, 'preferences.twentyFourHour')],
         ])}
         {rows.map(([key, titleKey, descriptionKey]) => (
+          <label className="setting-row" key={key}>
+            <span><strong>{translate(language, `preferences.${titleKey}`)}</strong><small>{translate(language, `preferences.${descriptionKey}`)}</small></span>
+            <input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+        ))}
+        <div className="detection-preferences-heading">
+          <span className="eyebrow">{translate(language, 'preferences.detectionHeading')}</span>
+          <p>{translate(language, 'preferences.detectionDescription')}</p>
+        </div>
+        {detectionRows.map(([key, titleKey, descriptionKey]) => (
           <label className="setting-row" key={key}>
             <span><strong>{translate(language, `preferences.${titleKey}`)}</strong><small>{translate(language, `preferences.${descriptionKey}`)}</small></span>
             <input type="checkbox" checked={Boolean(preferences[key])} onChange={(event) => set(key, event.target.checked)} />

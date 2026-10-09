@@ -5,6 +5,8 @@ function positiveSeconds(value) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
 }
 
+import { isDetectionSignalMonitored } from './session-detection.js';
+
 export function localDateKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -148,10 +150,19 @@ function questValue(profile, live, quest, date) {
       return sessions.length;
     case 'session_xp':
       return sessions.reduce((total, session) => total + Math.max(0, Number(session.xp) || 0), 0);
-    case 'camera_alerts':
+    case 'camera_alerts': {
+      const monitoredSignal = {
+        posture_alerts: 'slouching',
+        distance_alerts: 'distance_alert',
+        looking_away_alerts: 'looking_away',
+      }[quest.signal];
+      if (!monitoredSignal) return 0;
       return sessions.some((session) =>
-        Object.hasOwn(session, quest.signal) && Number(session[quest.signal]) === 0,
+        isDetectionSignalMonitored(session, monitoredSignal)
+        && Object.hasOwn(session, quest.signal)
+        && Number(session[quest.signal]) === 0,
       ) ? 1 : 0;
+    }
     default:
       return 0;
   }

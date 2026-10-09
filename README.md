@@ -47,8 +47,8 @@ activity, XP, quests, achievements, wellbeing notes, and preferences) is also
 stored in that account's `profiles.app_data` field and restored on another
 device. Local-only profiles do not sync. Existing browser-local profiles are
 not automatically merged into a cloud account. Camera frames are processed in
-the browser; only completed-session duration and derived signal counts are
-stored. The landmark models are served by the app and the MediaPipe WASM
+the browser; completed-session duration, derived signal counts, and the
+session's detection configuration are stored. The landmark models are served by the app and the MediaPipe WASM
 runtime is loaded from jsDelivr. Webcam access requires HTTPS or localhost.
 
 Daily quests are generated as four distinct challenges for the browser's local
@@ -58,6 +58,49 @@ challenges require a completed camera session. Streaks count saved study
 activity rather than visits to the app. Theme, language, study style, study
 goal, time format, and session preferences are saved per profile. A camera
 session interrupted by a page reload is not treated as a completed session.
+
+### Webcam signals and session controls
+
+The React dashboard runs its existing MediaPipe face and pose detectors against
+the camera video in the browser. It currently derives face presence, a
+head-turn proxy (looking-away signal), eye aspect ratio (eye closure below
+0.2), posture angle (slouch proxy below 52 degrees), shoulder alignment, and
+screen-distance status (normalized cheek span below 0.12). These are visual
+estimates, not measures of concentration, gaze direction, or health. Face or
+pose models are only initialized when an enabled signal (or the live overlay)
+needs them.
+
+React session events are counted for eye closure, face absence, slouching,
+screen distance, and the head-turn proxy. Each enabled counter records an
+event after its condition remains active for at least two seconds, when that
+event ends or the session is stopped. Shoulder tilt affects live posture status
+but does not have a separate event counter. The posture reminder is separate:
+it can appear after two minutes of continuous slouching when the existing
+posture-alert preference is enabled. Session preferences
+snapshot the signal switches and overlay choice when a camera session starts;
+later profile changes apply to the next session. The optional overlay is hidden
+by default and can be hidden or shown during a session without changing event
+tracking. Disabled event counts are stored as `null` and displayed as “Not
+monitored”; historical entries with no configuration retain the previous
+all-signals-enabled interpretation.
+
+The current React dashboard has no Focus Estimate calculation or score: its
+review shows recorded signal counts and duration. The older standalone Python
+tools do contain separate legacy scores, but neither is used by the React
+dashboard or Vercel: `focus_detector.py` subtracts 0.5 points per looking-away
+second, 0.3 per eye-closure second, and 0.2 each per slouching and face-missing
+second (clamped to 0–100, without a distance penalty); `webcam_detection/`
+instead subtracts the weighted session-time fractions for eye closure (0.35),
+face missing (0.30), slouching (0.20), and distance (0.15), without looking
+away in its score. Both legacy engines emit events only after their own
+one-second and two-second persistence delays, respectively. These incompatible
+scores and legacy implementations are intentionally unchanged.
+
+Camera frames and landmarks remain in the React browser pipeline; only
+derived telemetry and completed-session counts/configuration are retained,
+with profile sync following the existing account storage behavior. Session XP
+continues to be awarded from completed duration and existing achievements,
+not from disabling any signal.
 
 ## Contact and support submissions
 

@@ -1,5 +1,6 @@
 import { awardEligibleAchievements } from './achievement-data.js';
 import { localDateKey, refreshDailyQuests } from './progress-data.js';
+import { defaultDetectionConfiguration, normalizeDetectionConfiguration } from './session-detection.js';
 
 const PROFILE_PREFIX = 'focusmate-profile:';
 const LIVE_PREFIX = 'focusmate-live:';
@@ -52,6 +53,7 @@ function freshProfile(username, name = 'Focus friend') {
     session_preferences: {
       focus_monitoring: true,
       posture_alerts: true,
+      ...defaultDetectionConfiguration,
       mood_checkins: true,
       session_chimes: false,
       session_length_minutes: 25,
@@ -115,6 +117,7 @@ function readProfile(username) {
   profile.focus_timer_seconds_today = normalizeSeconds(profile.focus_timer_seconds_today);
   profile.focus_timer_total_seconds = normalizeSeconds(profile.focus_timer_total_seconds);
   profile.session_preferences = { ...defaults.session_preferences, ...profile.session_preferences };
+  Object.assign(profile.session_preferences, normalizeDetectionConfiguration(profile.session_preferences));
   const preferences = profile.session_preferences;
   const sessionLength = Number(preferences.session_length_minutes);
   const dailyGoal = Number(preferences.daily_goal_minutes);
@@ -242,26 +245,29 @@ function parseBody(options) {
 function reflectionFor(live) {
   const minutes = Math.round(Number(live.session_seconds || 0) / 60);
   const alerts = {
-    posture: Number(live.posture_alerts || 0),
-    screen_distance: Number(live.distance_alerts || 0),
-    looking_away: Number(live.looking_away_alerts || 0),
-    fatigue_related: Number(live.fatigue_signals || 0),
+    posture: live.posture_alerts,
+    screen_distance: live.distance_alerts,
+    looking_away: live.looking_away_alerts,
+    fatigue_related: live.fatigue_signals,
+    face_missing: live.face_missing_alerts,
   };
-  const highest = Object.entries(alerts).sort((a, b) => b[1] - a[1])[0];
+  const monitoredAlerts = Object.entries(alerts).filter(([, count]) => Number.isFinite(count));
+  const highest = monitoredAlerts.sort((a, b) => b[1] - a[1])[0];
   const suggestions = {
     posture: 'Try a quick posture check when you change tasks.',
     screen_distance: 'Adjust your seat or screen to keep a comfortable distance.',
     looking_away: 'Choose one small task and reduce nearby distractions.',
     fatigue_related: 'If you notice tiredness, try a short break before your next block.',
+    face_missing: 'Adjust your camera framing if you want face-related signals to be available.',
   };
-  const alertCount = Object.values(alerts).reduce((total, value) => total + value, 0);
+  const alertCount = monitoredAlerts.reduce((total, [, value]) => total + value, 0);
   return {
     session_id: live.session_id,
     generated_at: new Date().toISOString(),
     source: 'Local summary',
     summary: `FocusMate recorded ${alertCount} visual signal alerts during this ${minutes}-minute session. These are camera observations, not a measure of concentration or mental state.`,
     what_went_well: [`You completed ${minutes} minutes of study time.`, 'Your camera frames were analyzed in this browser and were not saved.'],
-    try_next: highest[1] > 0 ? [suggestions[highest[0]]] : ['Keep the setup that worked and take a short break before your next block.'],
+    try_next: highest?.[1] > 0 ? [suggestions[highest[0]]] : ['Keep the setup that worked and take a short break before your next block.'],
     stats: { duration_minutes: minutes, alert_counts: alerts, final_signals: { posture: live.posture || 'Unknown', screen_distance: live.distance_status || 'Unknown' } },
   };
 }
@@ -284,10 +290,13 @@ function finishCameraSession(username) {
       runtime.counts[key] += 1;
     }
   }
-  live.posture_alerts = runtime.counts.slouching;
-  live.distance_alerts = runtime.counts.distance_alert;
-  live.looking_away_alerts = runtime.counts.looking_away;
-  live.fatigue_signals = runtime.counts.eyes_closed;
+  const configuration = runtime.sessionConfiguration;
+  live.posture_alerts = configuration.monitor_posture ? runtime.counts.slouching : null;
+  live.distance_alerts = configuration.monitor_distance ? runtime.counts.distance_alert : null;
+  live.looking_away_alerts = configuration.monitor_looking_away ? runtime.counts.looking_away : null;
+  live.fatigue_signals = configuration.monitor_eye_closure ? runtime.counts.eyes_closed : null;
+  live.face_missing_alerts = configuration.monitor_face_missing ? runtime.counts.face_missing : null;
+  live.session_configuration = configuration;
   const plan = profile.active_session_plan || {};
   const challengeCount = Math.floor(live.session_seconds / 600);
   const challengeXp = challengeCount * 25;
@@ -300,9 +309,13 @@ function finishCameraSession(username) {
     distance_alerts: live.distance_alerts,
     looking_away_alerts: live.looking_away_alerts,
     fatigue_signals: live.fatigue_signals,
-    pose_detected: live.pose_detected,
+    face_missing_alerts: live.face_missing_alerts,
+    detection_configuration: configuration,
+    pose_detected: configuration.monitor_posture ? live.pose_detected : null,
     pose_detection_status: live.pose_detection_status || (live.pose_detected ? 'detected' : 'checking'),
-    face_detected: live.face_detected,
+    face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away
+      || configuration.monitor_eye_closure || configuration.monitor_distance
+      ? live.face_detected : null,
     subject: plan.subject || 'Other',
     goal: plan.goal || '',
     challenge_count: challengeCount,
@@ -339,13 +352,13 @@ function applyTelemetry(username, metrics) {
   const now = Date.now();
   const elapsed = Math.min(3, Math.max(0, (now - runtime.lastFrameAt) / 1000));
   runtime.lastFrameAt = now;
-  const preferences = readProfile(username).session_preferences;
+  const configuration = runtime.sessionConfiguration;
   const bad = {
-    eyes_closed: Boolean(metrics.eyes_closed),
-    face_missing: !metrics.face_detected,
-    slouching: metrics.posture === 'Slouching',
-    distance_alert: metrics.distance_status === 'Too Far',
-    looking_away: Boolean(metrics.looking_away),
+    eyes_closed: configuration.monitor_eye_closure && Boolean(metrics.eyes_closed),
+    face_missing: configuration.monitor_face_missing && metrics.face_detected === false,
+    slouching: configuration.monitor_posture && metrics.posture === 'Slouching',
+    distance_alert: configuration.monitor_distance && metrics.distance_status === 'Too Far',
+    looking_away: configuration.monitor_looking_away && Boolean(metrics.looking_away),
   };
   for (const [key, active] of Object.entries(bad)) {
     runtime.durations[key] += active ? elapsed : 0;
@@ -358,7 +371,7 @@ function applyTelemetry(username, metrics) {
   }
   if (bad.slouching) {
     if (!runtime.postureAlertAt) runtime.postureAlertAt = now;
-    if (preferences.posture_alerts !== false && !runtime.postureAlerted && now - runtime.postureAlertAt >= 120_000) {
+    if (configuration.monitor_posture && runtime.postureReminderEnabled && !runtime.postureAlerted && now - runtime.postureAlertAt >= 120_000) {
       runtime.postureAlertPending = true;
       runtime.postureAlerted = true;
     }
@@ -367,38 +380,44 @@ function applyTelemetry(username, metrics) {
     runtime.postureAlertPending = false;
     runtime.postureAlerted = false;
   }
-  if (preferences.posture_alerts === false) runtime.postureAlertPending = false;
+  if (!configuration.monitor_posture) runtime.postureAlertPending = false;
   const sessionSeconds = Math.max(1, (now - runtime.startedAt) / 1000);
   const live = readLive(username);
   Object.assign(live, {
     session_active: true,
     session_seconds: Math.round(sessionSeconds),
     session_minutes: Math.round(sessionSeconds / 60 * 100) / 100,
-    posture_alerts: runtime.counts.slouching,
-    distance_alerts: runtime.counts.distance_alert,
-    looking_away_alerts: runtime.counts.looking_away,
-    fatigue_signals: runtime.counts.eyes_closed,
-    posture: metrics.posture || 'Unknown',
-    pose_detected: Boolean(metrics.pose_detected),
-    pose_detection_status: metrics.pose_detection_status ||
-      (metrics.pose_detected ? 'detected' : 'checking'),
+    posture_alerts: configuration.monitor_posture ? runtime.counts.slouching : null,
+    distance_alerts: configuration.monitor_distance ? runtime.counts.distance_alert : null,
+    looking_away_alerts: configuration.monitor_looking_away ? runtime.counts.looking_away : null,
+    fatigue_signals: configuration.monitor_eye_closure ? runtime.counts.eyes_closed : null,
+    face_missing_alerts: configuration.monitor_face_missing ? runtime.counts.face_missing : null,
+    session_configuration: configuration,
+    posture: configuration.monitor_posture ? metrics.posture || 'Unknown' : 'Not monitored',
+    pose_detected: configuration.monitor_posture ? Boolean(metrics.pose_detected) : null,
+    pose_detection_status: configuration.monitor_posture ? metrics.pose_detection_status ||
+      (metrics.pose_detected ? 'detected' : 'checking') : 'not-monitored',
     posture_alert_pending: runtime.postureAlertPending,
-    distance_status: metrics.distance_status || 'Unknown',
-    face_detected: Boolean(metrics.face_detected),
-    eyes_closed: Boolean(metrics.eyes_closed),
-    looking_away: Boolean(metrics.looking_away),
-    ear: metrics.ear ?? null,
-    posture_angle: metrics.posture_angle ?? null,
+    distance_status: configuration.monitor_distance ? metrics.distance_status || 'Unknown' : 'Not monitored',
+    face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away
+      || configuration.monitor_eye_closure || configuration.monitor_distance
+      || configuration.show_detection_overlay ? metrics.face_detected ?? null : null,
+    eyes_closed: configuration.monitor_eye_closure ? Boolean(metrics.eyes_closed) : null,
+    looking_away: configuration.monitor_looking_away ? Boolean(metrics.looking_away) : null,
     status: metrics.status || 'Starting',
     last_updated: new Date(now).toISOString(),
   });
+  for (const key of ['ear', 'head_turn_ratio', 'posture_angle', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']) {
+    delete live[key];
+  }
   if (now - runtime.lastHistoryAt >= 5000) {
     live.history = [...(live.history || []), {
       minute: Math.round(sessionSeconds / 60 * 100) / 100,
-      posture_alerts: runtime.counts.slouching,
-      distance_alerts: runtime.counts.distance_alert,
-      looking_away_alerts: runtime.counts.looking_away,
-      fatigue_signals: runtime.counts.eyes_closed,
+      posture_alerts: configuration.monitor_posture ? runtime.counts.slouching : null,
+      distance_alerts: configuration.monitor_distance ? runtime.counts.distance_alert : null,
+      looking_away_alerts: configuration.monitor_looking_away ? runtime.counts.looking_away : null,
+      fatigue_signals: configuration.monitor_eye_closure ? runtime.counts.eyes_closed : null,
+      face_missing_alerts: configuration.monitor_face_missing ? runtime.counts.face_missing : null,
     }].slice(-120);
     runtime.lastHistoryAt = now;
   }
@@ -489,11 +508,18 @@ export async function api(path, options = {}) {
     if (cameraSessions.has(username)) return { ok: true, message: 'Your study session is already running.' };
     const now = Date.now();
     const sessionId = crypto.randomUUID();
-    profile.active_session_plan = { subject: String(body.subject || 'Other').slice(0, 40), goal: String(body.goal || '').slice(0, 200) };
+    const configuration = normalizeDetectionConfiguration(
+      body.session_configuration || profile.session_preferences,
+    );
+    profile.active_session_plan = {
+      subject: String(body.subject || 'Other').slice(0, 40),
+      goal: String(body.goal || '').slice(0, 200),
+      detection_configuration: configuration,
+    };
     if (body.mood) profile.session_wellbeing = { ...profile.session_wellbeing, mood: String(body.mood), mood_checkin_date: today(), mood_updated_at: new Date(now).toISOString() };
     writeProfile(username, profile);
-    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: 0, distance_alerts: 0, looking_away_alerts: 0, fatigue_signals: 0, history: [], status: 'Waiting for camera signals', posture: 'Unknown', pose_detected: false, pose_detection_status: 'checking', distance_status: 'Unknown', face_detected: false });
-    cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
+    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
+    cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
     return { ok: true, message: 'Your study session has started.', live };
   }
   if (url.pathname === '/api/camera/telemetry' && method === 'POST') return applyTelemetry(username, body);
