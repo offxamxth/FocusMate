@@ -319,6 +319,7 @@ test('language selection supports browser fallback and right-to-left Arabic', ()
 test('detection settings, overlay, and result labels have localized text in every supported language', () => {
   const keys = [
     'preferences.detectionHeading',
+    'preferences.detectionDescription',
     'preferences.lookingAwayMonitoring',
     'preferences.postureMonitoring',
     'preferences.eyeClosureMonitoring',
@@ -391,6 +392,133 @@ test('legacy sessions default to prior all-enabled monitoring and preserve compl
   assert.deepEqual(normalizeDetectionConfiguration(), defaultDetectionConfiguration);
   assert.equal(normalizeDetectionConfiguration({ posture_alerts: false }).posture_reminders, false);
   assert.equal(visionTasksForConfiguration({ ...defaultDetectionConfiguration, monitor_face_missing: false }).face, true);
+});
+
+test('saved detection preferences normalize missing and invalid values without disabling legacy defaults', async () => {
+  values.clear();
+  const { profile } = await post('/api/login', { username: 'detection-defaults', name: 'Detection Defaults' });
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(defaultDetectionConfiguration).map((key) => [key, profile.session_preferences[key]])),
+    defaultDetectionConfiguration,
+  );
+  await api('/api/state?username=detection-defaults', {
+    method: 'PUT',
+    body: JSON.stringify({
+      profile: {
+        session_preferences: {
+          monitor_posture: false,
+          monitor_distance: 'invalid',
+          show_detection_overlay: 'invalid',
+        },
+      },
+    }),
+  });
+  const restored = await api('/api/state?username=detection-defaults');
+  assert.equal(restored.profile.session_preferences.monitor_posture, false);
+  assert.equal(restored.profile.session_preferences.monitor_distance, true);
+  assert.equal(restored.profile.session_preferences.show_detection_overlay, false);
+  assert.equal(restored.profile.session_preferences.monitor_eye_closure, true);
+});
+
+test('active detection settings update immediately, discard disabled signal state, and preserve independent signals', async () => {
+  values.clear();
+  const originalNow = Date.now;
+  let now = 100_000;
+  Date.now = () => now;
+  try {
+    const username = 'active-detection-settings';
+    await post('/api/login', { username, name: 'Active Detection' });
+    const started = await post(`/api/webcam/start?username=${username}`, {
+      goal: 'Test active settings',
+      session_configuration: defaultDetectionConfiguration,
+    });
+    assert.equal(started.live.session_active, true);
+    const firstConfigurationVersion = started.live.detection_configuration_version;
+
+    now += 1_000;
+    await post(`/api/camera/telemetry?username=${username}`, {
+      posture: 'Slouching',
+      pose_detected: true,
+      distance_status: 'Too Far',
+      face_detected: true,
+    });
+    now += 3_000;
+    const disabledConfiguration = { ...defaultDetectionConfiguration, monitor_posture: false };
+    const disabled = await post(`/api/webcam/configuration?username=${username}`, {
+      session_configuration: disabledConfiguration,
+    });
+    assert.equal(disabled.live.session_configuration.monitor_posture, false);
+    assert.equal(disabled.live.posture, 'Not monitored');
+    assert.equal(disabled.live.pose_detected, null);
+    assert.equal(disabled.live.posture_alerts, null);
+    assert.equal(disabled.live.distance_alerts, 0);
+    assert.equal(disabled.live.detection_configuration_version, firstConfigurationVersion + 1);
+
+    const staleWhileDisabled = await post(`/api/camera/telemetry?username=${username}`, {
+      detection_configuration_version: firstConfigurationVersion,
+      posture: 'Slouching',
+      pose_detected: true,
+      distance_status: 'Too Far',
+      face_detected: true,
+    });
+    assert.equal(staleWhileDisabled.ignored_stale_configuration, true);
+    assert.equal(staleWhileDisabled.live.distance_alerts, 0);
+
+    now += 3_000;
+    const independent = await post(`/api/camera/telemetry?username=${username}`, {
+      posture: 'Slouching',
+      pose_detected: true,
+      distance_status: 'Good',
+      face_detected: true,
+    });
+    assert.equal(independent.live.posture, 'Not monitored');
+    assert.equal(independent.live.posture_alerts, null);
+    assert.equal(independent.live.distance_alerts, 1);
+
+    now += 1_000;
+    const enabledConfiguration = { ...disabledConfiguration, monitor_posture: true };
+    const enabled = await post(`/api/webcam/configuration?username=${username}`, {
+      session_configuration: enabledConfiguration,
+    });
+    assert.equal(enabled.live.session_configuration.monitor_posture, true);
+    assert.equal(enabled.live.posture, 'Unknown');
+    assert.equal(enabled.live.posture_alerts, 0);
+    assert.equal(enabled.live.detection_configuration_version, firstConfigurationVersion + 2);
+
+    const staleAfterReenable = await post(`/api/camera/telemetry?username=${username}`, {
+      detection_configuration_version: firstConfigurationVersion,
+      posture: 'Slouching',
+      pose_detected: true,
+      distance_status: 'Too Far',
+      face_detected: true,
+    });
+    assert.equal(staleAfterReenable.ignored_stale_configuration, true);
+    assert.equal(staleAfterReenable.live.posture_alerts, 0);
+
+    now += 3_000;
+    await post(`/api/camera/telemetry?username=${username}`, {
+      posture: 'Slouching',
+      pose_detected: true,
+      distance_status: 'Good',
+      face_detected: true,
+    });
+    now += 3_000;
+    await post(`/api/camera/telemetry?username=${username}`, {
+      posture: 'Good',
+      pose_detected: true,
+      distance_status: 'Good',
+      face_detected: true,
+    });
+    const finished = await post(`/api/webcam/stop?username=${username}`, {});
+    assert.equal(finished.live.posture_alerts, 1);
+    assert.equal(finished.live.distance_alerts, 1);
+    assert.equal(finished.live.session_configuration.monitor_posture, true);
+    const history = (await api(`/api/state?username=${username}`)).profile.session_history[0];
+    assert.equal(history.posture_alerts, 1);
+    assert.equal(history.distance_alerts, 1);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test('all detection exclusions skip both detector tasks, while overlay visibility remains independent', () => {
@@ -577,19 +705,65 @@ function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0
   points[12] = { x: rightX, y: 0.5 + rise, visibility: shoulderVisibility, presence: shoulderPresence };
   points[7] = { x: leftX, y: 0.3, visibility: earVisibility, presence: earVisibility };
   points[8] = { x: rightX, y: 0.3 + rise, visibility: earVisibility, presence: earVisibility };
-  const face = Array.from({ length: 455 }, () => ({ x: 0.5, y: 0.5 }));
-  face[234] = { x: 0.4, y: 0.5 };
-  face[454] = { x: 0.6, y: 0.5 };
+  let currentFace = Array.from({ length: 455 }, () => ({ x: 0.5, y: 0.5 }));
+  currentFace[234] = { x: 0.4, y: 0.5 };
+  currentFace[454] = { x: 0.6, y: 0.5 };
   let currentPose = points;
   return {
-    face: { detectForVideo: () => ({ faceLandmarks: [face] }) },
+    face: { detectForVideo: () => ({ faceLandmarks: currentFace ? [currentFace] : [] }) },
     pose: { detectForVideo: () => ({ landmarks: currentPose ? [currentPose] : [] }) },
+    setFace(face) { currentFace = face; },
     setPose(pose) { currentPose = pose; },
     points,
   };
 }
 
 const video = { videoWidth: 640, videoHeight: 480 };
+
+test('each independently disabled detector signal is suppressed without disabling other signals', () => {
+  const signalPreferences = [
+    'monitor_looking_away',
+    'monitor_posture',
+    'monitor_eye_closure',
+    'monitor_face_missing',
+    'monitor_distance',
+  ];
+  for (const disabledPreference of signalPreferences) {
+    const detectors = visionFixture({ earVisibility: 0.9 });
+    const slouchingPose = detectors.points.map((point) => ({ ...point }));
+    slouchingPose[7].y = slouchingPose[11].y;
+    slouchingPose[8].y = slouchingPose[12].y;
+    detectors.setPose(slouchingPose);
+    const face = Array.from({ length: 455 }, () => ({ x: 0.5, y: 0.5 }));
+    face[1] = { x: 0.6, y: 0.5 };
+    face[234] = { x: 0.4, y: 0.5 };
+    face[454] = { x: 0.6, y: 0.5 };
+    detectors.setFace(face);
+    const configuration = { ...defaultDetectionConfiguration, [disabledPreference]: false };
+    detectMetrics(detectors, video, 1, configuration);
+    const metrics = detectMetrics(detectors, video, 2, configuration);
+
+    if (disabledPreference === 'monitor_looking_away') assert.equal(metrics.looking_away, null);
+    else assert.equal(metrics.looking_away, true, `${disabledPreference} must preserve head-turn detection`);
+    if (disabledPreference === 'monitor_eye_closure') assert.equal(metrics.eyes_closed, null);
+    else assert.equal(metrics.eyes_closed, true, `${disabledPreference} must preserve eye-closure detection`);
+    if (disabledPreference === 'monitor_posture') {
+      assert.equal(metrics.posture, 'Not monitored');
+      assert.equal(metrics.pose_detected, null);
+    } else {
+      assert.equal(metrics.posture, 'Slouching', `${disabledPreference} must preserve posture detection`);
+    }
+    if (disabledPreference === 'monitor_distance') assert.equal(metrics.distance_status, 'Not monitored');
+    else assert.equal(metrics.distance_status, 'Good', `${disabledPreference} must preserve distance detection`);
+
+    if (disabledPreference === 'monitor_face_missing') {
+      detectors.setFace(null);
+      const noFace = detectMetrics(detectors, video, 3, configuration);
+      assert.equal(noFace.face_detected, false);
+      assert.notEqual(noFace.status, 'Face Not Detected');
+    }
+  }
+});
 
 test('visible shoulders are not reported out of frame when ear landmarks are uncertain', () => {
   const detectors = visionFixture();

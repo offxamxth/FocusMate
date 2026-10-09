@@ -35,6 +35,7 @@ import {
   isDetectionOverlayEnabled,
   isDetectionSignalMonitored,
   normalizeDetectionConfiguration,
+  visionTasksForConfiguration,
 } from './session-detection.js';
 
 const pages = [
@@ -254,10 +255,20 @@ function FocusMateApp({
   const language = supportedLanguages.includes(storedLanguage)
     ? storedLanguage
     : supportedLanguages.includes(profileLanguage) ? profileLanguage : browserLanguage();
+  const activeDetectionConfiguration = normalizeDetectionConfiguration(
+    camera?.live?.session_configuration || defaultDetectionConfiguration,
+  );
+  const activeVisionTasks = visionTasksForConfiguration(activeDetectionConfiguration);
   const videoRef = useRef(null);
   const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
+  const detectionConfigurationRef = useRef(activeDetectionConfiguration);
+  const detectionConfigurationVersionRef = useRef(
+    camera?.live?.detection_configuration_version ?? null,
+  );
   const postureNoticeRef = useRef('');
+  detectionConfigurationRef.current = activeDetectionConfiguration;
+  detectionConfigurationVersionRef.current = camera?.live?.detection_configuration_version ?? null;
 
   const presentProfile = (value) => account
     ? { ...value, username: account.username }
@@ -378,10 +389,17 @@ function FocusMateApp({
       }
       busy = true;
       try {
-        const configuration = camera?.live?.session_configuration || defaultDetectionConfiguration;
+        const configuration = detectionConfigurationRef.current;
         const metrics = detectFrameMetrics(detectors, video, performance.now(), configuration);
-        const data = await api(`/api/camera/telemetry?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify(metrics) });
-        if (!stopped) {
+        const configurationVersion = detectionConfigurationVersionRef.current;
+        const data = await api(`/api/camera/telemetry?username=${encodeURIComponent(username)}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            ...metrics,
+            detection_configuration_version: configurationVersion,
+          }),
+        });
+        if (!stopped && !data.ignored_stale_configuration) {
           publishCameraSignals({ ...data.live, ...metrics });
           if (analysisFailed) {
             analysisFailed = false;
@@ -406,7 +424,13 @@ function FocusMateApp({
         const { createVisionLandmarkers, detectMetrics } = await import('./vision.js');
         detectFrameMetrics = detectMetrics;
         if (!detectors) {
-          detectors = await createVisionLandmarkers(camera?.live?.session_configuration || defaultDetectionConfiguration);
+          const loadedDetectors = await createVisionLandmarkers(detectionConfigurationRef.current);
+          if (stopped) {
+            loadedDetectors?.face?.close();
+            loadedDetectors?.pose?.close();
+            return;
+          }
+          detectors = loadedDetectors;
           visionRef.current = detectors;
         }
         if (!stopped) analyze();
@@ -426,19 +450,43 @@ function FocusMateApp({
       detectors?.pose?.close();
       if (visionRef.current === detectors) visionRef.current = null;
     };
-  }, [stream, camera, username]);
+  }, [stream, username, activeVisionTasks.face, activeVisionTasks.pose]);
 
   const updateProfile = async (change) => {
+    const previousPreferences = profile?.session_preferences || {};
+    const nextPreferences = change.session_preferences;
+    const previousConfiguration = normalizeDetectionConfiguration(previousPreferences);
+    const nextConfiguration = nextPreferences
+      ? normalizeDetectionConfiguration(nextPreferences)
+      : null;
+    const detectionConfigurationChanged = nextPreferences && Object.keys(defaultDetectionConfiguration).some(
+      (key) => previousConfiguration[key] !== nextConfiguration[key],
+    );
     setProfile((current) => current ? presentProfile({ ...current, ...change }) : current);
     try {
       await saveProfile(username, change);
-      if (account && (Object.hasOwn(change, 'player_name') || Object.hasOwn(change, 'session_preferences'))) {
-        await updatePrivateProfile(supabase, account.id, change);
-      }
     } catch (error) {
-      setNotice(account
-        ? `Your local changes were saved, but the cloud profile could not be updated: ${error.message}`
-        : error.message);
+      setNotice(error.message);
+      return;
+    }
+    if (live.session_active && detectionConfigurationChanged && nextConfiguration) {
+      try {
+        const data = await api(`/api/webcam/configuration?username=${encodeURIComponent(username)}`, {
+          method: 'POST',
+          body: JSON.stringify({ session_configuration: nextConfiguration }),
+        });
+        setLive(data.live);
+        setCamera((current) => current ? { ...current, live: data.live } : current);
+      } catch (error) {
+        setNotice(`Preferences were saved, but active-session detection settings could not be applied: ${error.message}`);
+      }
+    }
+    if (account && (Object.hasOwn(change, 'player_name') || Object.hasOwn(change, 'session_preferences'))) {
+      try {
+        await updatePrivateProfile(supabase, account.id, change);
+      } catch (error) {
+        setNotice(`Your local changes were saved, but the cloud profile could not be updated: ${error.message}`);
+      }
     }
   };
 

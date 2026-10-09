@@ -346,9 +346,95 @@ function finishCameraSession(username) {
   return { ok: true, message: 'Session ended. Your progress has been saved.', live };
 }
 
+function updateCameraSessionConfiguration(username, submittedConfiguration) {
+  const runtime = cameraSessions.get(username);
+  if (!runtime) throw new Error('The camera session is no longer active.');
+  if (!submittedConfiguration || typeof submittedConfiguration !== 'object' || Array.isArray(submittedConfiguration)) {
+    throw new Error('Valid session detection settings are required.');
+  }
+
+  const previous = runtime.sessionConfiguration;
+  const configuration = normalizeDetectionConfiguration(submittedConfiguration);
+  runtime.configurationVersion += 1;
+  const signalPreferences = {
+    eyes_closed: 'monitor_eye_closure',
+    face_missing: 'monitor_face_missing',
+    slouching: 'monitor_posture',
+    distance_alert: 'monitor_distance',
+    looking_away: 'monitor_looking_away',
+  };
+  const changedPreferences = new Set();
+  for (const [signal, preference] of Object.entries(signalPreferences)) {
+    if (previous[preference] !== configuration[preference]) {
+      changedPreferences.add(preference);
+      runtime.signalStarts[signal] = 0;
+      runtime.durations[signal] = 0;
+    }
+  }
+  const postureSettingsChanged = previous.monitor_posture !== configuration.monitor_posture
+    || previous.posture_reminders !== configuration.posture_reminders;
+  if (postureSettingsChanged) {
+    changedPreferences.add('posture_reminders');
+    runtime.postureAlertAt = 0;
+    runtime.postureAlerted = false;
+    runtime.postureAlertPending = false;
+  }
+  if (previous.show_detection_overlay !== configuration.show_detection_overlay) {
+    changedPreferences.add('show_detection_overlay');
+  }
+  runtime.sessionConfiguration = configuration;
+  runtime.postureReminderEnabled = configuration.posture_reminders;
+
+  const live = readLive(username);
+  Object.assign(live, {
+    session_configuration: configuration,
+    detection_configuration_version: runtime.configurationVersion,
+    posture_alert_pending: postureSettingsChanged ? false : runtime.postureAlertPending,
+    status: 'Waiting for updated camera signals',
+  });
+  if (changedPreferences.has('monitor_posture')) {
+    live.posture = configuration.monitor_posture ? 'Unknown' : 'Not monitored';
+    live.pose_detected = configuration.monitor_posture ? false : null;
+    live.pose_detection_status = configuration.monitor_posture ? 'checking' : 'not-monitored';
+  }
+  if (changedPreferences.has('monitor_distance')) {
+    live.distance_status = configuration.monitor_distance ? 'Unknown' : 'Not monitored';
+  }
+  if (changedPreferences.has('monitor_eye_closure')) live.eyes_closed = null;
+  if (changedPreferences.has('monitor_looking_away')) live.looking_away = null;
+  if (changedPreferences.has('monitor_face_missing')
+    || changedPreferences.has('monitor_looking_away')
+    || changedPreferences.has('monitor_eye_closure')
+    || changedPreferences.has('monitor_distance')
+    || changedPreferences.has('show_detection_overlay')) {
+    live.face_detected = null;
+  }
+  delete live.last_updated;
+  live.posture_alerts = configuration.monitor_posture ? runtime.counts.slouching : null;
+  live.distance_alerts = configuration.monitor_distance ? runtime.counts.distance_alert : null;
+  live.looking_away_alerts = configuration.monitor_looking_away ? runtime.counts.looking_away : null;
+  live.fatigue_signals = configuration.monitor_eye_closure ? runtime.counts.eyes_closed : null;
+  live.face_missing_alerts = configuration.monitor_face_missing ? runtime.counts.face_missing : null;
+  const profile = readProfile(username);
+  profile.active_session_plan = {
+    ...(profile.active_session_plan || {}),
+    detection_configuration: configuration,
+  };
+  writeProfile(username, profile);
+  return { ok: true, live: writeLive(username, live) };
+}
+
 function applyTelemetry(username, metrics) {
   const runtime = cameraSessions.get(username);
   if (!runtime) throw new Error('The camera session is no longer active.');
+  if (metrics.detection_configuration_version !== undefined
+    && metrics.detection_configuration_version !== runtime.configurationVersion) {
+    return {
+      ok: true,
+      ignored_stale_configuration: true,
+      live: readLive(username),
+    };
+  }
   const now = Date.now();
   const elapsed = Math.min(3, Math.max(0, (now - runtime.lastFrameAt) / 1000));
   runtime.lastFrameAt = now;
@@ -518,9 +604,13 @@ export async function api(path, options = {}) {
     };
     if (body.mood) profile.session_wellbeing = { ...profile.session_wellbeing, mood: String(body.mood), mood_checkin_date: today(), mood_updated_at: new Date(now).toISOString() };
     writeProfile(username, profile);
-    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
-    cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
+    const configurationVersion = 1;
+    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, detection_configuration_version: configurationVersion, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
+    cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, configurationVersion, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
     return { ok: true, message: 'Your study session has started.', live };
+  }
+  if (url.pathname === '/api/webcam/configuration' && method === 'POST') {
+    return updateCameraSessionConfiguration(username, body.session_configuration);
   }
   if (url.pathname === '/api/camera/telemetry' && method === 'POST') return applyTelemetry(username, body);
   if (url.pathname === '/api/webcam/stop' && method === 'POST') return finishCameraSession(username);
