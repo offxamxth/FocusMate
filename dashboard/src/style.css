@@ -439,6 +439,29 @@ html[data-theme='light'] .welcome-page { background: linear-gradient(180deg, #ed
 .privacy-note svg { color: var(--mint); }
 .form-error { padding: 9px 10px; border-left: 2px solid #ed9c88; background: rgba(237,156,136,.08); color: #f2b4a4; font-size: 10px; }
 .boot-screen { min-height: 100vh; display: grid; align-content: center; justify-items: center; gap: 13px; background: #111a24; color: var(--muted); font-size: 11px; }
+
+.pwa-dock { position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 20; display: grid; gap: 9px; width: min(380px, calc(100vw - 32px)); }
+.pwa-message, .pwa-error { margin: 0; padding: 13px 15px; border: 1px solid rgba(168,240,208,.27); border-radius: 9px; background: rgba(17,25,34,.97); color: #f5f4f0; box-shadow: 0 12px 36px rgba(0,0,0,.3); font-size: 12px; line-height: 1.5; }
+.pwa-message strong { display: block; color: #a8f0d0; font-size: 13px; }
+.pwa-message p { margin: 6px 0 0; color: #d7deea; }
+.pwa-install, .pwa-action { min-height: 42px; justify-self: end; padding: 0 16px; border: 1px solid #a8f0d0; border-radius: 7px; background: #a8f0d0; color: #11201d; font-weight: 700; cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.28); }
+.pwa-install:hover, .pwa-action:hover { background: #baf6dd; }
+.pwa-action { min-height: 36px; margin-top: 10px; font-size: 11px; }
+.pwa-action:disabled { opacity: .55; cursor: not-allowed; }
+.pwa-error { border-color: rgba(255,130,130,.45); color: #ffc1c1; }
+.pwa-dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px; background: rgba(2,8,12,.72); }
+.pwa-dialog { position: relative; width: min(480px, 100%); padding: 25px; border: 1px solid rgba(168,240,208,.25); border-radius: 12px; background: #111923; color: #f5f4f0; box-shadow: 0 24px 80px rgba(0,0,0,.48); }
+.pwa-dialog h2 { margin: 0 35px 14px 0; font: 700 21px/1.25 'Manrope', sans-serif; }
+.pwa-dialog p { color: #d7deea; font-size: 13px; line-height: 1.65; }
+.pwa-dialog-close { position: absolute; top: 12px; right: 12px; width: 34px; height: 34px; border: 0; border-radius: 6px; background: transparent; color: #d7deea; font-size: 25px; cursor: pointer; }
+.pwa-dialog-close:hover { background: rgba(255,255,255,.08); }
+html[dir='rtl'] .pwa-dialog h2 { margin-right: 0; margin-left: 35px; }
+
+@media (max-width: 520px) {
+  .pwa-dock { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); width: calc(100vw - 24px); }
+  .pwa-install { justify-self: stretch; }
+  .pwa-dialog { padding: 22px 18px; }
+}
 .brand-mark { color: var(--ink); font: 800 40px 'Manrope', sans-serif; }
 .brand-mark span { color: var(--lime); font-size: 22px; }
 

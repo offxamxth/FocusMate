@@ -1,0 +1,30 @@
+{
+  "name": "FocusMate",
+  "short_name": "FocusMate",
+  "description": "A calm study companion for focused sessions, better study habits, and progress tracking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101820",
+  "theme_color": "#111923",
+  "icons": [
+    {
+      "src": "/icons/focusmate-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/focusmate-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/focusmate-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

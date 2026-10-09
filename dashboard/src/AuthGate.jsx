@@ -15,7 +15,7 @@ import {
   isUsernameUnavailableMessage,
   validatePinAccount,
 } from './pin-auth.js';
-import { browserLanguage, supportedLanguages, translate } from './i18n.js';
+import { browserLanguage, supportedLanguages, textDirection, translate } from './i18n.js';
 import { startOwnPresence } from './presence.js';
 
 function accountLanguage() {
@@ -335,6 +335,7 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
     else localStorage.setItem('focusmate-language', nextLanguage);
     document.documentElement.lang = nextLanguage === 'system' ? browserLanguage() : nextLanguage;
     document.documentElement.dir = textDirection(nextLanguage);
+    window.dispatchEvent(new Event('focusmate:language-changed'));
   };
 
   return (

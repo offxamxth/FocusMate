@@ -16,6 +16,7 @@ import {
   subscribeToFocusRoom,
 } from './room-api.js';
 import { translate } from './i18n.js';
+import { reportPwaSessionActivity } from './pwa-session-state.js';
 
 const focusDurations = [900, 1500, 2700, 3600, 5400, 7200];
 const breakDurations = [60, 300, 600, 900, 1800];
@@ -69,6 +70,12 @@ export default function RoomFoundation({ account, language }) {
     ? Math.max(0, Math.floor((serverNow - breakStartedAt) / 1000))
     : 0;
   const breakRemaining = Math.max(0, (Number(room?.break_duration_seconds) || 0) - breakElapsed);
+
+  useEffect(() => {
+    const active = room?.status === 'focusing' || room?.status === 'break';
+    reportPwaSessionActivity('room', active);
+    return () => reportPwaSessionActivity('room', false);
+  }, [room?.status]);
 
   useEffect(() => {
     if (!room || !['focusing', 'break'].includes(room.status)) return undefined;

@@ -20,6 +20,8 @@ import {
 import SocialPage from './SocialPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
 import ContactPage from './ContactPage.jsx';
+import PwaControls from './PwaControls.jsx';
+import { reportPwaSessionActivity } from './pwa-session-state.js';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, LockKeyhole, LogOut, Moon,
@@ -284,7 +286,13 @@ function FocusMateApp({
   useEffect(() => {
     document.documentElement.lang = language;
     document.documentElement.dir = textDirection(language);
+    window.dispatchEvent(new Event('focusmate:language-changed'));
   }, [language]);
+
+  useEffect(() => {
+    reportPwaSessionActivity('camera', Boolean(live.session_active));
+    return () => reportPwaSessionActivity('camera', false);
+  }, [live.session_active]);
 
   useEffect(() => {
     const syncError = (event) => inform(event.detail?.message || 'Cloud profile sync failed.');
@@ -903,6 +911,10 @@ function TimerPanel({ profile, username, onNotice, language }) {
   };
   useEffect(() => () => { chimeContext.current?.close(); }, []);
   useEffect(() => {
+    reportPwaSessionActivity('timer', running);
+    return () => reportPwaSessionActivity('timer', false);
+  }, [running]);
+  useEffect(() => {
     if (!running) return undefined;
     const interval = window.setInterval(() => setRemaining((value) => Math.max(0, value - 1)), 1000);
     return () => window.clearInterval(interval);
@@ -1256,6 +1268,7 @@ function Preferences({ profile, onSave }) {
     if (key === 'language') {
       if (value === 'system') localStorage.removeItem('focusmate-language');
       else localStorage.setItem('focusmate-language', value);
+      window.dispatchEvent(new Event('focusmate:language-changed'));
       void onSave({ session_preferences: updated });
     }
   };
@@ -1429,16 +1442,19 @@ function downloadProfile(profile) { downloadText('focusmate-profile.json', JSON.
 
 function App() {
   return (
-    <AuthGate>
-      {({ account, onCloudSignOut, onCloudLogin, cloudConfigurationError }) => (
-        <FocusMateApp
-          account={account}
-          onCloudSignOut={onCloudSignOut}
-          onCloudLogin={onCloudLogin}
-          cloudConfigurationError={cloudConfigurationError || supabaseConfigurationError}
-        />
-      )}
-    </AuthGate>
+    <>
+      <PwaControls />
+      <AuthGate>
+        {({ account, onCloudSignOut, onCloudLogin, cloudConfigurationError }) => (
+          <FocusMateApp
+            account={account}
+            onCloudSignOut={onCloudSignOut}
+            onCloudLogin={onCloudLogin}
+            cloudConfigurationError={cloudConfigurationError || supabaseConfigurationError}
+          />
+        )}
+      </AuthGate>
+    </>
   );
 }
 

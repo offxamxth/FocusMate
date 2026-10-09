@@ -35,6 +35,30 @@ You can also start it with `npm --prefix dashboard run dev`.
 Run a production build with `npm --prefix dashboard run build`, or preview the
 generated build with `npm --prefix dashboard run preview`.
 
+## Install and use FocusMate offline
+
+The production build includes a standalone web app manifest and branded icons.
+Chrome on Android and Chrome or Edge on desktop can offer **Install FocusMate**
+when their installability checks pass. Safari on iPhone and iPad uses its Share
+menu's **Add to Home Screen** action; installation prompts and options vary by
+browser and platform. Installing adds an app shortcut and does not create an
+account. Camera use still requires a secure context (HTTPS or localhost) and
+browser permission; installing never requests camera access.
+
+The service worker precaches the built app shell and static interface assets.
+It does not cache API or Supabase responses, accounts, sessions, PIN
+authentication, room or presence data, or the MediaPipe model/WASM assets.
+Offline access is therefore limited to loading the cached interface; sign-in,
+cloud session restoration and synchronization, rooms, presence, server-backed
+timers, and camera detection require a network connection. FocusMate does not
+queue privileged or authenticated actions for later synchronization.
+
+Updates are staged by the service worker and offered in the app. The reload
+action is disabled while a focus timer or camera session is active, and the
+user must confirm the reload. The worker script and manifest are configured
+for revalidation so a deployed version can be detected rather than remaining
+stale indefinitely.
+
 ## Deploy to Vercel
 
 Import the repository into Vercel and set the **Root Directory** to
