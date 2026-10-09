@@ -18,6 +18,7 @@ import {
   translateAchievement,
 } from './i18n.js';
 import SocialPage from './SocialPage.jsx';
+import LeaderboardPage from './LeaderboardPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
 import ContactPage from './ContactPage.jsx';
 import PwaControls from './PwaControls.jsx';
@@ -40,6 +41,7 @@ const pages = [
   { id: 'overview', label: 'nav.overview', group: 'nav.yourSpace', icon: Home },
   { id: 'focus-room', label: 'nav.focusRoom', group: 'nav.yourSpace', icon: Timer },
   { id: 'friends', label: 'nav.friends', group: 'nav.social', icon: Users, requiresCloud: true },
+  { id: 'leaderboard', label: 'nav.leaderboard', group: 'nav.social', icon: Trophy, requiresCloud: true },
   { id: 'insights', label: 'nav.progress', group: 'nav.yourSpace', icon: BarChart3 },
   { id: 'session-results', label: 'nav.sessionResults', group: 'nav.yourSpace', icon: Sparkles },
   { id: 'achievements', label: 'nav.achievements', group: 'nav.habits', icon: Trophy },
@@ -609,6 +611,7 @@ function FocusMateApp({
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
         {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
+        {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <RoomFoundation account={account} language={language} />
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
@@ -728,6 +731,7 @@ function PageHeading({ page, profile, language }) {
     overview: ['heading.overviewEyebrow', 'heading.overviewTitle', 'heading.overviewText'],
     'focus-room': ['heading.focusEyebrow', 'heading.focusTitle', 'heading.focusText'],
     friends: ['heading.friendsEyebrow', 'heading.friendsTitle', 'heading.friendsText'],
+    leaderboard: ['heading.leaderboardEyebrow', 'heading.leaderboardTitle', 'heading.leaderboardText'],
     insights: ['heading.progressEyebrow', 'heading.progressTitle', 'heading.progressText'],
     'session-results': ['heading.resultsEyebrow', 'heading.resultsTitle', 'heading.resultsText'],
     achievements: ['heading.achievementsEyebrow', 'heading.achievementsTitle', 'heading.achievementsText'],

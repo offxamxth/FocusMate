@@ -181,6 +181,7 @@ order:
 3. `supabase/migrations/20261004210000_presence_authorization.sql`
 4. `supabase/migrations/20261004220000_focus_room_foundation.sql`
 5. `supabase/migrations/20261004230000_room_timer_state_machine.sql`
+6. `supabase/migrations/20261004240000_verified_focus_leaderboard.sql`
 
 The room snapshot exposes `status`, `created_at`, `capacity`, `host_id`,
 session duration, start/active-segment/pause/break/finish timestamps,
@@ -191,6 +192,33 @@ break time and paused time do not count as focus. A break reaching zero does
 not mutate room state automatically; the host explicitly resumes or finishes.
 Only the active host can control the shared session. A finished room session
 cannot be restarted; create another room for a new session.
+
+### Verified Focus Room leaderboard
+
+`supabase/migrations/20261004240000_verified_focus_leaderboard.sql` adds a
+private, trigger-maintained focus-interval ledger and authenticated leaderboard
+RPCs. The ledger opens and closes intervals only as server-authoritative room
+timer transitions occur. It credits each authenticated member only while their
+room membership is active, closes their interval when they leave, and includes
+scores only after the room reaches the completed `finished` state. Pauses,
+breaks, abandoned/closed rooms, browser-local timers, camera-session estimates,
+client XP, and profile snapshots are not score sources.
+
+Weekly totals use the overlap of those verified intervals with the current
+Monday-to-Monday UTC week. All-time totals use the same completed interval
+ledger. Ranks sort by verified seconds descending, then case-insensitive
+username ascending, then internal account ID ascending; account IDs are never
+returned to the browser. The friends view includes only accepted friendships.
+Leaderboard visibility defaults to private; users may opt into accepted-friend
+or public visibility. Public results contain only username, display name,
+rank, and verified focus seconds. The RPC derives identity from the signed-in
+caller and does not accept client-supplied scores or user IDs.
+
+Historical completed rooms are not backfilled because the prior schema kept
+only cumulative time and cannot reconstruct exact pause/break intervals or UTC
+week boundaries. An active focus interval during the migration is safely
+captured from its existing server timestamp. The service worker does not cache
+leaderboard or other authenticated RPC responses.
 
 ### Safe staging migration workflow
 
