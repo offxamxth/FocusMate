@@ -19,6 +19,25 @@ function installInstructionsKey() {
   return 'pwa.instructionsOther';
 }
 
+function waitForServiceWorkerControl(previousController) {
+  if (!previousController) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const onControllerChange = () => {
+      const controller = navigator.serviceWorker.controller;
+      if (!controller || controller === previousController) return;
+      window.clearTimeout(timeout);
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      resolve();
+    };
+    const timeout = window.setTimeout(() => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      reject(new Error('The updated application could not take control of this page.'));
+    }, 15000);
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+  });
+}
+
 export default function PwaControls() {
   const [online, setOnline] = useState(navigator.onLine);
   const [installed, setInstalled] = useState(standaloneMode);
@@ -116,7 +135,11 @@ export default function PwaControls() {
     if (activeSession || !applyUpdate) return;
     if (!window.confirm(t('pwa.confirmUpdate'))) return;
     try {
+      const previousController = navigator.serviceWorker.controller;
+      const controlChange = waitForServiceWorkerControl(previousController);
       await applyUpdate();
+      await controlChange;
+      window.location.reload();
     } catch (updateError) {
       console.error('FocusMate update activation failed.', updateError);
       setError(t('pwa.updateError'));
