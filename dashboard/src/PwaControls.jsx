@@ -2,22 +2,7 @@ import { useEffect, useState } from 'react';
 import { registerSW } from 'virtual:pwa-register';
 import { browserLanguage, supportedLanguages, translate } from './i18n.js';
 import { SESSION_ACTIVITY_EVENT } from './pwa-session-state.js';
-
-function standaloneMode() {
-  return window.matchMedia('(display-mode: standalone)').matches
-    || navigator.standalone === true;
-}
-
-function installInstructionsKey() {
-  const userAgent = navigator.userAgent;
-  const isIPad = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
-  if (/iPad|iPhone|iPod/.test(userAgent) || isIPad) return 'pwa.instructionsIos';
-  if (/Android/i.test(userAgent)) return 'pwa.instructionsAndroid';
-  if (/\bEdg\//.test(userAgent) || /\bChrome\//.test(userAgent)) {
-    return 'pwa.instructionsDesktop';
-  }
-  return 'pwa.instructionsOther';
-}
+import { installationInstructionsKey, pwaUiForSurface } from './pwa-presentation.js';
 
 function waitForServiceWorkerControl(previousController) {
   if (!previousController) return Promise.resolve();
@@ -38,7 +23,12 @@ function waitForServiceWorkerControl(previousController) {
   });
 }
 
-export default function PwaControls() {
+function standaloneMode() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || navigator.standalone === true;
+}
+
+export default function PwaControls({ surface = 'hidden' }) {
   const [online, setOnline] = useState(navigator.onLine);
   const [installed, setInstalled] = useState(standaloneMode);
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -53,6 +43,11 @@ export default function PwaControls() {
   });
   const t = (key) => translate(language, key);
   const activeSession = Object.values(activeSessions).some(Boolean);
+  const hasStatus = !online || updateReady || Boolean(error);
+  const { showLoginDock, showInstallOption, showStatusPanel } = pwaUiForSurface(surface, {
+    installed,
+    hasStatus,
+  });
 
   useEffect(() => {
     const syncOnline = () => setOnline(navigator.onLine);
@@ -130,7 +125,6 @@ export default function PwaControls() {
       setError(t('pwa.installError'));
     }
   };
-
   const update = async () => {
     if (activeSession || !applyUpdate) return;
     if (!window.confirm(t('pwa.confirmUpdate'))) return;
@@ -146,33 +140,45 @@ export default function PwaControls() {
     }
   };
 
-  if (online && installed && !updateReady && !error) return null;
+  if (!showLoginDock && !showStatusPanel && !showInstructions) return null;
 
+  const statusContent = (
+    <>
+      {!online && (
+        <section className="pwa-message" role="status">
+          <strong>{t('pwa.offlineTitle')}</strong>
+          <p>{t('pwa.offlineMessage')}</p>
+        </section>
+      )}
+      {updateReady && (
+        <section className="pwa-message" role="status">
+          <strong>{t('pwa.updateTitle')}</strong>
+          <p>{activeSession ? t('pwa.updateBlocked') : t('pwa.updateMessage')}</p>
+          <button className="pwa-action" disabled={activeSession} onClick={update}>
+            {t('pwa.update')}
+          </button>
+        </section>
+      )}
+      {error && <p className="pwa-error" role="alert">{error}</p>}
+    </>
+  );
   return (
     <>
-      <aside className="pwa-dock" aria-label="FocusMate app status">
-        {!online && (
-          <section className="pwa-message" role="status">
-            <strong>{t('pwa.offlineTitle')}</strong>
-            <p>{t('pwa.offlineMessage')}</p>
-          </section>
-        )}
-        {updateReady && (
-          <section className="pwa-message" role="status">
-            <strong>{t('pwa.updateTitle')}</strong>
-            <p>{activeSession ? t('pwa.updateBlocked') : t('pwa.updateMessage')}</p>
-            <button className="pwa-action" disabled={activeSession} onClick={update}>
-              {t('pwa.update')}
+      {showLoginDock && (
+        <aside className="pwa-dock pwa-login-dock" aria-label="FocusMate installation and app status">
+          {statusContent}
+          {showInstallOption && (
+            <button className="pwa-install" onClick={install}>
+              {installPrompt ? t('pwa.install') : t('pwa.howToInstall')}
             </button>
-          </section>
-        )}
-        {error && <p className="pwa-error" role="alert">{error}</p>}
-        {!installed && online && (
-          <button className="pwa-install" onClick={install}>
-            {installPrompt ? t('pwa.install') : t('pwa.howToInstall')}
-          </button>
-        )}
-      </aside>
+          )}
+        </aside>
+      )}
+      {showStatusPanel && (
+        <aside className="pwa-status-panel" aria-label="FocusMate app status">
+          {statusContent}
+        </aside>
+      )}
       {showInstructions && (
         <div className="pwa-dialog-backdrop">
           <section
@@ -189,7 +195,7 @@ export default function PwaControls() {
               ×
             </button>
             <h2 id="pwa-dialog-title">{t('pwa.instructionsTitle')}</h2>
-            <p>{t(installInstructionsKey())}</p>
+            <p>{t(installationInstructionsKey(navigator.userAgent, navigator.platform, navigator.maxTouchPoints))}</p>
             <p>{t('pwa.installAccountNote')}</p>
             <button className="pwa-action" onClick={() => setShowInstructions(false)}>
               {t('pwa.close')}

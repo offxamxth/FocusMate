@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { version as appVersion } from '../package.json';
 import { submitSupportForm } from './support-submissions.js';
 import { translate } from './i18n.js';
+import { installationInstructionsKey } from './pwa-presentation.js';
 import {
   AlertTriangle, ArrowUpRight, Bug, CheckCircle2, CircleHelp, Lightbulb,
   Mail, MessageSquareText, Send, ShieldAlert, Upload,
@@ -84,6 +85,10 @@ export default function ContactPage({ username, language = 'en', accountType = '
   const [honeypot, setHoneypot] = useState('');
   const submissionLock = useRef(false);
   const t = (key, values) => translate(language, `contact.${key}`, values);
+  const installInstructions = translate(
+    language,
+    installationInstructionsKey(navigator.userAgent, navigator.platform, navigator.maxTouchPoints),
+  );
 
   const usernameValue = String(username || '').trim().replace(/^@/, '');
   const mailtoBody = [
@@ -318,6 +323,12 @@ export default function ContactPage({ username, language = 'en', accountType = '
         </div>
         <div className="faq-list">
           <details><summary>{t('faqStartQ')}</summary><p>{t('faqStartA')}</p></details>
+          <details id="faq-installation">
+            <summary>{t('faqInstallQ')}</summary>
+            <p>{t('faqInstallA')}</p>
+            <p>{installInstructions}</p>
+            <p>{translate(language, 'pwa.installAccountNote')}</p>
+          </details>
           <details><summary>{t('faqCameraQ')}</summary><p>{t('faqCameraA')}</p></details>
           <details><summary>{t('faqSignalQ')}</summary><p>{t('faqSignalA')}</p></details>
           <details><summary>{t('faqVideoQ')}</summary><p>{t('faqVideoA')}</p></details>

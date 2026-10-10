@@ -209,7 +209,7 @@ export default function RoomFoundation({ account, language }) {
 
   if (!account) {
     return (
-      <section className="surface-panel room-auth-note">
+      <section className="surface-panel room-auth-note" id="room-foundation">
         <span className="eyebrow">{t('eyebrow')}</span>
         <h2>{t('title')}</h2>
         <p>{t('signInRequired')}</p>
@@ -218,7 +218,7 @@ export default function RoomFoundation({ account, language }) {
   }
 
   return (
-    <section className="room-foundation" aria-labelledby="room-foundation-title">
+    <section className="room-foundation" id="room-foundation" aria-labelledby="room-foundation-title">
       <div className="surface-panel room-foundation-panel">
         <div className="section-heading room-foundation-heading">
           <div>

@@ -17,6 +17,7 @@ import {
 } from './pin-auth.js';
 import { browserLanguage, supportedLanguages, textDirection, translate } from './i18n.js';
 import { startOwnPresence } from './presence.js';
+import { pwaSurfaceForAuth } from './pwa-presentation.js';
 
 function accountLanguage() {
   const saved = localStorage.getItem('focusmate-language');
@@ -39,7 +40,7 @@ function isProfileSnapshot(value) {
     && Object.keys(value).length > 0;
 }
 
-export default function AuthGate({ children }) {
+export default function AuthGate({ children, onPwaSurfaceChange }) {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(supabaseConfigured);
   const [profile, setProfile] = useState(null);
@@ -48,6 +49,11 @@ export default function AuthGate({ children }) {
   const [profileError, setProfileError] = useState('');
   const [localMode, setLocalMode] = useState(!supabaseConfigured);
   const [presenceState, setPresenceState] = useState('offline');
+
+  useEffect(() => {
+    if (!supabaseConfigured || localMode) return;
+    onPwaSurfaceChange?.(pwaSurfaceForAuth({ authLoading, session, localMode }));
+  }, [authLoading, localMode, onPwaSurfaceChange, session]);
 
   useEffect(() => {
     if (!supabase) return undefined;

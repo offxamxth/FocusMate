@@ -21,13 +21,22 @@ import SocialPage from './SocialPage.jsx';
 import LeaderboardPage from './LeaderboardPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
 import ContactPage from './ContactPage.jsx';
+import PublicPages, { PUBLIC_PAGE_METADATA } from './PublicPages.jsx';
 import PwaControls from './PwaControls.jsx';
+import { pwaSurfaceForApp } from './pwa-presentation.js';
+import {
+  isUnknownPath,
+  mobileDestinationFromLocation,
+  navigationPath,
+  pageFromLocation,
+  publicPageFromLocation,
+} from './navigation.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
-  Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, LockKeyhole, LogOut, Moon,
-  Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles, Sun, Timer, Trophy,
-  UserRound, Users, Video, VideoOff, X,
+  Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, ListTodo, LockKeyhole, LogOut,
+  Moon, MoreHorizontal, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles,
+  Sun, Timer, Trophy, UserRound, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import './style.css';
 import {
@@ -51,6 +60,15 @@ const pages = [
   { id: 'profile', label: 'nav.profile', group: 'nav.habits', icon: UserRound },
   { id: 'contact', label: 'nav.contact', group: 'nav.habits', icon: CircleHelp },
 ];
+
+const mobileDestinations = [
+  { id: 'overview', page: 'overview', target: null, label: 'nav.overview', icon: Home },
+  { id: 'tasks', page: 'overview', target: 'today-tasks', label: 'nav.tasks', icon: ListTodo },
+  { id: 'focus', page: 'focus-room', target: 'focus-timer', label: 'nav.focus', icon: Focus },
+  { id: 'rooms', page: 'focus-room', target: 'room-foundation', label: 'nav.rooms', icon: Users },
+  { id: 'profile', page: 'profile', target: null, label: 'nav.profileShort', icon: UserRound },
+];
+const mobileDestinationIds = new Set(mobileDestinations.map((item) => item.id));
 
 const achievements = achievementCatalog;
 const cameraSignalSubscribers = new Set();
@@ -159,11 +177,6 @@ const CameraDetectionOverlay = memo(function CameraDetectionOverlay({ live, conf
   );
 });
 
-function pageFromLocation() {
-  if (window.location.pathname.replace(/\/+$/, '') === '/contact') return 'contact';
-  return pages.find((item) => item.id === window.location.hash.slice(1))?.id || 'overview';
-}
-
 function saveProfile(username, profile) {
   return api(`/api/state?username=${encodeURIComponent(username)}`, {
     method: 'PUT', body: JSON.stringify({ profile }),
@@ -235,11 +248,16 @@ function FocusMateApp({
   onCloudSignOut = null,
   onCloudLogin = null,
   cloudConfigurationError = '',
+  onPwaSurfaceChange,
 }) {
   const [username, setUsername] = useState(account?.storageUsername || localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
   const [live, setLive] = useState({});
-  const [page, setPage] = useState(pageFromLocation);
+  const [page, setPage] = useState(() => pageFromLocation(window.location));
+  const [mobileDestination, setMobileDestination] = useState(
+    () => mobileDestinationFromLocation(window.location),
+  );
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [loading, setLoading] = useState(Boolean(account?.storageUsername || username));
   const [notice, setNotice] = useState('');
   const [camera, setCamera] = useState(null);
@@ -269,6 +287,10 @@ function FocusMateApp({
   const postureNoticeRef = useRef('');
   detectionConfigurationRef.current = activeDetectionConfiguration;
   detectionConfigurationVersionRef.current = camera?.live?.detection_configuration_version ?? null;
+
+  useEffect(() => {
+    onPwaSurfaceChange?.(pwaSurfaceForApp({ loading, profile, page }));
+  }, [loading, onPwaSurfaceChange, page, profile]);
 
   const presentProfile = (value) => account
     ? { ...value, username: account.username }
@@ -314,7 +336,11 @@ function FocusMateApp({
   }, []);
 
   useEffect(() => {
-    const syncPage = () => setPage(pageFromLocation());
+    const syncPage = () => {
+      setPage(pageFromLocation(window.location));
+      setMobileDestination(mobileDestinationFromLocation(window.location));
+      setMobileMoreOpen(false);
+    };
     window.addEventListener('popstate', syncPage);
     window.addEventListener('hashchange', syncPage);
     return () => {
@@ -324,11 +350,37 @@ function FocusMateApp({
   }, []);
 
   useEffect(() => {
+    if (!mobileMoreOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setMobileMoreOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMoreOpen]);
+
+  useEffect(() => {
     if (!account && page === 'friends') {
       setPage('overview');
-      window.history.replaceState({}, '', '/#overview');
+      setMobileDestination('overview');
+      window.history.replaceState({}, '', navigationPath('overview'));
     }
   }, [account, page]);
+
+  useEffect(() => {
+    const destination = mobileDestinations.find((item) => item.id === mobileDestination);
+    if (!profile) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      if (destination?.target) {
+        document.getElementById(destination.target)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileDestination, page, Boolean(profile)]);
 
   useEffect(() => {
     if (!username) {
@@ -526,7 +578,8 @@ function FocusMateApp({
     setLive(data.live);
     const destination = window.location.pathname.replace(/\/+$/, '') === '/contact' ? 'contact' : 'overview';
     setPage(destination);
-    window.history.replaceState({}, '', destination === 'contact' ? '/contact' : '/#overview');
+    setMobileDestination(destination);
+    window.history.replaceState({}, '', navigationPath(destination));
   };
 
   const logout = async () => {
@@ -609,17 +662,35 @@ function FocusMateApp({
   const xp = Number(profile.total_xp || 0);
   const level = levelForXp(xp);
   const focusActive = Boolean(live.session_active);
-  const changePage = (id) => {
+  const secondaryPages = visiblePages.filter((item) =>
+    !mobileDestinationIds.has(item.id) && item.id !== 'focus-room',
+  );
+  const secondaryPageIsActive = secondaryPages.some((item) => item.id === page);
+  const changePage = (id, destination = id) => {
     if (!visiblePages.some((item) => item.id === id)) return;
     setPage(id);
-    window.history.replaceState({}, '', id === 'contact' ? '/contact' : `/#${id}`);
+    const nextDestination = destination === 'focus-room' ? 'focus' : destination;
+    setMobileDestination(nextDestination);
+    setMobileMoreOpen(false);
+    const path = navigationPath(destination);
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== path) {
+      window.history.pushState({}, '', path);
+    } else {
+      const target = mobileDestinations.find((item) => item.id === destination)?.target;
+      if (target) {
+        window.requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        }));
+      }
+    }
   };
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`} data-study-style={profile.session_preferences?.study_style || 'normal'}>
       <aside className="sidebar">
         <div className="sidebar-top">
-          <a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a>
+          <a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={(event) => { event.preventDefault(); changePage('overview'); }}>focus<span>mate</span><i>✳</i></a>
           <div className="sidebar-actions">
             <button className="icon-button theme-toggle" aria-label="Toggle theme" onClick={toggleTheme}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
@@ -654,15 +725,37 @@ function FocusMateApp({
       </aside>
 
       <main className="main-area">
-        <header className="mobile-header"><a className="brand-lockup" href="#overview" aria-label={translate(language, 'app.home')} onClick={() => changePage('overview')}>focus<span>mate</span><i>✳</i></a><div className="mobile-header-actions"><button className="icon-button theme-toggle" aria-label={translate(language, 'app.toggleTheme')} onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button><button className="icon-button" onClick={logout} aria-label={translate(language, 'auth.logOut')}><LogOut size={18} /></button></div></header>
+        <header className="mobile-header">
+          <a className="brand-lockup" href="#overview" aria-label={translate(language, 'app.home')} onClick={(event) => { event.preventDefault(); changePage('overview'); }}>focus<span>mate</span><i>✳</i></a>
+          <div className="mobile-header-actions">
+            <button className="icon-button theme-toggle" aria-label={translate(language, 'app.toggleTheme')} onClick={toggleTheme}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
+            <button
+              className={`icon-button mobile-more-toggle ${secondaryPageIsActive ? 'active' : ''}`}
+              type="button"
+              aria-label={translate(language, 'app.more')}
+              aria-expanded={mobileMoreOpen}
+              aria-controls="mobile-secondary-navigation"
+              onClick={() => setMobileMoreOpen((open) => !open)}
+            ><MoreHorizontal size={20} /></button>
+            <button className="icon-button" onClick={logout} aria-label={translate(language, 'auth.logOut')}><LogOut size={18} /></button>
+          </div>
+        </header>
+        <nav id="mobile-secondary-navigation" className="mobile-secondary-nav" hidden={!mobileMoreOpen} aria-label={translate(language, 'app.secondaryNavigation')}>
+          {secondaryPages.map((item) => {
+            const Icon = item.icon;
+            return <button key={item.id} type="button" onClick={() => changePage(item.id)} aria-current={page === item.id ? 'page' : undefined}>
+              <Icon size={17} /><span>{translate(language, item.label)}</span>
+            </button>;
+          })}
+        </nav>
         <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
-        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} />}
+        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} hasCloudAccount={Boolean(account)} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
         {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <RoomFoundation account={account} language={language} />
-          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onUpdateProfile={updateProfile} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
@@ -673,7 +766,20 @@ function FocusMateApp({
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
-      <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>{visiblePages.map((item) => { const Icon = item.icon; return <button className={page === item.id ? 'active' : ''} key={item.id} onClick={() => changePage(item.id)} aria-label={translate(language, item.label)} aria-current={page === item.id ? 'page' : undefined} title={translate(language, item.label)}><Icon size={19} /><small>{translate(language, item.label)}</small></button>; })}</nav>
+      <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>
+        {mobileDestinations.map((item) => {
+          const Icon = item.icon;
+          return <button
+            className={mobileDestination === item.id ? 'active' : ''}
+            key={item.id}
+            type="button"
+            onClick={() => changePage(item.page, item.id)}
+            aria-label={translate(language, item.label)}
+            aria-current={mobileDestination === item.id ? 'page' : undefined}
+            title={translate(language, item.label)}
+          ><Icon size={20} /><small>{translate(language, item.label)}</small></button>;
+        })}
+      </nav>
     </div>
   );
 }
@@ -796,7 +902,7 @@ function Stat({ label, value, note, icon: Icon }) {
   return <div className="stat-card"><div className="stat-top"><span>{label}</span>{Icon && <Icon size={17} />}</div><strong>{value}</strong><small>{note}</small></div>;
 }
 
-function Overview({ profile, live, language, onNavigate, onSave }) {
+function Overview({ profile, live, language, onNavigate, onSave, hasCloudAccount }) {
   const now = new Date();
   const hour = now.getHours();
   const greetingKey = hour < 12 ? 'dashboard.morning' : hour < 18 ? 'dashboard.afternoon' : 'dashboard.evening';
@@ -826,18 +932,32 @@ function Overview({ profile, live, language, onNavigate, onSave }) {
           <span className="eyebrow">{translate(language, 'dashboard.today')}</span>
           <h2>{name ? `${translate(language, greetingKey)}, ${name} 👋` : `${translate(language, 'dashboard.welcome')} 👋`}</h2>
           <p>{translate(language, 'dashboard.heroText')}</p>
-          <button className="primary-button" onClick={() => onNavigate('focus-room')}><Focus size={17} /> {translate(language, 'dashboard.startSession')}</button>
         </div>
       </section>
 
+      <section className="surface-panel overview-goal">
+        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.goal')}</span><h3>{hourCount ? `${hourCount}h ` : ''}{minuteCount} / {goalMinutes} min</h3></div><span className="ring-meter" style={{ '--progress': `${goalPercent}%` }}><b>{Math.round(goalPercent)}%</b></span></div>
+        <div className="progress-track" role="progressbar" aria-label={translate(language, 'dashboard.goal')} aria-valuemin="0" aria-valuemax={goalMinutes} aria-valuenow={Math.min(goalMinutes, Math.floor(todaySeconds / 60))}><span style={{ width: `${goalPercent}%` }} /></div>
+        <label className="goal-select">{translate(language, 'dashboard.setGoal')}<select value={goalMinutes} onChange={(event) => updateGoal(event.target.value)} aria-label={translate(language, 'dashboard.setGoal')}>
+          {[30, 60, 90, 120, ...([30, 60, 90, 120].includes(goalMinutes) ? [] : [goalMinutes])].sort((a, b) => a - b).map((minutes) => <option value={minutes} key={minutes}>{minutes} min</option>)}
+        </select></label>
+      </section>
+
+      <section className="surface-panel overview-focus-action">
+        <div className="overview-focus-icon"><Focus size={21} /></div>
+        <div className="overview-focus-copy">
+          <span className="eyebrow">{translate(language, 'dashboard.focusEyebrow')}</span>
+          <h3>{translate(language, 'dashboard.focusTitle')}</h3>
+          <p>{translate(language, 'dashboard.focusText')}</p>
+        </div>
+        <button className="primary-button" onClick={() => onNavigate('focus-room', 'focus')}>
+          <Focus size={17} /> {translate(language, 'dashboard.startSession')}
+        </button>
+      </section>
+
+      <TaskList profile={profile} onSave={onSave} language={language} />
+
       <div className="overview-metrics">
-        <section className="surface-panel overview-goal">
-          <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.goal')}</span><h3>{hourCount ? `${hourCount}h ` : ''}{minuteCount} / {goalMinutes} min</h3></div><span className="ring-meter" style={{ '--progress': `${goalPercent}%` }}><b>{Math.round(goalPercent)}%</b></span></div>
-          <div className="progress-track" role="progressbar" aria-label={translate(language, 'dashboard.goal')} aria-valuemin="0" aria-valuemax={goalMinutes} aria-valuenow={Math.min(goalMinutes, Math.floor(todaySeconds / 60))}><span style={{ width: `${goalPercent}%` }} /></div>
-          <label className="goal-select">{translate(language, 'dashboard.setGoal')}<select value={goalMinutes} onChange={(event) => updateGoal(event.target.value)} aria-label={translate(language, 'dashboard.setGoal')}>
-            {[30, 60, 90, 120, ...( [30, 60, 90, 120].includes(goalMinutes) ? [] : [goalMinutes] )].sort((a, b) => a - b).map((minutes) => <option value={minutes} key={minutes}>{minutes} min</option>)}
-          </select></label>
-        </section>
         <Stat label={translate(language, 'dashboard.studyTime')} value={`${hourCount ? `${hourCount}h ` : ''}${minuteCount}m`} note={translate(language, live.session_active ? 'dashboard.activeCameraIncluded' : 'dashboard.completedStudyTime')} icon={Clock3} />
         <Stat label={translate(language, 'dashboard.studyStreak')} value={`${streak} ${translate(language, streak === 1 ? 'dashboard.day' : 'dashboard.days')}`} note={translate(language, 'dashboard.streakNote')} icon={Flame} />
         <section className="surface-panel overview-xp">
@@ -853,15 +973,62 @@ function Overview({ profile, live, language, onNavigate, onSave }) {
       </div>
 
       <section className="surface-panel streak-panel">
-        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.week')}</span><h3><Flame size={17} /> {streak} {translate(language, streak === 1 ? 'dashboard.day' : 'dashboard.days')} {translate(language, 'dashboard.studyStreak').toLowerCase()}</h3></div><small>{translate(language, 'dashboard.streakNote')}</small></div>
+        <div className="section-heading"><div><span className="eyebrow">{translate(language, 'dashboard.week')}</span><h3>{translate(language, 'dashboard.studyDaysThisWeek')}</h3></div></div>
         <div className="week-calendar" aria-label={translate(language, 'dashboard.week')}>
           {week.map((day) => <div key={day.date} aria-label={`${day.date}: ${translate(language, day.completed ? 'dashboard.studyCompleted' : 'dashboard.noStudyRecorded')}`} className={day.completed ? 'completed' : ''}><span>{day.label}</span><strong>{day.completed ? '✓' : '·'}</strong></div>)}
         </div>
       </section>
 
       <DailyQuests profile={profile} language={language} onViewAll={() => onNavigate('quests')} />
+      <nav className="overview-shortcuts" aria-label={translate(language, 'dashboard.shortcuts')}>
+        <button type="button" onClick={() => onNavigate('insights')}><BarChart3 size={17} /><span>{translate(language, 'nav.progress')}</span><ArrowUpRight size={15} /></button>
+        <button type="button" onClick={() => onNavigate('achievements')}><Trophy size={17} /><span>{translate(language, 'nav.achievements')}</span><ArrowUpRight size={15} /></button>
+        <button type="button" onClick={() => onNavigate('session-preferences')}><Settings2 size={17} /><span>{translate(language, 'nav.preferences')}</span><ArrowUpRight size={15} /></button>
+        {hasCloudAccount && <button type="button" onClick={() => onNavigate('friends')}><Users size={17} /><span>{translate(language, 'nav.friends')}</span><ArrowUpRight size={15} /></button>}
+      </nav>
     </div>
   );
+}
+
+function TaskList({ profile, onSave, language }) {
+  const [newTask, setNewTask] = useState('');
+  const tasks = Array.isArray(profile.tasks) ? profile.tasks : [];
+  const t = (key) => translate(language, `focus.${key}`);
+  const saveTasks = (nextTasks) => onSave({ tasks: nextTasks });
+  const addTask = (event) => {
+    event.preventDefault();
+    if (!newTask.trim()) return;
+    saveTasks([...tasks, { id: String(Date.now()), text: newTask.trim(), done: false }].slice(-100));
+    setNewTask('');
+  };
+  const toggleTask = (id) => saveTasks(tasks.map((task) =>
+    task.id === id ? { ...task, done: !task.done } : task,
+  ));
+  const removeTask = (id) => saveTasks(tasks.filter((task) => task.id !== id));
+
+  return <section className="surface-panel task-section" id="today-tasks" aria-labelledby="today-tasks-title">
+    <div className="task-heading">
+      <div><span className="eyebrow">{t('taskEyebrow')}</span><h3 id="today-tasks-title">{t('taskTitle')}</h3><p>{t('taskIntro')}</p></div>
+      <span className="task-count">{tasks.filter((task) => task.done).length}/{tasks.length} {t('done')}</span>
+    </div>
+    <form className="task-form" onSubmit={addTask}>
+      <input
+        aria-label={t('taskPlaceholder')}
+        maxLength="120"
+        value={newTask}
+        onChange={(event) => setNewTask(event.target.value)}
+        placeholder={t('taskPlaceholder')}
+      />
+      <button className="outline-button" type="submit"><Plus size={16} /> {t('addTask')}</button>
+    </form>
+    <div className="task-list">
+      {tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'done' : ''}`} key={task.id}>
+        <button className="check-button" type="button" onClick={() => toggleTask(task.id)} aria-label={task.done ? t('markIncomplete') : t('completeTask')}>{task.done && <Check size={14} />}</button>
+        <span>{task.text}</span>
+        <button className="icon-button task-remove" type="button" onClick={() => removeTask(task.id)} aria-label={t('removeTask')}><X size={15} /></button>
+      </div>) : <div className="empty-state">{t('taskEmpty')}</div>}
+    </div>
+  </section>;
 }
 
 const questIcons = {
@@ -1021,12 +1188,10 @@ function TimerPanel({ profile, username, onNotice, language }) {
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
   const t = (key, values) => translate(language, `focus.${key}`, values);
-  return <section className="timer-panel"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
+  return <section className="timer-panel" id="focus-timer"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
 }
 
-function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onUpdateProfile, onNotice, username, cameraState, cameraError, language }) {
-  const [tasks, setTasks] = useState(profile.tasks || []);
-  const [newTask, setNewTask] = useState('');
+function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onNotice, username, cameraState, cameraError, language }) {
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
@@ -1035,10 +1200,6 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
       ? live.session_configuration
       : profile.session_preferences,
   );
-  useEffect(() => setTasks(profile.tasks || []), [profile.tasks]);
-  const addTask = (event) => { event.preventDefault(); if (!newTask.trim()) return; const next = [...tasks, { id: String(Date.now()), text: newTask.trim(), done: false }].slice(-100); setTasks(next); onUpdateProfile({ tasks: next }); setNewTask(''); };
-  const toggleTask = (id) => { const next = tasks.map((task) => task.id === id ? { ...task, done: !task.done } : task); setTasks(next); onUpdateProfile({ tasks: next }); };
-  const removeTask = (id) => { const next = tasks.filter((task) => task.id !== id); setTasks(next); onUpdateProfile({ tasks: next }); };
   const moodNeeded = profile.session_preferences?.mood_checkins !== false && profile.session_wellbeing?.mood_checkin_date !== new Date().toISOString().slice(0, 10);
   const t = (key, values) => translate(language, `focus.${key}`, values);
   return <div className="page-content">
@@ -1050,7 +1211,6 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
         {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
       </section>
     </div>
-    <section className="task-section"><div className="task-heading"><div><span className="eyebrow">{t('taskEyebrow')}</span><h3>{t('taskTitle')}</h3><p>{t('taskIntro')}</p></div><span className="task-count">{tasks.filter((task) => task.done).length}/{tasks.length} {t('done')}</span></div><form className="task-form" onSubmit={addTask}><input maxLength="120" value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder={t('taskPlaceholder')} /><button className="outline-button" type="submit"><Plus size={16} /> {t('addTask')}</button></form><div className="task-list">{tasks.length ? tasks.map((task) => <div className={`task-row ${task.done ? 'done' : ''}`} key={task.id}><button className="check-button" onClick={() => toggleTask(task.id)} aria-label={task.done ? t('markIncomplete') : t('completeTask')}>{task.done && <Check size={14} />}</button><span>{task.text}</span><button className="icon-button task-remove" onClick={() => removeTask(task.id)} aria-label={t('removeTask')}><X size={15} /></button></div>) : <div className="empty-state">{t('taskEmpty')}</div>}</div></section>
   </div>;
 }
 
@@ -1493,16 +1653,43 @@ function downloadText(filename, contents, type) { const link = document.createEl
 function downloadProfile(profile) { downloadText('focusmate-profile.json', JSON.stringify(profile, null, 2), 'application/json'); }
 
 function App() {
+  const [publicPage, setPublicPage] = useState(() => publicPageFromLocation(window.location));
+  const [unknownPath, setUnknownPath] = useState(() => isUnknownPath(window.location));
+  const [pwaSurface, setPwaSurface] = useState('hidden');
+  useEffect(() => {
+    const syncLocation = () => {
+      setPublicPage(publicPageFromLocation(window.location));
+      setUnknownPath(isUnknownPath(window.location));
+    };
+    window.addEventListener('popstate', syncLocation);
+    window.addEventListener('hashchange', syncLocation);
+    return () => {
+      window.removeEventListener('popstate', syncLocation);
+      window.removeEventListener('hashchange', syncLocation);
+    };
+  }, []);
+
+  if (publicPage || unknownPath) {
+    const page = unknownPath ? 'not-found' : publicPage;
+    return (
+      <>
+        <PwaControls surface="hidden" />
+        <PublicPages page={page} metadata={PUBLIC_PAGE_METADATA[page]} />
+      </>
+    );
+  }
+
   return (
     <>
-      <PwaControls />
-      <AuthGate>
+      <PwaControls surface={pwaSurface} />
+      <AuthGate onPwaSurfaceChange={setPwaSurface}>
         {({ account, onCloudSignOut, onCloudLogin, cloudConfigurationError }) => (
           <FocusMateApp
             account={account}
             onCloudSignOut={onCloudSignOut}
             onCloudLogin={onCloudLogin}
             cloudConfigurationError={cloudConfigurationError || supabaseConfigurationError}
+            onPwaSurfaceChange={setPwaSurface}
           />
         )}
       </AuthGate>
