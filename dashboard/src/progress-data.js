@@ -123,6 +123,38 @@ export function generateDailyQuests(username, date, previousIds = []) {
   }));
 }
 
+export function rerollDailyQuest(profile, questId, date = localDateKey(), live = {}) {
+  const daily = profile.daily_quests;
+  if (daily?.date !== date || !Array.isArray(daily.quests)) return null;
+  const current = daily.quests.find((quest) => quest.id === questId);
+  if (!current || current.completed || current.rewardClaimed) return null;
+  const group = questGroups.find((items) => items[0]?.category === current.category);
+  if (!group) return null;
+
+  const history = Array.isArray(current.rerollHistory) ? current.rerollHistory : [];
+  const excludedIds = new Set([
+    current.id,
+    ...history,
+    ...daily.quests.filter((quest) => quest.id !== current.id).map((quest) => quest.id),
+  ]);
+  const alternatives = group.filter((quest) =>
+    !excludedIds.has(quest.id)
+    && questValue(profile, live, quest, date) < quest.target,
+  );
+  if (!alternatives.length) return null;
+
+  const selected = alternatives[hash(
+    `${profile.username}|${date}|${history[0] || current.id}|${history.length}`,
+  ) % alternatives.length];
+  return {
+    ...selected,
+    progress: 0,
+    completed: false,
+    rewardClaimed: false,
+    rerollHistory: [...history, current.id],
+  };
+}
+
 function sessionsForDate(profile, date) {
   return (Array.isArray(profile.session_history) ? profile.session_history : [])
     .filter((session) => String(session?.date || '').slice(0, 10) === date && Number(session.seconds) > 0);

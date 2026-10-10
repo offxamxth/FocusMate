@@ -275,6 +275,7 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState(initialError);
   const [language, setLanguage] = useState(accountLanguage);
+  const [showLocalWarning, setShowLocalWarning] = useState(false);
   const signup = view === 'signup';
   const migrating = view === 'migrate';
   const t = (key, values) => translate(language, `auth.${key}`, values);
@@ -401,9 +402,35 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
             {migrating || signup ? t('logIn') : t('createAccount')}
           </button>
         </p>
-        {!signup && !migrating && <button className="text-button auth-migrate-link" type="button" onClick={() => { setView('migrate'); setError(''); }}>{t('migrateExisting')}</button>}
         <p className="auth-reset-help">{migrating ? t('migrationPrivacy') : t('contactAdmin')}</p>
-        {onLocal && <button type="button" className="outline-button auth-local-link" onClick={onLocal}>{t('useLocal')}</button>}
+        {onLocal && !showLocalWarning && (
+          <button
+            type="button"
+            className="outline-button auth-local-link"
+            onClick={() => setShowLocalWarning(true)}
+          >{t('createWithoutPin')}</button>
+        )}
+        {showLocalWarning && (
+          <section className="auth-local-warning" aria-labelledby="local-warning-title" aria-live="polite">
+            <h2 id="local-warning-title">{t('localWarningTitle')}</h2>
+            <p>{t('localWarning')}</p>
+            <div className="auth-local-warning-actions">
+              <button
+                type="button"
+                className="outline-button"
+                onClick={() => setShowLocalWarning(false)}
+              >{t('cancel')}</button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => {
+                  setShowLocalWarning(false);
+                  onLocal();
+                }}
+              >{t('continueLocal')}</button>
+            </div>
+          </section>
+        )}
         <small className="privacy-note"><LockKeyhole size={14} /> {t('pinSecurity')}</small>
       </form>
     </main>

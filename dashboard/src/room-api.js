@@ -5,6 +5,7 @@ const roomErrors = {
   42501: 'You are not a member of this room.',
   54000: 'This room is full or a room code could not be generated.',
   55000: 'This room is closed or you must leave your current room first.',
+  55001: 'Everyone in the room must be ready before the host can start.',
   P0002: 'No open room was found with that code.',
   generic: 'FocusMate could not complete that room request.',
 };
@@ -16,6 +17,7 @@ const roomErrorKeys = {
   42501: 'error.notMember',
   54000: 'error.full',
   55000: 'error.unavailable',
+  55001: 'error.notReady',
   P0002: 'error.notFound',
 };
 
@@ -98,6 +100,13 @@ export function startFocusRoomBreak(client, roomId, durationSeconds) {
 
 export function finishFocusRoomSession(client, roomId) {
   return invokeRoomRpc(client, 'finish_focus_room_session', { p_room_id: roomId });
+}
+
+export function setFocusRoomReady(client, roomId, ready) {
+  return invokeRoomRpc(client, 'set_focus_room_ready', {
+    p_room_id: roomId,
+    p_ready: Boolean(ready),
+  });
 }
 
 export function subscribeToFocusRoom(client, room, userId, handlers) {

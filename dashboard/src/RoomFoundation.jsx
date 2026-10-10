@@ -11,12 +11,15 @@ import {
   leaveFocusRoom,
   pauseFocusRoomSession,
   resumeFocusRoomSession,
+  setFocusRoomReady,
   startFocusRoomBreak,
   startFocusRoomSession,
   subscribeToFocusRoom,
 } from './room-api.js';
 import { translate } from './i18n.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
+import RoomCameraMonitor from './RoomCameraMonitor.jsx';
+import { getFocusmateRoomProgress, publishFocusmateRoomProgress } from './room-progress.js';
 
 const focusDurations = [900, 1500, 2700, 3600, 5400, 7200];
 const breakDurations = [60, 300, 600, 900, 1800];
@@ -48,7 +51,7 @@ function activeElapsedSeconds(room, serverNow) {
   return accumulated + Math.max(0, Math.floor((serverNow - segmentStart) / 1000));
 }
 
-export default function RoomFoundation({ account, language }) {
+export default function RoomFoundation({ account, language, profile, pageActive }) {
   const [room, setRoom] = useState(null);
   const [roomCode, setRoomCode] = useState('');
   const [presence, setPresence] = useState({});
@@ -65,6 +68,10 @@ export default function RoomFoundation({ account, language }) {
   const serverNow = roomClock(room, clientPerformanceNow);
   const elapsedSeconds = activeElapsedSeconds(room, serverNow);
   const focusRemaining = Math.max(0, (Number(room?.session_duration_seconds) || 0) - elapsedSeconds);
+  const participants = room?.participants || [];
+  const ownParticipant = participants.find((participant) => participant.user_id === account?.id);
+  const allParticipantsReady = participants.length > 0
+    && participants.every((participant) => participant.is_ready === true);
   const breakStartedAt = Date.parse(room?.break_started_at || '');
   const breakElapsed = Number.isFinite(breakStartedAt) && Number.isFinite(serverNow)
     ? Math.max(0, Math.floor((serverNow - breakStartedAt) / 1000))
@@ -82,6 +89,19 @@ export default function RoomFoundation({ account, language }) {
     const interval = window.setInterval(() => setClientPerformanceNow(performance.now()), 1000);
     return () => window.clearInterval(interval);
   }, [room?.id, room?.status]);
+
+  useEffect(() => {
+    if (!account || room?.status !== 'finished') return undefined;
+    let active = true;
+    getFocusmateRoomProgress(supabase)
+      .then((progress) => {
+        if (active) publishFocusmateRoomProgress(progress);
+      })
+      .catch((progressError) => {
+        if (active) setError(progressError.message);
+      });
+    return () => { active = false; };
+  }, [account?.id, room?.status]);
 
   const setRoomSnapshot = (snapshot) => {
     if (snapshot) setRoom({ ...snapshot, received_at: performance.now() });
@@ -193,6 +213,10 @@ export default function RoomFoundation({ account, language }) {
     () => finishFocusRoomSession(supabase, room.id),
     '',
   );
+  const toggleReady = () => runRoomAction(
+    () => setFocusRoomReady(supabase, room.id, !ownParticipant?.is_ready),
+    '',
+  );
 
   const timerUnavailable = connection !== 'online';
   const roomIsActive = room && room.status !== 'closed';
@@ -287,7 +311,7 @@ export default function RoomFoundation({ account, language }) {
               <span>{room.participants?.length || 0} / {room.capacity}</span>
             </div>
             <ul className="room-participant-list">
-              {(room.participants || []).map((participant) => {
+              {participants.map((participant) => {
                 const online = presence[participant.user_id] === 'online';
                 const state = connection === 'unavailable'
                   ? 'unavailable'
@@ -302,6 +326,9 @@ export default function RoomFoundation({ account, language }) {
                       <small>@{participant.username}</small>
                     </span>
                     <span className={`room-role is-${participant.role}`}>{t(`role.${participant.role}`)}</span>
+                    <span className={`room-participant-ready ${participant.is_ready ? 'is-ready' : ''}`}>
+                      {t(participant.is_ready ? 'session.ready' : 'session.notReady')}
+                    </span>
                     <span className={`room-participant-status is-${state}`}>
                       <i aria-hidden="true" /> {t(`presence.${state}`)}
                     </span>
@@ -328,9 +355,10 @@ export default function RoomFoundation({ account, language }) {
                         <option key={seconds} value={seconds}>{seconds / 60} {t('session.minutes')}</option>
                       ))}
                     </select>
-                    <button className="primary-button" type="button" disabled={busy || timerUnavailable} onClick={() => void startSession()}>
+                    <button className="primary-button" type="button" disabled={busy || timerUnavailable || !allParticipantsReady} onClick={() => void startSession()}>
                       <Play size={16} /> {busy ? t('working') : t('session.start')}
                     </button>
+                    {!allParticipantsReady && <p className="room-host-note">{t('session.waitingForReady')}</p>}
                   </div>
                 ) : <p className="room-host-note">{t('session.hostControls')}</p>
               ) : (
@@ -350,6 +378,14 @@ export default function RoomFoundation({ account, language }) {
                     : null}
                   {room.status === 'finished' && (
                     <p className="room-host-note" role="status">{t('session.finished', { elapsed: formatDuration(elapsedSeconds) })}</p>
+                  )}
+                  {room.status === 'focusing' && (
+                    <RoomCameraMonitor
+                      roomStatus={room.status}
+                      pageActive={pageActive}
+                      preferences={profile?.session_preferences}
+                      language={language}
+                    />
                   )}
                   {sessionHost && room.status !== 'finished' && (
                     <div className="room-session-controls">
@@ -388,6 +424,18 @@ export default function RoomFoundation({ account, language }) {
                     <p className="room-host-note">{t('session.hostControls')}</p>
                   )}
                 </>
+              )}
+              {room.status === 'waiting' && (
+                <div className="room-ready-control">
+                  <p>{t('session.readyDescription')}</p>
+                  <button
+                    className={ownParticipant?.is_ready ? 'outline-button' : 'primary-button'}
+                    type="button"
+                    aria-pressed={Boolean(ownParticipant?.is_ready)}
+                    disabled={busy || timerUnavailable || !ownParticipant}
+                    onClick={() => void toggleReady()}
+                  >{t(ownParticipant?.is_ready ? 'session.setNotReady' : 'session.setReady')}</button>
+                </div>
               )}
               <p className="room-host-note">{t('session.serverAuthority')}</p>
             </div>

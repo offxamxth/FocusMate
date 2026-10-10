@@ -20,6 +20,13 @@ import {
 import SocialPage from './SocialPage.jsx';
 import LeaderboardPage from './LeaderboardPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
+import {
+  claimFocusmateRoomQuest,
+  getFocusmateRoomProgress,
+  publishFocusmateRoomProgress,
+  rerollFocusmateProfileQuest,
+  rerollFocusmateRoomQuest,
+} from './room-progress.js';
 import ContactPage from './ContactPage.jsx';
 import PublicPages, { PUBLIC_PAGE_METADATA } from './PublicPages.jsx';
 import PwaControls from './PwaControls.jsx';
@@ -32,6 +39,7 @@ import {
   publicPageFromLocation,
 } from './navigation.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
+import { shouldConfirmSessionMood } from './session-mood.js';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, ListTodo, LockKeyhole, LogOut,
@@ -252,6 +260,8 @@ function FocusMateApp({
 }) {
   const [username, setUsername] = useState(account?.storageUsername || localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
+  const [roomProgress, setRoomProgress] = useState(null);
+  const roomProgressRef = useRef(null);
   const [live, setLive] = useState({});
   const [page, setPage] = useState(() => pageFromLocation(window.location));
   const [mobileDestination, setMobileDestination] = useState(
@@ -292,9 +302,77 @@ function FocusMateApp({
     onPwaSurfaceChange?.(pwaSurfaceForApp({ loading, profile, page }));
   }, [loading, onPwaSurfaceChange, page, profile]);
 
-  const presentProfile = (value) => account
-    ? { ...value, username: account.username }
-    : value;
+  const presentProfile = (value, trustedProgress = roomProgressRef.current) => {
+    if (!account) return value;
+    const trustedAwards = new Map(
+      (trustedProgress?.achievements || []).map((record) => [record.id, record]),
+    );
+    const existingAwards = (value.achievements || []).filter((record) => {
+      const id = typeof record === 'string' ? record : record?.id;
+      return !String(id || '').startsWith('room_') && !String(id || '').startsWith('friend_');
+    });
+    for (const [id, record] of trustedAwards) {
+      existingAwards.push(record);
+    }
+    return {
+      ...value,
+      username: account.username,
+      total_xp: Number.isFinite(Number(trustedProgress?.total_xp))
+        ? Number(trustedProgress.total_xp)
+        : value.total_xp,
+      available_xp: Number(trustedProgress?.xp_balance) || 0,
+      room_progress: trustedProgress?.room_progress || {},
+      room_daily_quests: trustedProgress?.room_daily_quests || value.room_daily_quests || null,
+      achievements: existingAwards,
+    };
+  };
+
+  useEffect(() => {
+    const updateRoomProgress = (event) => {
+      const update = event.detail || {};
+      setRoomProgress((current) => {
+        const next = { ...current, ...update };
+        roomProgressRef.current = next;
+        return next;
+      });
+    };
+    window.addEventListener('focusmate:room-progress-updated', updateRoomProgress);
+    return () => window.removeEventListener('focusmate:room-progress-updated', updateRoomProgress);
+  }, []);
+
+  useEffect(() => {
+    roomProgressRef.current = null;
+    setRoomProgress(null);
+  }, [account?.id]);
+
+  useEffect(() => {
+    if (!account || !profile) return undefined;
+    let active = true;
+    getFocusmateRoomProgress(supabase)
+      .then((progress) => {
+        if (active) {
+          roomProgressRef.current = progress;
+          setRoomProgress(progress);
+        }
+      })
+      .catch((progressError) => {
+        if (active) setNotice(progressError.message);
+      });
+    return () => { active = false; };
+  }, [account?.id, Boolean(profile)]);
+
+  useEffect(() => {
+    if (!roomProgress) return;
+    setProfile((current) => {
+      if (!current) return current;
+      const next = presentProfile(current, roomProgress);
+      void api(`/api/state?username=${encodeURIComponent(username)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ profile: next }),
+      }).catch((error) => inform(error.message));
+      return next;
+    });
+  }, [roomProgress]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -542,6 +620,51 @@ function FocusMateApp({
     }
   };
 
+  const rerollQuest = async (questId) => {
+    if (account) {
+      const preview = await api(`/api/quests/reroll-preview?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        body: JSON.stringify({ quest_id: questId }),
+      });
+      const result = await rerollFocusmateProfileQuest(
+        supabase,
+        questId,
+        preview.replacement.id,
+        window.crypto.randomUUID(),
+      );
+      publishFocusmateRoomProgress(result);
+      const updated = await api(`/api/state?username=${encodeURIComponent(username)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ profile: { daily_quests: result.profile_daily_quests } }),
+      });
+      setProfile(presentProfile(updated.profile, { ...roomProgress, ...result }));
+      return;
+    }
+    const data = await api(`/api/quests/reroll?username=${encodeURIComponent(username)}`, {
+      method: 'POST',
+      body: JSON.stringify({ quest_id: questId }),
+    });
+    setProfile(presentProfile(data.profile));
+  };
+
+  const rerollRoomQuest = async (questId) => {
+    const result = await rerollFocusmateRoomQuest(
+      supabase,
+      questId,
+      window.crypto.randomUUID(),
+    );
+    publishFocusmateRoomProgress(result);
+  };
+
+  const claimRoomQuest = async (questId) => {
+    const result = await claimFocusmateRoomQuest(
+      supabase,
+      questId,
+      window.crypto.randomUUID(),
+    );
+    publishFocusmateRoomProgress(result);
+  };
+
   const inform = (message) => {
     setNotice(message);
     window.setTimeout(() => setNotice(''), 3600);
@@ -750,17 +873,17 @@ function FocusMateApp({
         </nav>
         <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
-        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} hasCloudAccount={Boolean(account)} />}
+        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={rerollQuest} onRoomReroll={rerollRoomQuest} onRoomClaim={claimRoomQuest} hasCloudAccount={Boolean(account)} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
         {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
-          <RoomFoundation account={account} language={language} />
+          <RoomFoundation account={account} language={language} profile={profile} pageActive={page === 'focus-room'} />
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} language={language} />}
-        {page === 'quests' && <Quests profile={profile} language={language} />}
+        {page === 'quests' && <Quests profile={profile} language={language} onReroll={rerollQuest} onRoomReroll={rerollRoomQuest} onRoomClaim={claimRoomQuest} hasCloudAccount={Boolean(account)} />}
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
@@ -902,7 +1025,17 @@ function Stat({ label, value, note, icon: Icon }) {
   return <div className="stat-card"><div className="stat-top"><span>{label}</span>{Icon && <Icon size={17} />}</div><strong>{value}</strong><small>{note}</small></div>;
 }
 
-function Overview({ profile, live, language, onNavigate, onSave, hasCloudAccount }) {
+function Overview({
+  profile,
+  live,
+  language,
+  onNavigate,
+  onSave,
+  onReroll,
+  onRoomReroll,
+  onRoomClaim,
+  hasCloudAccount,
+}) {
   const now = new Date();
   const hour = now.getHours();
   const greetingKey = hour < 12 ? 'dashboard.morning' : hour < 18 ? 'dashboard.afternoon' : 'dashboard.evening';
@@ -979,7 +1112,15 @@ function Overview({ profile, live, language, onNavigate, onSave, hasCloudAccount
         </div>
       </section>
 
-      <DailyQuests profile={profile} language={language} onViewAll={() => onNavigate('quests')} />
+      <DailyQuests
+        profile={profile}
+        language={language}
+        onViewAll={() => onNavigate('quests')}
+        onReroll={onReroll}
+        onRoomReroll={onRoomReroll}
+        onRoomClaim={onRoomClaim}
+        hasCloudAccount={hasCloudAccount}
+      />
       <nav className="overview-shortcuts" aria-label={translate(language, 'dashboard.shortcuts')}>
         <button type="button" onClick={() => onNavigate('insights')}><BarChart3 size={17} /><span>{translate(language, 'nav.progress')}</span><ArrowUpRight size={15} /></button>
         <button type="button" onClick={() => onNavigate('achievements')}><Trophy size={17} /><span>{translate(language, 'nav.achievements')}</span><ArrowUpRight size={15} /></button>
@@ -1071,12 +1212,39 @@ function questCopy(quest, language) {
   };
 }
 
-function DailyQuests({ profile, language, onViewAll }) {
+function DailyQuests({
+  profile,
+  language,
+  onViewAll,
+  onReroll,
+  onRoomReroll,
+  onRoomClaim,
+  hasCloudAccount,
+}) {
+  const [rerollingId, setRerollingId] = useState('');
+  const [rerollError, setRerollError] = useState('');
   const daily = profile.daily_quests;
   if (!daily || !Array.isArray(daily.quests) || daily.quests.length !== 4) {
     return <section className="surface-panel daily-quests" role="alert"><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.unavailable')}</p></section>;
   }
   const completed = daily.quests.filter((quest) => quest.completed).length;
+  const reroll = async (questId) => {
+    if (!onReroll) return;
+    setRerollingId(questId);
+    setRerollError('');
+    try {
+      await onReroll(questId);
+    } catch (error) {
+      const key = error.code === 'QUEST_REROLL_INSUFFICIENT_XP'
+        ? 'quests.rerollInsufficientXp'
+        : error.code === 'QUEST_REROLL_UNAVAILABLE'
+          ? 'quests.rerollUnavailable'
+          : 'quests.rerollFailed';
+      setRerollError(translate(language, key));
+    } finally {
+      setRerollingId('');
+    }
+  };
   return <section className="daily-quests">
     <div className="section-heading">
       <div><span className="eyebrow">{translate(language, 'quests.available')}</span><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.subtitle')}</p></div>
@@ -1096,11 +1264,101 @@ function DailyQuests({ profile, language, onViewAll }) {
           <div className="progress-track" role="progressbar" aria-label={copy.title} aria-valuemin="0" aria-valuemax={copy.max} aria-valuenow={Math.min(copy.max, copy.current)}><span style={{ width: `${Math.min(100, copy.current / copy.max * 100)}%` }} /></div>
           <div className="quest-card-footer"><span className="xp-pill">+{quest.rewardXP} XP</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.completed ? <><Check size={15} /> {translate(language, 'quests.completed')}</> : translate(language, 'quests.inProgress')}</span></div>
           {quest.completed && <small className="quest-reward-note">+{quest.rewardXP} XP {translate(language, 'quests.earned')}</small>}
+          {!quest.completed && onReroll && <button className="outline-button quest-reroll" type="button" disabled={Boolean(rerollingId)} onClick={() => void reroll(quest.id)}>{rerollingId === quest.id ? translate(language, 'auth.pleaseWait') : translate(language, 'quests.reroll')}</button>}
         </article>;
       })}
     </div>
+    {hasCloudAccount && (
+      <RoomDailyQuests
+        daily={profile.room_daily_quests}
+        availableXp={profile.available_xp}
+        language={language}
+        onReroll={onRoomReroll}
+        onClaim={onRoomClaim}
+      />
+    )}
+    {rerollError && <p className="quest-reroll-error" role="alert">{rerollError}</p>}
     {completed === 4 && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, 'quests.completedAll')}</strong><span>{translate(language, 'quests.congratulations')}</span></div>}
   </section>;
+}
+
+function RoomDailyQuests({ daily, availableXp = 0, language, onReroll, onClaim }) {
+  const [busyId, setBusyId] = useState('');
+  const [error, setError] = useState('');
+  const t = (key, values) => translate(language, `quests.${key}`, values);
+  const runAction = async (questId, action) => {
+    setBusyId(questId);
+    setError('');
+    try {
+      await action(questId);
+    } catch (actionError) {
+      setError(actionError.code === 'QUEST_REROLL_INSUFFICIENT_XP'
+        ? t('rerollInsufficientXp')
+        : actionError.message || t('rerollFailed'));
+    } finally {
+      setBusyId('');
+    }
+  };
+  const quests = daily?.quests;
+  return (
+    <section className="room-daily-quests">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">{t('verifiedRoomQuests')}</span>
+          <h3>{t('roomQuestTitle')}</h3>
+          <p>{t('roomQuestDescription')}</p>
+        </div>
+        <span className="xp-pill">{t('verifiedXpBalance', { xp: Number(availableXp) || 0 })}</span>
+      </div>
+      {!Array.isArray(quests) ? (
+        <p className="muted-note">{t('roomQuestLoading')}</p>
+      ) : (
+        <div className="quest-grid">
+          {quests.map((quest) => {
+            const target = Number(quest.target) || 0;
+            const current = Number(quest.progress) || 0;
+            const focusQuest = quest.category === 'room_focus_minutes';
+            const friendQuest = quest.category === 'friend_room_sessions';
+            const hostQuest = quest.category === 'room_host_sessions';
+            const title = t(
+              focusQuest ? 'roomFocusQuestTitle'
+                : friendQuest ? 'friendRoomQuestTitle'
+                  : hostQuest ? 'roomHostQuestTitle'
+                    : 'roomSessionsQuestTitle',
+              { target },
+            );
+            const description = t(
+              focusQuest ? 'roomFocusQuestDescription'
+                : friendQuest ? 'friendRoomQuestDescription'
+                  : hostQuest ? 'roomHostQuestDescription'
+                    : 'roomSessionsQuestDescription',
+            );
+            return (
+              <article className={`daily-quest-card ${quest.completed ? 'is-complete' : ''}`} key={quest.id}>
+                <div className="daily-quest-top"><span className="quest-symbol"><Users size={18} /></span><span className="difficulty-pill">{t('serverVerified')}</span></div>
+                <h4>{title}</h4>
+                <p>{description}</p>
+                <div className="quest-progress-copy"><span>{t('progress')}</span><strong>{Math.min(target, current)} / {target} {focusQuest ? t('minutesUnit') : t('sessionsUnit')}</strong></div>
+                <div className="progress-track" role="progressbar" aria-label={title} aria-valuemin="0" aria-valuemax={target} aria-valuenow={Math.min(target, current)}><span style={{ width: `${target ? Math.min(100, current / target * 100) : 0}%` }} /></div>
+                <div className="quest-card-footer"><span className="xp-pill">+{quest.rewardXP} XP</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.rewardClaimed ? t('claimed') : quest.completed ? t('complete') : t('inProgress')}</span></div>
+                {quest.completed && !quest.rewardClaimed && onClaim && (
+                  <button className="primary-button" type="button" disabled={Boolean(busyId)} onClick={() => void runAction(quest.id, onClaim)}>
+                    {busyId === quest.id ? t('claiming') : t('claimReward')}
+                  </button>
+                )}
+                {!quest.completed && onReroll && (
+                  <button className="outline-button quest-reroll" type="button" disabled={Boolean(busyId)} onClick={() => void runAction(quest.id, onReroll)}>
+                    {busyId === quest.id ? t('claiming') : t('reroll')}
+                  </button>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+      {error && <p className="quest-reroll-error" role="alert">{error}</p>}
+    </section>
+  );
 }
 
 function TimerPanel({ profile, username, onNotice, language }) {
@@ -1195,6 +1453,7 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
+  const [moodConfirmationOpen, setMoodConfirmationOpen] = useState(false);
   const sessionConfiguration = normalizeDetectionConfiguration(
     live.session_active && live.session_configuration
       ? live.session_configuration
@@ -1202,15 +1461,53 @@ function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamer
   );
   const moodNeeded = profile.session_preferences?.mood_checkins !== false && profile.session_wellbeing?.mood_checkin_date !== new Date().toISOString().slice(0, 10);
   const t = (key, values) => translate(language, `focus.${key}`, values);
+  const startPlan = () => onStartCamera({
+    subject,
+    goal,
+    mood,
+    session_configuration: sessionConfiguration,
+  });
+  const requestSessionStart = () => {
+    if (shouldConfirmSessionMood(mood)) {
+      setMoodConfirmationOpen(true);
+      return;
+    }
+    startPlan();
+  };
   return <div className="page-content">
     <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} language={language} />
       <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">{t('optionalCamera')}</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? t('live') : t('cameraOff')}</span></div><h3>{t('studyBuddy')}</h3><p className="panel-copy">{t('cameraIntro')}</p>
         {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div><CameraDetectionOverlay live={live} configuration={sessionConfiguration} language={language} /><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> {t('stopCamera')}</button></div> : <div className="camera-placeholder"><Video size={25} /><span>{t('cameraPreview')}</span><small>{t('cameraLocal')}</small></div>}
-        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={() => onStartCamera({ subject, goal, mood, session_configuration: sessionConfiguration })}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
+        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={requestSessionStart}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
         {stream && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div><div><small>{t('posture')}</small><strong>{sessionConfiguration.monitor_posture ? postureStatusText(cameraState, live, language) : t('notMonitored')}</strong></div><div><small>{t('headTurn')}</small><strong>{sessionConfiguration.monitor_looking_away ? live.looking_away === null || live.looking_away === undefined ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn') : t('notMonitored')}</strong></div><div><small>{t('face')}</small><strong>{sessionConfiguration.monitor_face_missing ? live.face_detected ? t('detected') : t('notDetected') : t('notMonitored')}</strong></div><p>{t('cameraSignalsNote')}</p></div>}
         {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
       </section>
     </div>
+    {moodConfirmationOpen && (
+      <dialog
+        className="mood-confirmation"
+        open
+        role="alertdialog"
+        aria-labelledby="mood-confirmation-title"
+        aria-describedby="mood-confirmation-description"
+      >
+        <h2 id="mood-confirmation-title">{t('moodConfirmationTitle', { mood: t(`mood.${mood}`) })}</h2>
+        <p id="mood-confirmation-description">{t('moodConfirmationDescription')}</p>
+        <div className="mood-confirmation-actions">
+          <button className="outline-button" type="button" onClick={() => setMoodConfirmationOpen(false)}>
+            {t('takeBreak')}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => {
+              setMoodConfirmationOpen(false);
+              startPlan();
+            }}
+          >{t('continueAnyway')}</button>
+        </div>
+      </dialog>
+    )}
   </div>;
 }
 
@@ -1404,6 +1701,13 @@ function Achievements({ profile, language }) {
           <span style={{ width: `${count / achievements.length * 100}%` }} />
         </div>
       </section>
+      {count === achievements.length && (
+        <section className="achievement-full-collection" role="status" aria-live="polite">
+          <Trophy size={24} aria-hidden="true" />
+          <div><strong>{t('fullCollectionTitle')}</strong><p>{t('fullCollectionDescription')}</p></div>
+          <Sparkles size={20} aria-hidden="true" />
+        </section>
+      )}
       {groups.map((group) => {
         const entries = achievements.filter((item) => item[4] === group);
         return (
@@ -1434,7 +1738,7 @@ function Achievements({ profile, language }) {
                           <small>{t('reward')} · +{reward} XP</small>
                           {progress && (
                             <div className="achievement-progress-detail">
-                              <span>{progress.current} / {progress.target} {progress.unit}</span>
+                              <span>{progress.current} / {progress.target} {String(progress.unit).startsWith('room') || ['focusSeconds', 'hostedSessions', 'differentRooms', 'consecutiveDays', 'friendRoomSessions'].includes(progress.unit) ? translate(language, `achievements.progressUnit.${progress.unit}`) : progress.unit}</span>
                               <div className="progress-track" role="progressbar" aria-label={`${localizedTitle} progress`} aria-valuemin="0" aria-valuemax={progress.target} aria-valuenow={progress.current}>
                                 <span style={{ width: `${progress.current / progress.target * 100}%` }} />
                               </div>
@@ -1453,8 +1757,15 @@ function Achievements({ profile, language }) {
   );
 }
 
-function Quests({ profile, language }) {
-  return <div className="page-content"><DailyQuests profile={profile} language={language} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
+function Quests({
+  profile,
+  language,
+  onReroll,
+  onRoomReroll,
+  onRoomClaim,
+  hasCloudAccount,
+}) {
+  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} onRoomReroll={onRoomReroll} onRoomClaim={onRoomClaim} hasCloudAccount={hasCloudAccount} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
 }
 
 function Preferences({ profile, onSave }) {

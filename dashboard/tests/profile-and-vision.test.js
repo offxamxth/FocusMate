@@ -16,6 +16,7 @@ const {
   dailyFocusSeconds,
   generateDailyQuests,
   localDateKey,
+  rerollDailyQuest,
   refreshDailyQuests,
   studyStreak,
 } = await import('../src/progress-data.js');
@@ -29,6 +30,7 @@ const {
   normalizeDetectionConfiguration,
   visionTasksForConfiguration,
 } = await import('../src/session-detection.js');
+const { shouldConfirmSessionMood } = await import('../src/session-mood.js');
 
 function post(path, body) {
   return api(path, { method: 'POST', body: JSON.stringify(body) });
@@ -40,6 +42,14 @@ test('levels are derived consistently from normalized XP', () => {
   assert.equal(levelForXp(100), 2);
   assert.equal(levelForXp(199), 2);
   assert.equal(levelForXp(200), 3);
+});
+
+test('only tired and stressed session moods require confirmation', () => {
+  assert.equal(shouldConfirmSessionMood('Tired'), true);
+  assert.equal(shouldConfirmSessionMood('Stressed'), true);
+  for (const mood of ['Calm', 'Focused', 'Okay', '', null, undefined, 'unknown']) {
+    assert.equal(shouldConfirmSessionMood(mood), false);
+  }
 });
 
 test('username lookup and sign-in are case-insensitive and preserve existing profile data', async () => {
@@ -257,6 +267,60 @@ test('daily quest rotation changes by local date and avoids repeating the previo
   assert.notDeepEqual(generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id), next.map((quest) => quest.id));
 });
 
+test('daily quest rerolls use a new same-category challenge and do not repeat within the day', () => {
+  const date = '2026-06-12';
+  const profile = {
+    username: 'reroll-test',
+    session_history: [],
+    focus_timer_date: date,
+    focus_timer_seconds_today: 0,
+    daily_quests: { date, quests: generateDailyQuests('reroll-test', date) },
+  };
+  const original = profile.daily_quests.quests[0];
+  const replacement = rerollDailyQuest(profile, original.id, date);
+  assert.ok(replacement);
+  assert.equal(replacement.category, original.category);
+  assert.notEqual(replacement.id, original.id);
+  assert.deepEqual(replacement.rerollHistory, [original.id]);
+  profile.daily_quests.quests[0] = replacement;
+
+  const secondReplacement = rerollDailyQuest(profile, replacement.id, date);
+  assert.ok(secondReplacement);
+  assert.equal(secondReplacement.category, original.category);
+  assert.notEqual(secondReplacement.id, replacement.id);
+  assert.deepEqual(secondReplacement.rerollHistory, [original.id, replacement.id]);
+  profile.daily_quests.quests[0] = secondReplacement;
+  assert.equal(rerollDailyQuest(profile, secondReplacement.id, date), null);
+});
+
+test('quest reroll deducts exactly 5 XP only when a valid replacement is available', async () => {
+  values.clear();
+  const created = await post('/api/login', { username: 'rerolluser', name: 'Reroll User' });
+  const quest = created.profile.daily_quests.quests[0];
+  await api('/api/state?username=rerolluser', {
+    method: 'PUT',
+    body: JSON.stringify({ profile: { total_xp: 12 } }),
+  });
+
+  const rerolled = await post('/api/quests/reroll?username=rerolluser', { quest_id: quest.id });
+  assert.equal(rerolled.profile.total_xp, 7);
+  const replacement = rerolled.profile.daily_quests.quests.find((item) => item.category === quest.category);
+  assert.notEqual(replacement.id, quest.id);
+  assert.deepEqual(replacement.rerollHistory, [quest.id]);
+
+  await api('/api/state?username=rerolluser', {
+    method: 'PUT',
+    body: JSON.stringify({ profile: { total_xp: 4 } }),
+  });
+  await assert.rejects(
+    post('/api/quests/reroll?username=rerolluser', { quest_id: replacement.id }),
+    (error) => error.code === 'QUEST_REROLL_INSUFFICIENT_XP',
+  );
+  const unchanged = (await api('/api/state?username=rerolluser')).profile;
+  assert.equal(unchanged.total_xp, 4);
+  assert.equal(unchanged.daily_quests.quests.find((item) => item.category === quest.category).id, replacement.id);
+});
+
 test('camera-alert quests treat disabled session signals as unmonitored, not zero alerts', async () => {
   values.clear();
   const initial = await post('/api/login', { username: 'quest-exclusion', name: 'Quest Exclusion' });
@@ -339,6 +403,34 @@ test('detection settings, overlay, and result labels have localized text in ever
   }
   assert.notEqual(translate('es', 'preferences.postureMonitoring'), translate('en', 'preferences.postureMonitoring'));
   assert.notEqual(translate('fr', 'results.notMonitored'), translate('en', 'results.notMonitored'));
+});
+
+test('auth, mood confirmation, quest rerolls, and collection celebration are localized', () => {
+  const keys = [
+    'auth.createWithoutPin',
+    'auth.localWarningTitle',
+    'auth.localWarning',
+    'auth.continueLocal',
+    'auth.cancel',
+    'focus.moodConfirmationTitle',
+    'focus.moodConfirmationDescription',
+    'focus.takeBreak',
+    'focus.continueAnyway',
+    'quests.reroll',
+    'quests.rerollInsufficientXp',
+    'quests.rerollUnavailable',
+    'achievements.fullCollectionTitle',
+    'achievements.fullCollectionDescription',
+  ];
+  for (const language of ['en', 'es', 'fr', 'ar', 'hi']) {
+    for (const key of keys) {
+      assert.notEqual(translate(language, key), key, `${language}:${key}`);
+    }
+  }
+  assert.equal(
+    translate('en', 'focus.moodConfirmationTitle', { mood: 'Tired' }),
+    'You selected Tired',
+  );
 });
 
 test('locked achievements show progress calculated only from saved profile activity', () => {

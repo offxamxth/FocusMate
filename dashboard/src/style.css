@@ -345,6 +345,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .achievement-progress > div:first-child { min-width: 160px; }
 .achievement-progress h3 { margin: 4px 0 0; font-size: 13px; }
 .achievement-progress .progress-track { flex: 1; }
+.achievement-full-collection { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid rgba(214,245,138,.35); border-radius: 8px; background: linear-gradient(110deg, rgba(214,245,138,.12), rgba(168,240,208,.08)); color: var(--lime); }
+.achievement-full-collection > svg { flex: 0 0 auto; }
+.achievement-full-collection > div { flex: 1; }
+.achievement-full-collection strong { color: var(--ink); font: 700 14px/1.35 'Manrope', sans-serif; }
+.achievement-full-collection p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .achievement-group { padding-top: 4px; }
 .achievement-group > .section-heading { margin-bottom: 10px; }
 .group-count { color: var(--muted); font-size: 10px; }
@@ -371,6 +376,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .quest-copy p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .xp-pill { color: var(--lime); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .quest-card .outline-button { min-width: 98px; min-height: 32px; font-size: 9px; }
+.quest-reroll { min-height: 32px; justify-self: start; font-size: 9px; }
+.quest-reroll:disabled { cursor: wait; opacity: .6; }
+.quest-reroll-error { margin: 0; color: #ffb5b5; font-size: 10px; line-height: 1.5; }
 .claimed-label { display: inline-flex; align-items: center; gap: 5px; min-width: 98px; color: var(--mint); font-size: 9px; }
 
 .settings-layout { grid-template-columns: minmax(0, 1.45fr) minmax(240px, .75fr); align-items: start; }
@@ -717,6 +725,10 @@ html[dir='rtl'] .pwa-dialog h2 { margin-right: 0; margin-left: 35px; }
 .daily-quests > .section-heading h3 { margin: 4px 0; color: var(--ink); font: 650 20px/1.3 'Manrope', sans-serif; }
 .daily-quests > .section-heading p { margin: 0; color: var(--muted); font-size: 11px; }
 .daily-quests > .section-heading { align-items: center; }
+.room-daily-quests { display: grid; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.room-daily-quests > .section-heading { align-items: center; }
+.room-daily-quests > .section-heading h3 { margin: 4px 0; color: var(--ink); font: 650 18px/1.3 'Manrope', sans-serif; }
+.room-daily-quests > .section-heading p { margin: 0; color: var(--muted); font-size: 11px; }
 .quest-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .daily-quest-card { min-width: 0; display: grid; align-content: start; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .daily-quest-card.is-complete { border-color: rgba(168,240,208,.35); }
@@ -766,7 +778,22 @@ html[dir='rtl'] .pwa-dialog h2 { margin-right: 0; margin-left: 35px; }
 .auth-reset-help { margin: -4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
 .auth-message, .cloud-profile-note { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--quiet); color: var(--soft); font-size: 10px; line-height: 1.55; }
 .auth-local-link { width: 100%; justify-content: center; }
+.auth-local-warning { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(237,156,136,.32); border-radius: 6px; background: rgba(237,156,136,.07); }
+.auth-local-warning h2 { margin: 0; color: var(--soft); font-size: 11px; }
+.auth-local-warning p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.auth-local-warning-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.auth-local-warning-actions button { min-height: 36px; font-size: 10px; }
 .cloud-profile-note { margin: 0 0 3px; }
+.mood-confirmation { position: fixed; inset: 0; z-index: 40; display: grid; align-content: center; justify-items: center; gap: 12px; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 18px; border: 0; background: rgba(2,8,12,.74); color: var(--ink); }
+.mood-confirmation > h2, .mood-confirmation > p, .mood-confirmation-actions { width: min(480px, 100%); }
+.mood-confirmation > h2 { margin: 0; padding: 21px 21px 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0; background: var(--bg-surface); font: 700 17px/1.35 'Manrope', sans-serif; }
+.mood-confirmation > p { margin: 0; padding: 0 21px 8px; border: 1px solid var(--line); border-top: 0; border-bottom: 0; background: var(--bg-surface); color: var(--muted); font-size: 11px; line-height: 1.6; }
+.mood-confirmation-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 0 21px 21px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; background: var(--bg-surface); }
+.mood-confirmation-actions button { min-height: 40px; }
+@media (max-width: 420px) {
+  .mood-confirmation-actions { flex-direction: column-reverse; }
+  .mood-confirmation-actions button { width: 100%; justify-content: center; }
+}
 .timer-complete { display: grid; gap: 4px; padding: 12px 13px; border: 1px solid rgba(168,240,208,.26); border-radius: 7px; background: var(--quiet); }
 .timer-complete strong { color: var(--ink); font-size: 12px; }
 .timer-complete span { color: var(--muted); font-size: 10px; }
@@ -787,7 +814,7 @@ html[dir='rtl'] .daily-quest-card, html[dir='rtl'] .overview-metrics { text-alig
   .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .overview-metrics .stat-card { min-height: 132px; }
   .quest-grid { grid-template-columns: minmax(0, 1fr); }
-  .daily-quests > .section-heading { align-items: flex-start; flex-direction: column; }
+  .daily-quests > .section-heading, .room-daily-quests > .section-heading { align-items: flex-start; flex-direction: column; }
   .streak-panel .section-heading { flex-direction: column; }
   .streak-panel .section-heading > small { max-width: none; }
   .insight-list { grid-template-columns: minmax(0, 1fr); }
@@ -936,7 +963,12 @@ html[dir='rtl'] .social-user-copy { text-align: right; }
 .room-participant-copy small { color: var(--muted); font-size: 9px; }
 .room-role { padding: 4px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 8px; white-space: nowrap; }
 .room-role.is-host { border-color: rgba(214,245,138,.25); color: var(--lime); }
+.room-participant-ready { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.room-participant-ready.is-ready { color: #71d8a8; }
 .room-host-note { margin: 12px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.room-ready-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+.room-ready-control p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.room-ready-control button { min-height: 36px; flex: 0 0 auto; }
 .room-session { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-strong); }
 .room-session-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .room-session-heading > div { display: flex; align-items: center; gap: 7px; color: var(--mint); }
@@ -952,6 +984,15 @@ html[dir='rtl'] .social-user-copy { text-align: right; }
 .room-session-controls select { min-height: 36px; max-width: 150px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; }
 .room-session-controls button { min-height: 36px; }
 .room-session-controls button:disabled, .room-session-controls select:disabled { cursor: not-allowed; opacity: .58; }
+.room-local-camera { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--quiet); }
+.room-local-camera-copy strong { color: var(--ink); font-size: 11px; }
+.room-local-camera-copy p, .room-local-camera-note, .room-local-camera-error, .room-local-camera-active p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.room-local-camera-controls { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+.room-local-camera-controls > .outline-button { min-height: 36px; }
+.room-local-camera-active { display: grid; gap: 6px; }
+.room-local-camera-active video { display: block; width: min(100%, 260px); aspect-ratio: 4 / 3; border: 1px solid var(--line); border-radius: 6px; background: #080b0a; object-fit: cover; }
+.room-local-camera-active p { margin: 0; }
+.room-local-camera-error { flex-basis: 100%; color: var(--danger, #ff8d8d); }
 .room-leave-button { margin-top: 13px; }
 .room-closed { display: grid; justify-items: start; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-strong); }
 .room-closed p, .room-auth-note p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
@@ -1182,4 +1223,6 @@ html[dir='rtl'] .room-participant { direction: rtl; }
   .room-session-controls select, .room-session-controls button { flex: 1 1 100%; max-width: none; }
   .room-participant { flex-wrap: wrap; }
   .room-participant-status { margin-inline-start: auto; }
+  .room-ready-control { align-items: stretch; flex-direction: column; }
+  .room-ready-control button { width: 100%; justify-content: center; }
 }

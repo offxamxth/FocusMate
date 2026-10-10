@@ -11,6 +11,7 @@ import {
   leaveFocusRoom,
   pauseFocusRoomSession,
   resumeFocusRoomSession,
+  setFocusRoomReady,
   startFocusRoomBreak,
   startFocusRoomSession,
   subscribeToFocusRoom,
@@ -87,6 +88,17 @@ test('timer API delegates all authoritative transitions to authenticated room RP
     && !Object.hasOwn(args, 'started_at')
     && !Object.hasOwn(args, 'elapsed_seconds')
     && !Object.hasOwn(args, 'state')));
+});
+
+test('room readiness is updated through the authenticated RPC without caller identity fields', async () => {
+  const snapshot = { id: 'room-id', status: 'waiting', participants: [{ user_id: 'user-id', is_ready: true }] };
+  const { client, calls } = fakeRpcClient([{ data: snapshot, error: null }]);
+  assert.equal(await setFocusRoomReady(client, 'room-id', true), snapshot);
+  assert.deepEqual(calls, [[
+    'set_focus_room_ready',
+    { p_room_id: 'room-id', p_ready: true },
+  ]]);
+  assert.equal(focusRoomErrorTranslationKey({ code: '55001' }), 'error.notReady');
 });
 
 test('expected room-code and membership failures are surfaced to the UI', async () => {
@@ -287,6 +299,20 @@ test('timer migration locks transitions, uses server timestamps, and preserves n
   assert.doesNotMatch(sql, /p_(?:user_id|host_id|started_at|elapsed_seconds|state)\b/i);
 });
 
+test('room readiness migration gates timer start in trusted SQL and scopes its RPC', async () => {
+  const sql = await readFile(
+    new URL('../../supabase/migrations/20261010120000_focus_room_readiness.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(sql, /add column if not exists is_ready boolean not null default false/i);
+  assert.match(sql, /before update of state on public\.focus_rooms/i);
+  assert.match(sql, /old\.state = 'waiting'[\s\S]*?new\.state = 'focusing'[\s\S]*?member\.is_ready is not true[\s\S]*?using errcode = '55001'/i);
+  assert.match(sql, /where member\.room_id = p_room_id[\s\S]*?member\.user_id = current_user_id[\s\S]*?member\.left_at is null/i);
+  assert.match(sql, /new\.left_at is distinct from old\.left_at[\s\S]*?new\.is_ready := false/i);
+  assert.match(sql, /revoke all on function public\.set_focus_room_ready\(uuid, boolean\)[\s\S]*?from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.set_focus_room_ready\(uuid, boolean\)[\s\S]*?to authenticated/i);
+});
+
 test('room foundation labels are translated for all supported languages', () => {
   const keys = [
     'room.create',
@@ -305,6 +331,7 @@ test('room foundation labels are translated for all supported languages', () => 
     'room.error.unavailable',
     'room.error.notFound',
     'room.error.network',
+    'room.error.notReady',
     'room.session.title',
     'room.session.phase.waiting',
     'room.session.phase.focusing',
@@ -313,6 +340,12 @@ test('room foundation labels are translated for all supported languages', () => 
     'room.session.phase.finished',
     'room.session.focusDuration',
     'room.session.breakDuration',
+    'room.session.ready',
+    'room.session.notReady',
+    'room.session.readyDescription',
+    'room.session.setReady',
+    'room.session.setNotReady',
+    'room.session.waitingForReady',
     'room.session.start',
     'room.session.pause',
     'room.session.resume',

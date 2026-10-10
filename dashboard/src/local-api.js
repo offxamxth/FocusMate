@@ -1,5 +1,5 @@
 import { awardEligibleAchievements } from './achievement-data.js';
-import { localDateKey, refreshDailyQuests } from './progress-data.js';
+import { localDateKey, refreshDailyQuests, rerollDailyQuest } from './progress-data.js';
 import { defaultDetectionConfiguration, normalizeDetectionConfiguration } from './session-detection.js';
 
 const PROFILE_PREFIX = 'focusmate-profile:';
@@ -566,6 +566,40 @@ export async function api(path, options = {}) {
     const quest = profile.daily_quests.quests.find((item) => item.id === body.quest_id);
     if (!quest) throw new Error('This quest is not part of today’s set.');
     if (!quest.completed || !quest.rewardClaimed) throw new Error('Complete this quest using recorded study activity to earn its reward.');
+    return { ok: true, profile: writeProfile(username, profile) };
+  }
+  if (url.pathname === '/api/quests/reroll-preview' && method === 'POST') {
+    const profile = readProfile(username);
+    const live = readLive(username);
+    updateDailyQuests(profile, live);
+    const replacement = rerollDailyQuest(profile, body.quest_id, today(), live);
+    if (!replacement) {
+      const error = new Error('This quest cannot be rerolled or has no eligible replacement.');
+      error.code = 'QUEST_REROLL_UNAVAILABLE';
+      throw error;
+    }
+    return { replacement };
+  }
+  if (url.pathname === '/api/quests/reroll' && method === 'POST') {
+    const profile = readProfile(username);
+    const live = readLive(username);
+    updateDailyQuests(profile, live);
+    if (body.charge !== false && profile.total_xp < 5) {
+      const error = new Error('Earn at least 5 XP before rerolling a quest.');
+      error.code = 'QUEST_REROLL_INSUFFICIENT_XP';
+      throw error;
+    }
+    const replacement = rerollDailyQuest(profile, body.quest_id, today(), live);
+    if (!replacement) {
+      const error = new Error('This quest cannot be rerolled or has no eligible replacement.');
+      error.code = 'QUEST_REROLL_UNAVAILABLE';
+      throw error;
+    }
+    if (body.charge !== false) profile.total_xp -= 5;
+    profile.daily_quests.quests = profile.daily_quests.quests.map((quest) =>
+      quest.id === body.quest_id ? replacement : quest,
+    );
+    updateDailyQuests(profile, live);
     return { ok: true, profile: writeProfile(username, profile) };
   }
   if (url.pathname === '/api/session/reflection' && method === 'POST') {

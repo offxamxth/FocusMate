@@ -328,6 +328,26 @@ export const achievementCatalog = [
     250,
     "Goals & reflection",
   ],
+  ["room_first_session", "Room Rookie", "Complete your first verified Focus Room session.", 20, "Multiplayer"],
+  ["room_regular_5", "Room Regular", "Complete 5 verified Focus Room sessions.", 30, "Multiplayer"],
+  ["room_regular_25", "Room Regular Plus", "Complete 25 verified Focus Room sessions.", 50, "Multiplayer"],
+  ["room_regular_50", "Room Veteran", "Complete 50 verified Focus Room sessions.", 75, "Multiplayer"],
+  ["room_focus_1h", "Shared Focus", "Accumulate 1 hour of verified Focus Room time.", 20, "Multiplayer"],
+  ["room_focus_5h", "Room Focus Builder", "Accumulate 5 hours of verified Focus Room time.", 35, "Multiplayer"],
+  ["room_focus_10h", "Room Focus Pro", "Accumulate 10 hours of verified Focus Room time.", 50, "Multiplayer"],
+  ["room_focus_25h", "Room Focus Master", "Accumulate 25 hours of verified Focus Room time.", 75, "Multiplayer"],
+  ["room_focus_50h", "Room Focus Legend", "Accumulate 50 hours of verified Focus Room time.", 100, "Multiplayer"],
+  ["room_host_3", "Room Host", "Complete 3 verified sessions as the room host.", 25, "Multiplayer"],
+  ["room_unique_3", "Room Explorer", "Complete sessions in 3 different Focus Rooms.", 25, "Multiplayer"],
+  ["room_unique_10", "Room Traveler", "Complete sessions in 10 different Focus Rooms.", 40, "Multiplayer"],
+  ["room_early_bird", "Room Early Bird", "Complete a Focus Room session before 12:00 UTC.", 15, "Multiplayer"],
+  ["room_night_owl", "Room Night Owl", "Complete a Focus Room session at or after 18:00 UTC.", 15, "Multiplayer"],
+  ["room_streak_7", "Room Routine", "Complete Focus Room sessions on 7 consecutive UTC days.", 50, "Multiplayer"],
+  ["friend_room_first", "Study Together", "Complete a verified room session with an accepted friend.", 20, "Friends"],
+  ["friend_room_5", "Study Buddies", "Complete 5 verified room sessions with an accepted friend.", 30, "Friends"],
+  ["friend_room_25", "Roommates in Focus", "Complete 25 verified room sessions with an accepted friend.", 50, "Friends"],
+  ["friend_focus_1h", "Shared Hour", "Focus for 1 hour in rooms with accepted friends.", 20, "Friends"],
+  ["friend_focus_5h", "Shared Momentum", "Focus for 5 hours in rooms with accepted friends.", 40, "Friends"],
 ];
 
 function sessionDays(profile) {
@@ -601,6 +621,38 @@ export function awardEligibleAchievements(profile, context) {
 }
 
 export function achievementProgress(profile, id) {
+  const room = profile.room_progress || {};
+  const roomProgress = {
+    room_first_session: [room.sessions, 1, "roomSessions"],
+    room_regular_5: [room.sessions, 5, "roomSessions"],
+    room_regular_25: [room.sessions, 25, "roomSessions"],
+    room_regular_50: [room.sessions, 50, "roomSessions"],
+    room_focus_1h: [room.focus_seconds, 3600, "focusSeconds"],
+    room_focus_5h: [room.focus_seconds, 18000, "focusSeconds"],
+    room_focus_10h: [room.focus_seconds, 36000, "focusSeconds"],
+    room_focus_25h: [room.focus_seconds, 90000, "focusSeconds"],
+    room_focus_50h: [room.focus_seconds, 180000, "focusSeconds"],
+    room_host_3: [room.host_sessions, 3, "hostedSessions"],
+    room_unique_3: [room.unique_rooms, 3, "differentRooms"],
+    room_unique_10: [room.unique_rooms, 10, "differentRooms"],
+    room_early_bird: [room.early_sessions, 1, "roomSessions"],
+    room_night_owl: [room.late_sessions, 1, "roomSessions"],
+    room_streak_7: [room.streak_days, 7, "consecutiveDays"],
+    friend_room_first: [room.friend_sessions, 1, "friendRoomSessions"],
+    friend_room_5: [room.friend_sessions, 5, "friendRoomSessions"],
+    friend_room_25: [room.friend_sessions, 25, "friendRoomSessions"],
+    friend_focus_1h: [room.friend_focus_seconds, 3600, "focusSeconds"],
+    friend_focus_5h: [room.friend_focus_seconds, 18000, "focusSeconds"],
+  };
+  if (roomProgress[id]) {
+    const [value, target, unit] = roomProgress[id];
+    return {
+      current: Math.min(target, Math.max(0, Number(value) || 0)),
+      target,
+      unit,
+    };
+  }
+
   const sessions = Array.isArray(profile.session_history)
     ? profile.session_history.filter((item) => item && Number(item.seconds) > 0)
     : [];

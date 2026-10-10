@@ -39,3 +39,23 @@ test('maskable icon artwork is a separate, purpose-designed asset', () => {
   assert.ok(maskable);
   assert.notEqual(maskable.src, '/icons/focusmate-512.png');
 });
+
+test('public HTML pages advertise the crawlable square PNG FocusMate favicon', () => {
+  const pages = ['index.html', 'about.html', 'contact.html', 'privacy.html'];
+  const faviconLink = '<link rel="icon" type="image/png" sizes="512x512" href="/icons/focusmate-512.png" />';
+  const favicon = readFileSync(publicPath('icons/focusmate-512.png'));
+  assert.deepEqual(favicon.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal(favicon.readUInt32BE(16), 512);
+  assert.equal(favicon.readUInt32BE(20), 512);
+
+  for (const page of pages) {
+    const html = readFileSync(fileURLToPath(new URL(`../${page}`, import.meta.url)), 'utf8');
+    assert.ok(html.includes(faviconLink), `${page} should link to the existing 512x512 PNG`);
+    assert.equal((html.match(/<link rel="icon"/g) || []).length, 1, `${page} should have one favicon reference`);
+    assert.doesNotMatch(html, /noindex/i, `${page} should not block indexing`);
+  }
+
+  const robots = readFileSync(publicPath('robots.txt'), 'utf8');
+  assert.match(robots, /User-agent:\s+\*/);
+  assert.match(robots, /Allow:\s+\//);
+});
