@@ -59,3 +59,23 @@ test('public HTML pages advertise the crawlable square PNG FocusMate favicon', (
   assert.match(robots, /User-agent:\s+\*/);
   assert.match(robots, /Allow:\s+\//);
 });
+
+test('root favicon.ico embeds the existing FocusMate artwork as a valid 48x48 PNG icon', () => {
+  const icon = readFileSync(publicPath('favicon.ico'));
+  assert.equal(icon.readUInt16LE(0), 0);
+  assert.equal(icon.readUInt16LE(2), 1);
+  assert.equal(icon.readUInt16LE(4), 1);
+  assert.equal(icon.readUInt8(6), 48);
+  assert.equal(icon.readUInt8(7), 48);
+  assert.equal(icon.readUInt16LE(12), 32);
+
+  const imageSize = icon.readUInt32LE(14);
+  const imageOffset = icon.readUInt32LE(18);
+  assert.equal(imageOffset, 22);
+  assert.equal(icon.length, imageOffset + imageSize);
+
+  const embeddedPng = icon.subarray(imageOffset);
+  assert.deepEqual(embeddedPng.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal(embeddedPng.readUInt32BE(16), 48);
+  assert.equal(embeddedPng.readUInt32BE(20), 48);
+});

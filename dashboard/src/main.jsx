@@ -39,6 +39,11 @@ import {
   publicPageFromLocation,
 } from './navigation.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
+import {
+  elapsedParticipantFocusSeconds,
+  remainingRoomFocusSeconds,
+  subscribeToRoomTimerState,
+} from './room-timer-sync.js';
 import { shouldConfirmSessionMood } from './session-mood.js';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
@@ -320,7 +325,6 @@ function FocusMateApp({
       total_xp: Number.isFinite(Number(trustedProgress?.total_xp))
         ? Number(trustedProgress.total_xp)
         : value.total_xp,
-      available_xp: Number(trustedProgress?.xp_balance) || 0,
       room_progress: trustedProgress?.room_progress || {},
       room_daily_quests: trustedProgress?.room_daily_quests || value.room_daily_quests || null,
       achievements: existingAwards,
@@ -1271,7 +1275,6 @@ function DailyQuests({
     {hasCloudAccount && (
       <RoomDailyQuests
         daily={profile.room_daily_quests}
-        availableXp={profile.available_xp}
         language={language}
         onReroll={onRoomReroll}
         onClaim={onRoomClaim}
@@ -1282,7 +1285,7 @@ function DailyQuests({
   </section>;
 }
 
-function RoomDailyQuests({ daily, availableXp = 0, language, onReroll, onClaim }) {
+function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
   const t = (key, values) => translate(language, `quests.${key}`, values);
@@ -1308,7 +1311,6 @@ function RoomDailyQuests({ daily, availableXp = 0, language, onReroll, onClaim }
           <h3>{t('roomQuestTitle')}</h3>
           <p>{t('roomQuestDescription')}</p>
         </div>
-        <span className="xp-pill">{t('verifiedXpBalance', { xp: Number(availableXp) || 0 })}</span>
       </div>
       {!Array.isArray(quests) ? (
         <p className="muted-note">{t('roomQuestLoading')}</p>
@@ -1363,15 +1365,24 @@ function RoomDailyQuests({ daily, availableXp = 0, language, onReroll, onClaim }
 
 function TimerPanel({ profile, username, onNotice, language }) {
   const defaultDuration = Number(profile.session_preferences?.session_length_minutes || 25);
-  const durations = [...new Set([15, 25, 45, 60, 90, 120, defaultDuration])].sort((a, b) => a - b);
+  const [roomTimer, setRoomTimer] = useState(null);
+  const roomSessionId = roomTimer
+    ? `${roomTimer.roomId}:${roomTimer.sessionStartedAt}`
+    : '';
+  const roomDuration = roomTimer ? roomTimer.durationSeconds / 60 : null;
+  const durations = [...new Set([15, 25, 45, 60, 90, 120, defaultDuration, ...(roomDuration ? [roomDuration] : [])])]
+    .sort((a, b) => a - b);
   const [duration, setDuration] = useState(defaultDuration);
   const [remaining, setRemaining] = useState(defaultDuration * 60);
   const [running, setRunning] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [clientPerformanceNow, setClientPerformanceNow] = useState(() => performance.now());
   const started = useRef(0);
   const creditedSeconds = useRef(0);
   const completionHandled = useRef(false);
+  const activeRoomSession = useRef('');
   const chimeContext = useRef(null);
+  useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
   const playChime = () => {
     if (!profile.session_preferences?.session_chimes || chimeContext.current?.state !== 'running') return;
     const context = chimeContext.current;
@@ -1393,16 +1404,75 @@ function TimerPanel({ profile, username, onNotice, language }) {
   }, [running]);
   useEffect(() => {
     if (!running) return undefined;
-    const interval = window.setInterval(() => setRemaining((value) => Math.max(0, value - 1)), 1000);
+    const interval = window.setInterval(() => {
+      if (roomTimer) setClientPerformanceNow(performance.now());
+      else setRemaining((value) => Math.max(0, value - 1));
+    }, 1000);
     return () => window.clearInterval(interval);
-  }, [running]);
+  }, [roomTimer, running]);
   useEffect(() => {
-    if (!running) {
+    if (!roomTimer) {
+      if (activeRoomSession.current) {
+        activeRoomSession.current = '';
+        setDuration(defaultDuration);
+        setRemaining(defaultDuration * 60);
+        setCompleted(false);
+        setRunning(false);
+      }
+      return;
+    }
+    if (activeRoomSession.current !== roomSessionId) {
+      activeRoomSession.current = roomSessionId;
+      completionHandled.current = false;
+      creditedSeconds.current = 0;
+      setCompleted(false);
+    }
+    setDuration(roomDuration);
+    setRemaining(remainingRoomFocusSeconds(roomTimer, performance.now()));
+    setRunning(roomTimer.status === 'focusing'
+      && remainingRoomFocusSeconds(roomTimer, performance.now()) > 0);
+    setClientPerformanceNow(performance.now());
+  }, [defaultDuration, roomDuration, roomSessionId, roomTimer]);
+  useEffect(() => {
+    if (!roomTimer || roomTimer.status !== 'finished') return;
+    setCompleted(true);
+  }, [roomTimer]);
+  useEffect(() => {
+    if (!roomTimer || roomTimer.status !== 'focusing') return;
+    setRemaining(remainingRoomFocusSeconds(roomTimer, clientPerformanceNow));
+  }, [clientPerformanceNow, roomTimer]);
+  useEffect(() => {
+    if (!running && !roomTimer) {
       setDuration(defaultDuration);
       setRemaining(defaultDuration * 60);
     }
-  }, [defaultDuration]);
+  }, [defaultDuration, roomTimer, running]);
   useEffect(() => {
+    if (roomTimer) {
+      const roomFinished = roomTimer.status === 'finished';
+      const naturallyFinished = roomTimer.status === 'focusing'
+        && remainingRoomFocusSeconds(roomTimer, performance.now()) === 0;
+      if ((!roomFinished && !naturallyFinished) || !claimTimerCompletion(completionHandled)) return;
+      setCompleted(true);
+      setRunning(false);
+      const secondsToCredit = elapsedParticipantFocusSeconds(roomTimer, performance.now());
+      if (secondsToCredit > 0) {
+        const taskText = profile.tasks?.find((task) => !task.done)?.text || '';
+        api(`/api/timer/credit?username=${encodeURIComponent(username)}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            seconds: secondsToCredit,
+            session_id: roomSessionId,
+            session_started_at: roomTimer.sessionStartedAt,
+            task_text: taskText,
+          }),
+        })
+          .then(() => onNotice(translate(language, 'focus.timerSaved')))
+          .catch((error) => onNotice(error.message));
+      }
+      if (roomFinished) void playSessionCompletionBeep(chimeContext.current);
+      return;
+    }
     if (remaining !== 0 || !running) return;
     if (!claimTimerCompletion(completionHandled)) return;
     setCompleted(true);
@@ -1413,9 +1483,10 @@ function TimerPanel({ profile, username, onNotice, language }) {
     api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: secondsToCredit }) })
       .then(() => onNotice(translate(language, 'focus.timerSaved')))
       .catch((error) => onNotice(error.message));
-  }, [remaining, running, duration, username, onNotice]);
+  }, [language, onNotice, profile.tasks, remaining, roomSessionId, roomTimer, running, username]);
   const chooseDuration = (value) => { if (!running) { completionHandled.current = false; setCompleted(false); creditedSeconds.current = 0; setDuration(value); setRemaining(value * 60); } };
   const start = () => {
+    if (roomTimer) return;
     started.current = Date.now();
     completionHandled.current = false;
     setCompleted(false);
@@ -1436,17 +1507,25 @@ function TimerPanel({ profile, username, onNotice, language }) {
     setRunning(true);
   };
   const pause = async () => {
+    if (roomTimer) return;
     const elapsed = Math.max(0, Math.round((Date.now() - started.current) / 1000));
     creditedSeconds.current += elapsed;
     setRunning(false);
     try { await api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: elapsed }) }); }
     catch (error) { onNotice(error.message); }
   };
-  const reset = () => { completionHandled.current = false; creditedSeconds.current = 0; setCompleted(false); setRunning(false); setRemaining(duration * 60); };
+  const reset = () => {
+    if (roomTimer) return;
+    completionHandled.current = false;
+    creditedSeconds.current = 0;
+    setCompleted(false);
+    setRunning(false);
+    setRemaining(duration * 60);
+  };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
   const t = (key, values) => translate(language, `focus.${key}`, values);
-  return <section className="timer-panel" id="focus-timer"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
+  return <section className="timer-panel" id="focus-timer"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" disabled={Boolean(roomTimer)} onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={Boolean(roomTimer) || remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" disabled={Boolean(roomTimer)} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
 }
 
 function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onNotice, username, cameraState, cameraError, language }) {

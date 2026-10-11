@@ -20,6 +20,7 @@ import { translate } from './i18n.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
 import RoomCameraMonitor from './RoomCameraMonitor.jsx';
 import { getFocusmateRoomProgress, publishFocusmateRoomProgress } from './room-progress.js';
+import { publishRoomTimerState } from './room-timer-sync.js';
 
 const focusDurations = [900, 1500, 2700, 3600, 5400, 7200];
 const breakDurations = [60, 300, 600, 900, 1800];
@@ -83,6 +84,19 @@ export default function RoomFoundation({ account, language, profile, pageActive 
     reportPwaSessionActivity('room', active);
     return () => reportPwaSessionActivity('room', false);
   }, [room?.status]);
+
+  useEffect(() => {
+    publishRoomTimerState(room, account?.id);
+  }, [
+    room?.id,
+    room?.status,
+    room?.session_started_at,
+    room?.session_duration_seconds,
+    room?.elapsed_seconds,
+    room?.active_segment_started_at,
+    room?.server_now,
+    room?.received_at,
+  ]);
 
   useEffect(() => {
     if (!room || !['focusing', 'break'].includes(room.status)) return undefined;
@@ -326,8 +340,10 @@ export default function RoomFoundation({ account, language, profile, pageActive 
                       <small>@{participant.username}</small>
                     </span>
                     <span className={`room-role is-${participant.role}`}>{t(`role.${participant.role}`)}</span>
-                    <span className={`room-participant-ready ${participant.is_ready ? 'is-ready' : ''}`}>
-                      {t(participant.is_ready ? 'session.ready' : 'session.notReady')}
+                    <span className={`room-participant-ready ${room.status !== 'waiting' || participant.is_ready ? 'is-ready' : ''}`}>
+                      {t(room.status === 'waiting'
+                        ? participant.is_ready ? 'session.ready' : 'session.notReady'
+                        : `session.phase.${room.status}`)}
                     </span>
                     <span className={`room-participant-status is-${state}`}>
                       <i aria-hidden="true" /> {t(`presence.${state}`)}

@@ -259,6 +259,25 @@ test('daily quest rewards are based on actual timer data and are awarded once', 
   assert.equal(nextRead.daily_quest_claims.filter((claim) => claim.quest_id === focusQuest.id && claim.date === localDateKey()).length, 1);
 });
 
+test('completed room timer results are persisted and credited only once per room session', async () => {
+  values.clear();
+  await post('/api/login', { username: 'roomsession', name: 'Room Session' });
+  const session = {
+    seconds: 1500,
+    session_id: 'room-1:2026-10-11T10:00:00.000Z',
+    session_started_at: '2026-10-11T10:00:00.000Z',
+    task_text: 'Review calculus',
+  };
+  const first = await post('/api/timer/credit?username=roomsession', session);
+  const duplicate = await post('/api/timer/credit?username=roomsession', session);
+
+  assert.equal(first.profile.focus_timer_total_seconds, 1500);
+  assert.equal(duplicate.profile.focus_timer_total_seconds, 1500);
+  assert.equal(duplicate.profile.session_history.filter((item) => item.session_id === session.session_id).length, 1);
+  assert.equal(duplicate.profile.session_history.find((item) => item.session_id === session.session_id).goal, 'Review calculus');
+  assert.equal(duplicate.profile.session_history.find((item) => item.session_id === session.session_id).xp, 20);
+});
+
 test('daily quest rotation changes by local date and avoids repeating the previous full set', () => {
   const previous = generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id);
   const next = generateDailyQuests('rotate-user', '2026-03-11', previous);

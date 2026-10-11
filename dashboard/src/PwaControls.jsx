@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Download } from 'lucide-react';
 import { registerSW } from 'virtual:pwa-register';
 import { browserLanguage, supportedLanguages, translate } from './i18n.js';
 import { SESSION_ACTIVITY_EVENT } from './pwa-session-state.js';
@@ -165,11 +166,12 @@ export default function PwaControls({ surface = 'hidden' }) {
   return (
     <>
       {showLoginDock && (
-        <aside className="pwa-dock pwa-login-dock" aria-label="FocusMate installation and app status">
+        <aside className={`pwa-dock pwa-login-dock${hasStatus ? ' has-status' : ''}`} aria-label="FocusMate installation and app status">
           {statusContent}
           {showInstallOption && (
-            <button className="pwa-install" onClick={install}>
-              {installPrompt ? t('pwa.install') : t('pwa.howToInstall')}
+            <button className="pwa-install" onClick={install} aria-label={t('pwa.install')} title={t('pwa.install')}>
+              <Download size={14} aria-hidden="true" />
+              <span>{t('pwa.installShort')}</span>
             </button>
           )}
         </aside>

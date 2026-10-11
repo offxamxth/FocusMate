@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   installationInstructionsKey,
@@ -65,4 +66,17 @@ test('installation help selects matching browser and device instructions', () =>
   assert.equal(installationInstructionsKey('Mozilla/5.0 (Windows NT 10.0) Edg/120.0'), 'pwa.instructionsDesktop');
   assert.equal(installationInstructionsKey('Mozilla/5.0 (Macintosh; Intel Mac OS X) Safari/605.1', 'MacIntel', 0), 'pwa.instructionsOther');
   assert.equal(installationInstructionsKey('Mozilla/5.0 (Macintosh; Intel Mac OS X) Safari/605.1', 'MacIntel', 5), 'pwa.instructionsIos');
+});
+
+test('login install control is compact, fixed to the safe-area corner, and keeps fallback help', async () => {
+  const [controls, styles] = await Promise.all([
+    readFile(new URL('../src/PwaControls.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/style.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(controls, /Download size=\{14\}/);
+  assert.match(controls, /installationInstructionsKey\(navigator\.userAgent/);
+  assert.match(styles, /\.pwa-login-dock \{ position: fixed/);
+  assert.match(styles, /env\(safe-area-inset-right\)/);
+  assert.match(styles, /env\(safe-area-inset-bottom\)/);
+  assert.match(styles, /body:has\(\.pwa-login-dock\) \.welcome-page \.welcome-form/);
 });

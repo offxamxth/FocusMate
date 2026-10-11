@@ -73,6 +73,7 @@ test('trusted room progress loads for cloud accounts outside the Focus Room page
   assert.match(appSource, /roomProgressRef\.current = next/);
   assert.match(roomSource, /if \(!account \|\| room\?\.status !== 'finished'\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)/);
   assert.doesNotMatch(roomSource, /if \(!account \|\| !pageActive\)/);
+  assert.doesNotMatch(appSource, /available_xp|verifiedXpBalance|Spendable room XP/);
 });
 
 test('all 20 room and accepted-friend achievements have progress and localization', () => {

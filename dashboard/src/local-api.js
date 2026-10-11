@@ -550,12 +550,34 @@ export async function api(path, options = {}) {
     const seconds = Math.max(0, Math.min(86400, Math.trunc(Number(body.seconds) || 0)));
     if (!seconds) throw new Error('No study time to save.');
     const profile = readProfile(username);
+    const sessionId = typeof body.session_id === 'string' ? body.session_id.trim().slice(0, 160) : '';
+    if (sessionId && profile.session_history.some((item) => item.session_id === sessionId)) {
+      return { ok: true, profile };
+    }
     profile.focus_timer_seconds_today += seconds;
     profile.focus_timer_total_seconds += seconds;
     const last = profile.focus_timer_history.at(-1);
     if (last?.date === today()) last.seconds += seconds;
     else profile.focus_timer_history.push({ date: today(), seconds });
     profile.focus_timer_history = profile.focus_timer_history.slice(-730);
+    if (sessionId) {
+      const startedAt = typeof body.session_started_at === 'string'
+        && Number.isFinite(Date.parse(body.session_started_at))
+        ? new Date(body.session_started_at).toISOString()
+        : new Date().toISOString();
+      const taskText = typeof body.task_text === 'string' ? body.task_text.trim().slice(0, 200) : '';
+      profile.session_history.push({
+        session_id: sessionId,
+        source: 'focus_timer',
+        date: today(),
+        session_started_at: startedAt,
+        seconds,
+        subject: 'Other',
+        goal: taskText || 'Multiplayer focus session',
+        xp: seconds >= 300 ? 20 : 0,
+      });
+      profile.session_history = profile.session_history.slice(-1000);
+    }
     awardEligibleAchievements(profile, { type: 'study_time' });
     updateDailyQuests(profile, readLive(username));
     return { ok: true, profile: writeProfile(username, profile) };

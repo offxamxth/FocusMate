@@ -172,6 +172,12 @@ granted. Room presence uses private, membership-authorized Realtime channels.
 Shared focus sessions are controlled by the active room host through
 authenticated, row-locked RPCs; clients only interpolate a visual timer from
 database timestamps and re-fetch room state after Realtime updates.
+The shared room coordinates the session, while every participant keeps the
+normal personal Focus Room and timer. Each client derives its countdown from
+the room's server start time; personal timer results are recorded once using a
+room/session idempotency key. Reconnecting restores the current room state.
+Invitation codes can also join a room during focus, pause, or break; verified
+focus tracking for a late joiner starts at their server-recorded join time.
 
 Apply the social and room migrations after the profile migrations above, in
 order:
@@ -182,6 +188,10 @@ order:
 4. `supabase/migrations/20261004220000_focus_room_foundation.sql`
 5. `supabase/migrations/20261004230000_room_timer_state_machine.sql`
 6. `supabase/migrations/20261004240000_verified_focus_leaderboard.sql`
+7. `supabase/migrations/20261010120000_focus_room_readiness.sql`
+8. `supabase/migrations/20261011120000_trusted_room_progress.sql`
+9. `supabase/migrations/20261012120000_room_quest_reroll_guard.sql`
+10. `supabase/migrations/20261012130000_room_late_join.sql`
 
 The room snapshot exposes `status`, `created_at`, `capacity`, `host_id`,
 session duration, start/active-segment/pause/break/finish timestamps,
@@ -219,6 +229,87 @@ only cumulative time and cannot reconstruct exact pause/break intervals or UTC
 week boundaries. An active focus interval during the migration is safely
 captured from its existing server timestamp. The service worker does not cache
 leaderboard or other authenticated RPC responses.
+
+### Production database recovery gate
+
+Production Supabase project `qdvxfpzoychtgfenfjrs` previously had no listed
+backups and point-in-time recovery (PITR) was disabled. The latest CLI check
+also reported PITR disabled and no physical backups. The project contains
+pending room migrations; do not apply production migrations until recovery has
+been established and the exact remote plan has been reviewed. The required
+recovery gate is:
+
+1. Choose a recovery method and verify its actual backup artifact. A logical
+   backup can be made with the Supabase CLI `db dump` workflow, but it requires
+   a database connection string/password and local PostgreSQL tools (or
+   Docker). On Windows, libpq's default password file is
+   `%APPDATA%\postgresql\pgpass.conf`; use the exact host and username shown by
+   the Supabase Dashboard's Connect panel, keep this plaintext file outside the
+   repository and OneDrive, and restrict its Windows ACL to the signed-in
+   account. Never put the password in a command, log, or this repository.
+   The dump does not include Storage object files; follow Supabase's restore
+   procedure for database roles, schema, data, and any encryption key
+   requirements.
+2. Verify the backup by restoring it to an already available, isolated
+   non-production project and checking the required tables and representative
+   row counts. Inspect for extensions, triggers, and scheduled jobs before
+   restoring, since restored database code can perform external actions.
+   Creating a new Supabase restore project is not assumed to be free.
+3. List production's applied migrations and inspect a dry-run plan using the
+   explicit production project ref. The expected relevant changes are the
+   trusted room progress RPCs/ledger, the room quest reroll guard, and the
+   late-join/participant-timer snapshot update, but only migrations actually
+   missing from the remote ledger should be planned.
+4. Stop if any unexpected migration or destructive operation appears. Never
+   reset production or run `db push` before explicit owner approval.
+
+In the 2026-10-11 read-only check, `supabase backups list` reported
+`pitr_enabled: false` and no physical backups. The local environment did not
+have `pg_dump`, `psql`, Docker, a `%APPDATA%\postgresql\pgpass.conf` file, or
+a configured database password, so no manual backup or restore test was
+performed. The Windows PostgreSQL 17 installer is available, but it is a full
+installer; do not use its defaults for this task. If approved, install only the
+PostgreSQL 17 command-line tools (matching production's Postgres 17 major
+version), not a local server. Do not treat the current backup state as
+recoverable.
+
+PITR is a paid add-on, requires at least Small compute, and Supabase's published
+estimate for seven-day retention is approximately USD $100/month before
+compute; longer retention costs more. Restoring to a new project is also a
+paid-plan feature and creates a separate project with mirrored resources and
+additional ongoing costs. Review the current [backup/PITR documentation](https://supabase.com/docs/guides/platform/backups)
+and [restore-to-new-project documentation](https://supabase.com/docs/guides/platform/clone-project)
+before choosing that route. A route that avoids buying PITR or creating a restore project is a logical CLI
+dump and restore into an already provisioned isolated project, subject to the
+local tooling, database-password, and project prerequisites above. Existing
+plan, compute, or data-transfer charges may still apply; confirm them before
+proceeding. A logical dump is not a PITR substitute.
+
+The most recent production dry run (read-only; migrations were not applied)
+reported these four pending migrations, in order:
+
+1. `supabase/migrations/20261010120000_focus_room_readiness.sql`
+2. `supabase/migrations/20261011120000_trusted_room_progress.sql`
+3. `supabase/migrations/20261012120000_room_quest_reroll_guard.sql`
+4. `supabase/migrations/20261012130000_room_late_join.sql`
+
+The reviewed pending files do not drop or truncate application tables. They
+add readiness state, create trusted room-progress storage and RPCs, replace the
+quest-reroll function, and replace room join/snapshot functions. This is not a
+substitute for the required verified backup and restore test.
+
+The repo migration files are additive/replace-function migrations and do not
+drop or reset profiles, sessions, XP, quests, or room data. This does not
+replace the backup/PITR gate or a review of the actual remote plan. To inspect
+the production plan (not apply it), name the project explicitly:
+
+```powershell
+supabase migration list --project-ref qdvxfpzoychtgfenfjrs
+supabase db push --dry-run --project-ref qdvxfpzoychtgfenfjrs --skip-vault
+```
+
+After backup/PITR and restore verification, production execution still
+requires explicit approval. Do not expose or copy database credentials.
 
 ### Safe staging migration workflow
 
