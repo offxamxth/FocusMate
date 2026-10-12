@@ -73,7 +73,7 @@ test('trusted room progress loads for cloud accounts outside the Focus Room page
   assert.match(appSource, /roomProgressRef\.current = next/);
   assert.match(roomSource, /if \(!account \|\| room\?\.status !== 'finished'\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)/);
   assert.doesNotMatch(roomSource, /if \(!account \|\| !pageActive\)/);
-  assert.doesNotMatch(appSource, /available_xp|verifiedXpBalance|Spendable room XP/);
+  assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance/);
 });
 
 test('all 20 room and accepted-friend achievements have progress and localization', () => {
@@ -113,18 +113,108 @@ test('trusted room progress migration uses server-timed completions, unique awar
   assert.match(migration, /grant execute on function public\.reroll_focusmate_profile_quest[\s\S]*?to authenticated/i);
 });
 
-test('room quest rerolls cannot select the current quest as its own replacement', async () => {
+test('room quest rerolls retain the 5-XP threshold and charge exactly once after validation', async () => {
   const migration = await readFile(
-    new URL('../../supabase/migrations/20261012120000_room_quest_reroll_guard.sql', import.meta.url),
+    new URL('../../supabase/migrations/20261011170000_room_quest_reroll_guard.sql', import.meta.url),
     'utf8',
   );
+  const originalMigration = await readFile(
+    new URL('../../supabase/migrations/20261011120000_trusted_room_progress.sql', import.meta.url),
+    'utf8',
+  );
+  const reroll = migration.match(
+    /create or replace function public\.reroll_focusmate_room_quest\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(reroll, 'the ordered guard migration replaces the room reroll RPC');
+  assert.match(reroll, /wallet\.user_id = current_user_id\s+for update/i);
+  assert.match(reroll, /if wallet_balance < 5 then/i);
+  assert.match(reroll, /prior_request_type = 'reroll'/);
+  assert.equal(5 < 5, false, 'exactly 5 XP is accepted by the strict less-than guard');
+  assert.equal(6 < 5, false, 'balances above 5 XP pass the threshold');
+  assert.equal(4 < 5, true, 'balances below 5 XP are rejected');
   assert.match(
-    migration,
+    reroll,
     /where current_value < \(candidate\.value ->> 'target'\)::numeric\s+and candidate\.value ->> 'id' <> p_quest_id/i,
   );
-  assert.match(migration, /if replacement is null then[\s\S]*?raise exception 'No eligible room quest replacement/i);
+  assert.match(reroll, /if replacement is null then[\s\S]*?raise exception 'No eligible room quest replacement/i);
   assert.ok(
-    migration.indexOf('if replacement is null then') < migration.indexOf('set balance = balance - 5'),
-    'an unavailable replacement must be rejected before charging XP',
+    reroll.indexOf('if replacement is null then') < reroll.indexOf('set balance = balance - 5'),
+    'invalid rerolls fail before charging XP',
   );
+  assert.equal((reroll.match(/set balance = balance - 5/g) || []).length, 1);
+  assert.doesNotMatch(reroll, /adjust_focusmate_profile_xp/);
+  assert.match(reroll, /'total_xp', \(select profile\.xp/);
+  assert.ok(
+    reroll.indexOf("if prior_request_type = 'reroll' then") < reroll.indexOf('set balance = balance - 5'),
+    'a repeated room-reroll request returns its stored response before charging again',
+  );
+  assert.ok(
+    reroll.indexOf('for update') < reroll.indexOf('request.request_id = p_request_id'),
+    'the wallet lock serializes concurrent requests before idempotency is checked',
+  );
+  assert.ok(
+    reroll.indexOf('Request ID was already used for another XP operation')
+      < reroll.indexOf('set balance = balance - 5'),
+    'an ID used by another operation is rejected before charging',
+  );
+  assert.match(reroll, /values \(current_user_id, p_request_id, 'reroll', result\)/);
+  assert.match(
+    originalMigration,
+    /grant execute on function public\.reroll_focusmate_room_quest\(text, uuid\)\s+to authenticated/i,
+  );
+  assert.match(
+    originalMigration,
+    /request_type text not null check \(request_type in \('reroll', 'profile_reroll', 'claim'\)\)/i,
+  );
+});
+
+test('profile quest rerolls keep their independent request type and profile quest storage', async () => {
+  const roomGuard = await readFile(
+    new URL('../../supabase/migrations/20261011170000_room_quest_reroll_guard.sql', import.meta.url),
+    'utf8',
+  );
+  const profileReroll = roomGuard.match(
+    /create or replace function public\.reroll_focusmate_profile_quest\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(profileReroll);
+  assert.match(profileReroll, /prior_request_type = 'profile_reroll'/);
+  assert.match(profileReroll, /select request\.response, request\.request_type[\s\S]*?request\.request_id = p_request_id/);
+  assert.match(profileReroll, /values \(current_user_id, p_request_id, 'profile_reroll', result\)/);
+  assert.match(profileReroll, /'{daily_quests}'/);
+  assert.doesNotMatch(profileReroll, /private\.focusmate_room_daily_quests/);
+  assert.doesNotMatch(profileReroll, /adjust_focusmate_profile_xp/);
+  assert.match(profileReroll, /set balance = balance - 5/);
+  assert.match(profileReroll, /'total_xp', \(select profile\.xp/);
+  assert.ok(
+    profileReroll.indexOf("if prior_request_type = 'profile_reroll' then")
+      < profileReroll.indexOf('set balance = balance - 5'),
+    'a repeated profile-reroll request returns before charging again',
+  );
+  assert.ok(
+    profileReroll.indexOf('Request ID was already used for another XP operation')
+      < profileReroll.indexOf('set balance = balance - 5'),
+    'profile rerolls reject IDs belonging to a different operation before charging',
+  );
+  assert.match(roomGuard, /values \(current_user_id, p_request_id, 'reroll', result\)/);
+  assert.match(roomGuard, /values \(current_user_id, p_request_id, 'profile_reroll', result\)/);
+  const roomReroll = roomGuard.match(
+    /create or replace function public\.reroll_focusmate_room_quest\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(roomReroll);
+  assert.match(roomReroll, /prior_request_type = 'reroll'/);
+  assert.match(roomReroll, /select request\.response, request\.request_type[\s\S]*?request\.request_id = p_request_id/);
+  assert.match(roomReroll, /values \(current_user_id, p_request_id, 'reroll', result\)/);
+});
+
+test('room quest UI exposes a known balance, blocks unaffordable rerolls, and locks duplicate clicks', async () => {
+  const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(appSource, /verifiedXpBalance', \{ xp: roomXp \?\? '—' \}/);
+  assert.match(appSource, /roomXp !== null && roomXp < 5/);
+  assert.match(appSource, /busyRef\.current\) return/);
+  assert.match(appSource, /busyAction === 'reroll' \? t\('rerolling'\)/);
+  assert.match(appSource, /actionError\.code === 'QUEST_REROLL_INSUFFICIENT_XP'/);
+  assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance === null[\s\S]*?: null/);
+  for (const language of supportedLanguages) {
+    assert.notEqual(translate(language, 'quests.rerolling'), 'quests.rerolling');
+  }
 });

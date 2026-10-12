@@ -325,6 +325,11 @@ function FocusMateApp({
       total_xp: Number.isFinite(Number(trustedProgress?.total_xp))
         ? Number(trustedProgress.total_xp)
         : value.total_xp,
+      available_xp: trustedProgress?.xp_balance === null || trustedProgress?.xp_balance === undefined
+        ? null
+        : Number.isFinite(Number(trustedProgress.xp_balance))
+          ? Number(trustedProgress.xp_balance)
+          : null,
       room_progress: trustedProgress?.room_progress || {},
       room_daily_quests: trustedProgress?.room_daily_quests || value.room_daily_quests || null,
       achievements: existingAwards,
@@ -1275,6 +1280,7 @@ function DailyQuests({
     {hasCloudAccount && (
       <RoomDailyQuests
         daily={profile.room_daily_quests}
+        availableXp={profile.available_xp}
         language={language}
         onReroll={onRoomReroll}
         onClaim={onRoomClaim}
@@ -1285,12 +1291,21 @@ function DailyQuests({
   </section>;
 }
 
-function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
+function RoomDailyQuests({ daily, availableXp, language, onReroll, onClaim }) {
   const [busyId, setBusyId] = useState('');
+  const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
+  const busyRef = useRef(false);
+  const roomXp = availableXp === null || availableXp === undefined || availableXp === ''
+    || !Number.isFinite(Number(availableXp))
+    ? null
+    : Number(availableXp);
   const t = (key, values) => translate(language, `quests.${key}`, values);
-  const runAction = async (questId, action) => {
+  const runAction = async (questId, actionType, action) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyId(questId);
+    setBusyAction(actionType);
     setError('');
     try {
       await action(questId);
@@ -1299,7 +1314,9 @@ function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
         ? t('rerollInsufficientXp')
         : actionError.message || t('rerollFailed'));
     } finally {
+      busyRef.current = false;
       setBusyId('');
+      setBusyAction('');
     }
   };
   const quests = daily?.quests;
@@ -1311,6 +1328,7 @@ function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
           <h3>{t('roomQuestTitle')}</h3>
           <p>{t('roomQuestDescription')}</p>
         </div>
+        <span className="xp-pill">{t('verifiedXpBalance', { xp: roomXp ?? '—' })}</span>
       </div>
       {!Array.isArray(quests) ? (
         <p className="muted-note">{t('roomQuestLoading')}</p>
@@ -1344,13 +1362,13 @@ function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
                 <div className="progress-track" role="progressbar" aria-label={title} aria-valuemin="0" aria-valuemax={target} aria-valuenow={Math.min(target, current)}><span style={{ width: `${target ? Math.min(100, current / target * 100) : 0}%` }} /></div>
                 <div className="quest-card-footer"><span className="xp-pill">+{quest.rewardXP} XP</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.rewardClaimed ? t('claimed') : quest.completed ? t('complete') : t('inProgress')}</span></div>
                 {quest.completed && !quest.rewardClaimed && onClaim && (
-                  <button className="primary-button" type="button" disabled={Boolean(busyId)} onClick={() => void runAction(quest.id, onClaim)}>
-                    {busyId === quest.id ? t('claiming') : t('claimReward')}
+                  <button className="primary-button" type="button" disabled={Boolean(busyId)} onClick={() => void runAction(quest.id, 'claim', onClaim)}>
+                    {busyId === quest.id && busyAction === 'claim' ? t('claiming') : t('claimReward')}
                   </button>
                 )}
                 {!quest.completed && onReroll && (
-                  <button className="outline-button quest-reroll" type="button" disabled={Boolean(busyId)} onClick={() => void runAction(quest.id, onReroll)}>
-                    {busyId === quest.id ? t('claiming') : t('reroll')}
+                  <button className="outline-button quest-reroll" type="button" disabled={Boolean(busyId) || (roomXp !== null && roomXp < 5)} onClick={() => void runAction(quest.id, 'reroll', onReroll)}>
+                    {busyId === quest.id && busyAction === 'reroll' ? t('rerolling') : t('reroll')}
                   </button>
                 )}
               </article>
@@ -1358,6 +1376,7 @@ function RoomDailyQuests({ daily, language, onReroll, onClaim }) {
           })}
         </div>
       )}
+      {roomXp !== null && roomXp < 5 && <p className="muted-note">{t('rerollInsufficientXp')}</p>}
       {error && <p className="quest-reroll-error" role="alert">{error}</p>}
     </section>
   );
