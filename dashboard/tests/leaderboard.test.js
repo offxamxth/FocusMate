@@ -154,6 +154,18 @@ test('leaderboard privacy changes are caller-scoped and reject arbitrary visibil
   assert.equal(calls.length, 1);
 });
 
+test('missing clients fail gracefully before any RPC call is attempted', async () => {
+  await assert.rejects(getFocusMateLeaderboard(null), (error) => {
+    assert.equal(leaderboardErrorTranslationKey(error), 'leaderboard.error.signIn');
+    assert.match(error.message, /leaderboard/i);
+    return true;
+  });
+  await assert.rejects(setFocusMateLeaderboardVisibility(null, 'friends'), (error) => {
+    assert.equal(leaderboardErrorTranslationKey(error), 'leaderboard.error.signIn');
+    return true;
+  });
+});
+
 test('database errors are translated into safe, useful retry states', async () => {
   const { client } = fakeClient({ data: null, error: { code: '28000', message: 'private database detail' } });
   await assert.rejects(getFocusMateLeaderboard(client), (error) => {

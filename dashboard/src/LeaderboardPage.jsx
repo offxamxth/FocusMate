@@ -17,7 +17,7 @@ function focusMinutes(seconds, language) {
 export default function LeaderboardPage({ account, language }) {
   const [period, setPeriod] = useState('weekly');
   const [scope, setScope] = useState('global');
-  const [online, setOnline] = useState(navigator.onLine);
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
   const [data, setData] = useState(null);
   const [entries, setEntries] = useState([]);
   const [visibility, setVisibility] = useState('private');
@@ -31,6 +31,7 @@ export default function LeaderboardPage({ account, language }) {
   const t = (key) => translate(language, `leaderboard.${key}`);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
     const onOnline = () => setOnline(true);
     const onOffline = () => setOnline(false);
     window.addEventListener('online', onOnline);
@@ -51,6 +52,11 @@ export default function LeaderboardPage({ account, language }) {
 
     if (!online) {
       setError('leaderboard.error.offline');
+      setLoading(false);
+      return () => { active = false; };
+    }
+    if (!supabase || typeof supabase.rpc !== 'function') {
+      setError('leaderboard.error.signIn');
       setLoading(false);
       return () => { active = false; };
     }

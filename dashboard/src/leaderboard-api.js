@@ -20,6 +20,12 @@ function leaderboardError(code, message) {
   return error;
 }
 
+function assertLeaderboardClient(client) {
+  if (!client || typeof client.rpc !== 'function') {
+    throw leaderboardError('28000', 'Authentication is required to load the leaderboard.');
+  }
+}
+
 function normalizeLeaderboard(data) {
   if (!isRecord(data) || !Array.isArray(data.entries) || !isRecord(data.progress)) {
     throw leaderboardError('INVALID_RESPONSE', 'The leaderboard response was invalid.');
@@ -82,6 +88,8 @@ export async function getFocusMateLeaderboard(
   client,
   { period = 'weekly', scope = 'global', limit = 20, offset = 0 } = {},
 ) {
+  assertLeaderboardClient(client);
+
   if (!allowedPeriods.has(period) || !allowedScopes.has(scope)
     || !Number.isInteger(limit) || limit < 1 || limit > 50
     || !Number.isInteger(offset) || offset < 0 || offset > 10000) {
@@ -99,6 +107,8 @@ export async function getFocusMateLeaderboard(
 }
 
 export async function setFocusMateLeaderboardVisibility(client, visibility) {
+  assertLeaderboardClient(client);
+
   if (!allowedVisibilities.has(visibility)) {
     throw leaderboardError('22023', 'The leaderboard privacy setting was invalid.');
   }
