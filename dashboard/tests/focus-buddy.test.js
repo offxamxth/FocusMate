@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  claimWaterReminderResponse,
   focusBuddyCharacters,
-  focusMoodTip,
-  moodFocusTips,
+  focusMoods,
   normalizeFocusBuddyPreferences,
   readWaterReminderSchedule,
   scheduleNextWaterReminder,
+  waterReminderDelayMs,
   waterReminderStorageKey,
 } from '../src/focus-buddy.js';
+import { supportedLanguages, translate } from '../src/i18n.js';
 
 function createStorage() {
   const values = new Map();
@@ -20,12 +22,35 @@ function createStorage() {
 }
 
 test('each supported focus mood has its own supportive tip', () => {
-  assert.deepEqual(Object.keys(moodFocusTips), ['Calm', 'Focused', 'Okay', 'Tired', 'Stressed']);
-  for (const mood of Object.keys(moodFocusTips)) {
-    assert.equal(focusMoodTip(mood), moodFocusTips[mood]);
-    assert.ok(moodFocusTips[mood].length > 40);
+  assert.deepEqual(focusMoods, ['Calm', 'Focused', 'Okay', 'Tired', 'Stressed']);
+  for (const mood of focusMoods) {
+    const tip = translate('en', `focus.moodTip.${mood}`);
+    assert.ok(tip.length > 40);
   }
-  assert.equal(focusMoodTip('unknown'), '');
+});
+
+test('Focus Buddy and every mood tip are translated in every supported language', () => {
+  const keys = [
+    'focusBuddy.title', 'focusBuddy.description', 'focusBuddy.enabled',
+    'focusBuddy.enabledHelp', 'focusBuddy.character', 'focusBuddy.webHero',
+    'focusBuddy.capeHero', 'focusBuddy.cat', 'focusBuddy.frog',
+    'focusBuddy.interval', 'focusBuddy.snooze', 'focusBuddy.greetByName',
+    'focusBuddy.duringSessions', 'focusBuddy.duringSessionsHelp',
+    'focusBuddy.greeting', 'focusBuddy.greetingFallback', 'focusBuddy.done',
+    'focusBuddy.later', 'focusBuddy.snoozed', 'focusBuddy.thanks',
+    ...focusMoods.map((mood) => `focus.moodTip.${mood}`),
+  ];
+  for (const language of supportedLanguages) {
+    for (const key of keys) {
+      const translated = translate(language, key, { name: 'Alex' });
+      assert.notEqual(translated, key, `${language} is missing ${key}`);
+      assert.ok(!translated.includes('{name}'), `${language} did not interpolate ${key}`);
+      if (language !== 'en') assert.notEqual(translated, translate('en', key, { name: 'Alex' }), `${language} fell back to English for ${key}`);
+    }
+  }
+  for (const language of supportedLanguages) {
+    assert.match(translate(language, 'focusBuddy.greeting', { name: 'Alex' }), /Alex/);
+  }
 });
 
 test('Focus Buddy preferences validate character and reminder intervals', () => {
@@ -63,6 +88,21 @@ test('water reminder deadlines persist across refreshes and snooze starts a futu
   const snoozed = scheduleNextWaterReminder(storage, key, 5, now + 2000);
   assert.equal(snoozed, now + 5 * 60_000 + 2000);
   assert.equal(readWaterReminderSchedule(storage, key, 60, now + 3000), snoozed);
+  assert.equal(waterReminderDelayMs(first, now + 1000), first - now - 1000);
+  assert.equal(waterReminderDelayMs(first, first), 0);
+  assert.equal(waterReminderDelayMs(first, first + 1), 0);
+});
+
+test('reminder responses are idempotent until the next reminder is presented', () => {
+  const responseState = { current: false };
+  assert.equal(claimWaterReminderResponse(responseState), true);
+  assert.equal(claimWaterReminderResponse(responseState), false);
+  responseState.current = false;
+  assert.equal(claimWaterReminderResponse(responseState), true);
+});
+
+test('reminder schedules are isolated by account', () => {
+  assert.notEqual(waterReminderStorageKey('alex'), waterReminderStorageKey('sam'));
 });
 
 test('invalid reminder schedule data is replaced without an immediate reminder', () => {

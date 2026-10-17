@@ -2,13 +2,7 @@ export const focusBuddyCharacters = ['web-hero', 'cape-hero', 'cat', 'frog'];
 export const waterReminderIntervals = [15, 30, 45, 60, 90, 120];
 export const waterReminderSnoozes = [5, 10, 15, 20, 30];
 
-export const moodFocusTips = {
-  Calm: '😌 Feeling calm? Great! Protect that peaceful mindset. Set one clear goal and ease into your focus session.',
-  Focused: '🎯 Already feeling focused? Nice! Choose your top priority, silence distractions, and make the most of your momentum.',
-  Okay: '🙂 Feeling okay? That’s a good place to start. Take it one step at a time and focus on making steady progress.',
-  Tired: '😴 Feeling tired? Are you sure you’re ready for a focus session? Grab some water, stretch, or take a short rest if you need it. If you’re ready, start with a small, manageable goal.',
-  Stressed: '😟 Feeling stressed? Are you sure you want to start a session while stressed? Take a moment to cool down, breathe slowly, and settle your mind. When you’re ready, choose one small task to begin with.',
-};
+export const focusMoods = ['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'];
 
 const defaults = {
   focus_buddy_enabled: true,
@@ -61,6 +55,12 @@ export function scheduleNextWaterReminder(storage, key, delayMinutes, now = Date
   return nextAt;
 }
 
-export function focusMoodTip(mood) {
-  return moodFocusTips[mood] || '';
+export function waterReminderDelayMs(nextAt, now = Date.now()) {
+  return Number.isFinite(nextAt) ? Math.max(0, nextAt - now) : 0;
+}
+
+export function claimWaterReminderResponse(state) {
+  if (state.current) return false;
+  state.current = true;
+  return true;
 }

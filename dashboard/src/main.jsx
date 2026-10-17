@@ -45,12 +45,14 @@ import {
 import { reportPwaSessionActivity } from './pwa-session-state.js';
 import {
   focusBuddyCharacters,
-  focusMoodTip,
+  focusMoods,
   normalizeFocusBuddyPreferences,
+  claimWaterReminderResponse,
   readWaterReminderSchedule,
   scheduleNextWaterReminder,
   waterReminderIntervals,
   waterReminderSnoozes,
+  waterReminderDelayMs,
   waterReminderStorageKey,
 } from './focus-buddy.js';
 import {
@@ -993,7 +995,7 @@ function FocusMateApp({
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
-      <FocusBuddy username={username} profile={profile} live={live} language={language} />
+      <FocusBuddy key={username} username={username} profile={profile} live={live} language={language} />
       <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>
         {mobileDestinations.map((item) => {
           const Icon = item.icon;
@@ -1733,6 +1735,8 @@ function FocusBuddy({ username, profile, live, language }) {
   const [reaction, setReaction] = useState('');
   const [scheduleVersion, setScheduleVersion] = useState(0);
   const reactionTimeout = useRef(null);
+  const reminderResponseClaimed = useRef(false);
+  const reminderPending = useRef(false);
   const storageKey = waterReminderStorageKey(username);
   const activeSession = Boolean(live.session_active || roomTimer?.status === 'focusing');
   const allowDuringSession = preferences.focus_buddy_during_sessions;
@@ -1741,6 +1745,7 @@ function FocusBuddy({ username, profile, live, language }) {
   useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
   useEffect(() => {
     if (!preferences.focus_buddy_enabled) {
+      reminderPending.current = false;
       localStorage.removeItem(storageKey);
       setReminder(null);
       setReaction('');
@@ -1752,20 +1757,37 @@ function FocusBuddy({ username, profile, live, language }) {
       preferences.focus_buddy_interval_minutes,
     );
     let timeout;
+    let disposed = false;
     const checkReminder = () => {
-      const remaining = nextAt - Date.now();
+      if (disposed) return;
+      window.clearTimeout(timeout);
+      const remaining = waterReminderDelayMs(nextAt);
       if (remaining > 0) {
         timeout = window.setTimeout(checkReminder, Math.min(remaining, 2_147_000_000));
         return;
       }
+      if (document.visibilityState === 'hidden') return;
       if (activeSession && !allowDuringSession) {
         setReminder(null);
         return;
       }
+      if (reminderPending.current) return;
+      reminderPending.current = true;
+      reminderResponseClaimed.current = false;
       setReminder((current) => current || { dueAt: nextAt });
     };
+    const checkWhenActive = () => {
+      if (document.visibilityState !== 'hidden') checkReminder();
+    };
+    document.addEventListener('visibilitychange', checkWhenActive);
+    window.addEventListener('focus', checkWhenActive);
     checkReminder();
-    return () => window.clearTimeout(timeout);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      document.removeEventListener('visibilitychange', checkWhenActive);
+      window.removeEventListener('focus', checkWhenActive);
+    };
   }, [
     activeSession,
     allowDuringSession,
@@ -1779,11 +1801,13 @@ function FocusBuddy({ username, profile, live, language }) {
   if (!preferences.focus_buddy_enabled || (!reminder && !reaction)) return null;
 
   const respond = (action) => {
+    if (!reminder || !claimWaterReminderResponse(reminderResponseClaimed)) return;
     const delay = action === 'done'
       ? preferences.focus_buddy_interval_minutes
       : preferences.focus_buddy_snooze_minutes;
     scheduleNextWaterReminder(localStorage, storageKey, delay);
     setScheduleVersion((version) => version + 1);
+    reminderPending.current = false;
     setReminder(null);
     setReaction(action);
     window.clearTimeout(reactionTimeout.current);
@@ -1803,7 +1827,7 @@ function FocusBuddy({ username, profile, live, language }) {
       className={`focus-buddy-overlay ${reminder ? 'is-reminding' : ''} ${reaction ? `is-${reaction}` : ''}`}
       dir="ltr"
     >
-      <div className="focus-buddy-bubble" role="status" aria-live="polite">
+      <div className="focus-buddy-bubble" role="status" aria-live="polite" dir={textDirection(language)}>
         <p>{greeting}</p>
         {reminder && (
           <div className="focus-buddy-actions">
@@ -1825,6 +1849,7 @@ function FocusBuddy({ username, profile, live, language }) {
             <circle cx="73" cy="69" r="6" />
           </g>
           <path className="buddy-body" d="M35 40 Q50 34 65 40 L70 77 Q50 87 30 77Z" />
+          {character === 'web-hero' && <g className="buddy-web-mark"><path d="m34 48 9 6 7-6 7 6 9-6M37 57l8 5 5-4 5 4 8-5M50 41v8M41 44l3 7m15-7-3 7" /></g>}
           <path className="buddy-emblem" d="M50 48 54 55 62 56 56 61 58 69 50 65 43 69 45 61 39 56 47 55Z" />
           <g className="buddy-leg buddy-leg-left">
             <path d="M39 75 36 101" />
@@ -1946,13 +1971,13 @@ function FocusRoom({
           <div className="form-grid">
             <label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label>
             <label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>
-            <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>
+            <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{focusMoods.map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>
           </div>
         )}
         {mood && !sessionRunning && (
           <div className="mood-focus-tip" role="status" aria-live="polite">
             <Sparkles size={16} aria-hidden="true" />
-            <p>{focusMoodTip(mood)}</p>
+            <p>{translate(language, `focus.moodTip.${mood}`)}</p>
           </div>
         )}
         {!stream && cameraState !== 'off' && (
