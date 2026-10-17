@@ -33,8 +33,8 @@ export async function authenticateWithUsernamePin(client, credentials) {
         responseData = null;
       }
     }
-    const responseMessage = responseData?.error || error.message;
-    throw new Error(authErrorMessage(new Error(responseMessage)));
+    const safeError = responseData?.error ? new Error(responseData.error) : error;
+    throw new Error(authErrorMessage(safeError));
   }
   if (!data?.session?.access_token || !data?.session?.refresh_token) {
     throw new Error('FocusMate could not create a secure session. Please try again.');

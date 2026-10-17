@@ -1,11 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const allowedOrigins = new Set([
-  "https://getfocusmate.vercel.app",
-  "https://focus-mate-fph9wppxm-cyb3r-amxths-projects.vercel.app",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-]);
+import { isUsernamePinOriginAllowed } from "./cors.mjs";
 
 const pinIterations = 310_000;
 const rateLimitAttempts = 5;
@@ -48,7 +42,7 @@ function corsHeadersFor(request: Request) {
     "Vary": "Origin",
   });
   const origin = request.headers.get("origin");
-  if (origin && allowedOrigins.has(origin)) {
+  if (isUsernamePinOriginAllowed(origin)) {
     headers.set("Access-Control-Allow-Origin", origin);
   }
   return headers;

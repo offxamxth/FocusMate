@@ -6,6 +6,7 @@ import {
   isUsernameUnavailableMessage,
   validatePinAccount,
 } from '../src/pin-auth.js';
+import { isUsernamePinOriginAllowed } from '../../supabase/functions/username-pin/cors.mjs';
 import { achievementCatalog } from '../src/achievement-data.js';
 import { supportedLanguages, translate, translateAchievement } from '../src/i18n.js';
 
@@ -26,11 +27,51 @@ test('PIN validation requires a username and signup display name', () => {
   assert.equal(validatePinAccount({ username: '', pin: '123456', action: 'migrate' }), '');
 });
 
+test('login and signup use six responsive masked PIN boxes with an accessible numeric input', async () => {
+  const [component, styles] = await Promise.all([
+    readFile(new URL('../src/AuthGate.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/style.css', import.meta.url), 'utf8'),
+  ]);
+  const pinInput = component.match(/className="pin-digit-input"[\s\S]*?required\s*\/>/)?.[0];
+  assert.ok(pinInput);
+  assert.match(component, /Array\.from\(\{ length: 6 \}/);
+  assert.match(component, /inputMode="numeric"/);
+  assert.match(component, /pattern="\[0-9\]\{6\}"/);
+  assert.match(component, /maxLength=\{6\}/);
+  assert.match(component, /aria-describedby="pin-help"/);
+  assert.match(component, /setPin\(nextPin\)/);
+  assert.match(component, /input\.value\.replace\(\/\[\^0-9\]\/g, ''\)\.slice\(0, 6\)/);
+  assert.match(component, /onKeyDown=\{movePinCursor\}/);
+  assert.match(component, /onChange=\{updatePin\}/);
+  assert.match(component, /showPin \? pin\[index\] : '•'/);
+  assert.match(styles, /\.pin-digit-track[\s\S]*?grid-template-columns: repeat\(6/);
+  assert.match(styles, /\.pin-digit\.active[\s\S]*?box-shadow/);
+  assert.match(styles, /@media \(max-width: 420px\)[\s\S]*?\.pin-digit/);
+});
+
 test('only the explicit username-conflict response is treated as username unavailable', () => {
   assert.equal(isUsernameUnavailableMessage('That username is unavailable. Choose another username.'), true);
   assert.equal(isUsernameUnavailableMessage('Account creation is temporarily unavailable. Please try again later.'), false);
   assert.equal(isUsernameUnavailableMessage('Account creation is temporarily limited. Please try again later.'), false);
   assert.equal(isUsernameUnavailableMessage('Database service unavailable.'), false);
+});
+
+test('username/PIN CORS allows the intended Vercel Preview but rejects other deployment origins', () => {
+  assert.equal(
+    isUsernamePinOriginAllowed('https://focus-mate-i7a2lyrcv-cyb3r-amxths-projects.vercel.app'),
+    true,
+  );
+  assert.equal(isUsernamePinOriginAllowed('https://getfocusmate.vercel.app'), true);
+  assert.equal(
+    isUsernamePinOriginAllowed('https://focus-mate-git-focusmate-timer-preview-cyb3r-amxths-projects.vercel.app'),
+    false,
+  );
+  assert.equal(isUsernamePinOriginAllowed('https://other-project-123.vercel.app'), false);
+  assert.equal(
+    isUsernamePinOriginAllowed('https://focus-mate-preview.vercel.app.attacker.example'),
+    false,
+  );
+  assert.equal(isUsernamePinOriginAllowed('http://focus-mate-i7a2lyrcv-cyb3r-amxths-projects.vercel.app'), false);
 });
 
 test('username/PIN auth sends the PIN only to the auth function and installs its session', async () => {
@@ -70,6 +111,26 @@ test('username/PIN auth sends the PIN only to the auth function and installs its
   }]);
   assert.deepEqual(installed, [{ access_token: 'access', refresh_token: 'refresh' }]);
   assert.equal(session.user.id, 'user-id');
+});
+
+test('username/PIN auth maps Edge Function transport failures to the safe network message', async () => {
+  const fetchError = new Error('Failed to send a request to the Edge Function');
+  fetchError.name = 'FunctionsFetchError';
+  const client = {
+    functions: {
+      invoke: async () => ({ data: null, error: fetchError }),
+    },
+  };
+
+  await assert.rejects(
+    authenticateWithUsernamePin(client, {
+      action: 'signup',
+      username: 'reader',
+      displayName: 'Focus reader',
+      pin: '012345',
+    }),
+    /Network error — please check your connection and try again\./,
+  );
 });
 
 test('existing account migration sends the old credentials only to the auth function', async () => {
@@ -191,11 +252,16 @@ test('username/PIN function logs sanitized error details and missing setting nam
     new URL('../../supabase/functions/username-pin/index.ts', import.meta.url),
     'utf8',
   );
+  const cors = await readFile(
+    new URL('../../supabase/functions/username-pin/cors.mjs', import.meta.url),
+    'utf8',
+  );
   assert.match(source, /function logSafeRequestError\(error: unknown, sensitiveValues: string\[\]\)/);
   assert.match(source, /replaceAll\(sensitiveValue, "\[REDACTED\]"\)/);
   assert.match(source, /errorMessage: safeMessage/);
   assert.match(source, /missingEnvironmentVariables/);
-  assert.match(source, /"https:\/\/getfocusmate\.vercel\.app"/);
+  assert.match(cors, /'https:\/\/getfocusmate\.vercel\.app'/);
+  assert.match(source, /isUsernamePinOriginAllowed\(origin\)/);
   assert.match(source, /"Access-Control-Allow-Methods": "POST, OPTIONS"/);
   assert.match(source, /"Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"/);
   assert.match(source, /new Response\("ok", \{ status: 200, headers: corsHeadersFor\(request\) \}\)/);

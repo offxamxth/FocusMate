@@ -12,7 +12,11 @@ import {
   updatePrivateProfile,
   validCloudUsername,
 } from '../src/lib/supabase.js';
-import { claimTimerCompletion, playSessionCompletionBeep } from '../src/timer-completion.js';
+import {
+  claimTimerCompletion,
+  playSessionCompletionBeep,
+  remainingFocusSeconds,
+} from '../src/timer-completion.js';
 
 test('Supabase auth validation and account-local storage identities are bounded', () => {
   assert.equal(Boolean(supabase), supabaseConfigured);
@@ -282,4 +286,14 @@ test('timer completion guard permits one completion and safely ignores blocked a
   const nextSession = { current: false };
   if (claimTimerCompletion(nextSession)) await playSessionCompletionBeep(fakeContext);
   assert.equal(started, 1);
+});
+
+test('focus countdown remains anchored to the selected session start time', () => {
+  const startedAt = 1_000_000;
+  const durationSeconds = 15 * 60;
+  assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt), durationSeconds);
+  assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt + 61_250), 839);
+  assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt + durationSeconds * 1000), 0);
+  assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt + 60 * 60 * 1000), 0);
+  assert.equal(remainingFocusSeconds(Number.NaN, durationSeconds, startedAt), 0);
 });

@@ -12,27 +12,29 @@ const migration = await readFile(
   new URL('../../supabase/migrations/20261004240000_verified_focus_leaderboard.sql', import.meta.url),
   'utf8',
 );
+const globalXpLeaderboardMigration = await readFile(
+  new URL('../../supabase/migrations/20261017120000_global_xp_leaderboard.sql', import.meta.url),
+  'utf8',
+);
 
 function response(overrides = {}) {
   return {
-    period: 'weekly',
     scope: 'global',
-    week_start: '2026-10-05T00:00:00Z',
     entries: [{
       rank: 1,
       username: 'alex',
       display_name: 'Alex',
-      focus_seconds: 3600,
+      global_xp: 3600,
+      level: 37,
       user_id: 'private-id',
       email: 'private@example.test',
     }],
     has_more: false,
     total_entries: 1,
     progress: {
-      all_time_seconds: 7200,
-      weekly_seconds: 3600,
+      global_xp: 7200,
+      level: 73,
       rank: 1,
-      weekly_rank: 1,
       visibility: 'public',
       listed: true,
       user_id: 'private-id',
@@ -54,36 +56,35 @@ function fakeClient(result) {
   };
 }
 
-test('leaderboard requests accept only bounded ranking selectors, never client scores or identities', async () => {
+test('leaderboard requests accept only bounded scope and paging selectors, never client scores or identities', async () => {
   const { client, calls } = fakeClient({ data: response(), error: null });
   await getFocusMateLeaderboard(client, {
-    period: 'all_time',
     scope: 'friends',
     limit: 10,
     offset: 20,
     user_id: 'another-user',
-    focus_seconds: 900000,
+    global_xp: 900000,
   });
   assert.deepEqual(calls, [[
     'get_focusmate_leaderboard',
-    { p_period: 'all_time', p_scope: 'friends', p_limit: 10, p_offset: 20 },
+    { p_scope: 'friends', p_limit: 10, p_offset: 20 },
   ]]);
 });
 
-test('leaderboard responses expose only public ranking fields and verified progress', async () => {
+test('leaderboard responses expose only public profile fields and persisted Global XP', async () => {
   const { client } = fakeClient({ data: response(), error: null });
   const result = await getFocusMateLeaderboard(client);
   assert.deepEqual(result.entries, [{
     rank: 1,
     username: 'alex',
     display_name: 'Alex',
-    focus_seconds: 3600,
+    global_xp: 3600,
+    level: 37,
   }]);
   assert.deepEqual(result.progress, {
-    all_time_seconds: 7200,
-    weekly_seconds: 3600,
+    global_xp: 7200,
+    level: 73,
     rank: 1,
-    weekly_rank: 1,
     visibility: 'public',
     listed: true,
   });
@@ -92,16 +93,15 @@ test('leaderboard responses expose only public ranking fields and verified progr
   assert.equal(Object.hasOwn(result.progress, 'user_id'), false);
 });
 
-test('empty boards and rank positions outside the returned page are preserved', async () => {
+test('empty boards and current-user rank beyond the returned page are preserved', async () => {
   const empty = response({
     entries: [],
     total_entries: 0,
     has_more: false,
     progress: {
-      all_time_seconds: 0,
-      weekly_seconds: 0,
+      global_xp: 0,
+      level: 1,
       rank: null,
-      weekly_rank: null,
       visibility: 'private',
       listed: false,
     },
@@ -114,10 +114,9 @@ test('empty boards and rank positions outside the returned page are preserved', 
     total_entries: 51,
     has_more: true,
     progress: {
-      all_time_seconds: 900,
-      weekly_seconds: 600,
+      global_xp: 900,
+      level: 10,
       rank: 51,
-      weekly_rank: 51,
       visibility: 'public',
       listed: true,
     },
@@ -126,15 +125,50 @@ test('empty boards and rank positions outside the returned page are preserved', 
   const page = await getFocusMateLeaderboard(pagedClient, { limit: 50 });
   assert.equal(page.entries.length, 0);
   assert.equal(page.has_more, true);
-  assert.equal(page.progress.weekly_rank, 51);
+  assert.equal(page.progress.rank, 51);
   assert.deepEqual(calls[0], ['get_focusmate_leaderboard', {
-    p_period: 'weekly', p_scope: 'global', p_limit: 20, p_offset: 0,
+    p_scope: 'global', p_limit: 20, p_offset: 0,
   }]);
+});
+
+test('personal progress remains available when privacy excludes the user from ranking entries', async () => {
+  const privateProgress = response({
+    entries: [],
+    total_entries: 0,
+    progress: {
+      global_xp: 125,
+      level: 2,
+      rank: 4,
+      visibility: 'private',
+      listed: false,
+    },
+  });
+  const { client } = fakeClient({ data: privateProgress, error: null });
+  const result = await getFocusMateLeaderboard(client);
+
+  assert.deepEqual(result.entries, []);
+  assert.equal(result.progress.global_xp, 125);
+  assert.equal(result.progress.level, 2);
+  assert.equal(result.progress.listed, false);
+});
+
+test('null and numeric-string Global XP values are rejected instead of silently becoming zero', async () => {
+  for (const invalidResponse of [
+    response({ progress: { ...response().progress, global_xp: null } }),
+    response({ progress: { ...response().progress, global_xp: '7200' } }),
+    response({
+      entries: [{ ...response().entries[0], global_xp: '3600' }],
+    }),
+    response({ entries: [{ ...response().entries[0], level: 0 }] }),
+    response({ entries: [{ ...response().entries[0], level: 1 }] }),
+  ]) {
+    const { client } = fakeClient({ data: invalidResponse, error: null });
+    await assert.rejects(getFocusMateLeaderboard(client), /invalid/i);
+  }
 });
 
 test('invalid filters and malformed server data fail explicitly before displaying rankings', async () => {
   const { client, calls } = fakeClient({ data: response(), error: null });
-  await assert.rejects(getFocusMateLeaderboard(client, { period: 'daily' }), /invalid/i);
   await assert.rejects(getFocusMateLeaderboard(client, { scope: 'arbitrary-users' }), /invalid/i);
   await assert.rejects(getFocusMateLeaderboard(client, { limit: 1000 }), /invalid/i);
   assert.equal(calls.length, 0);
@@ -204,6 +238,45 @@ test('only finished, server-timed focus intervals count; pauses, breaks, and aba
   assert.match(migration, /primary key \(room_id, user_id, started_at\)/i);
 });
 
+test('Global XP rankings use the persisted profile XP and level snapshots', () => {
+  const leaderboardFunction = globalXpLeaderboardMigration.match(
+    /create(?: or replace)? function public\.get_focusmate_leaderboard\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(leaderboardFunction);
+  assert.match(leaderboardFunction, /profile\.xp as global_xp/);
+  assert.match(leaderboardFunction, /profile\.level/);
+  assert.match(leaderboardFunction, /order by visible\.global_xp desc,\s*visible\.user_id/i);
+  assert.match(leaderboardFunction, /'global_xp', page\.global_xp[\s\S]*?'level', page\.level/i);
+  assert.doesNotMatch(leaderboardFunction, /focus_seconds|focusmate_verified_focus_segments|app_data/);
+  assert.doesNotMatch(leaderboardFunction, /email|user_id', page\.user_id/i);
+});
+
+test('friends-only visibility cannot leak into global ranking entries', () => {
+  const leaderboardFunction = globalXpLeaderboardMigration.match(
+    /create(?: or replace)? function public\.get_focusmate_leaderboard\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(leaderboardFunction);
+  assert.match(
+    leaderboardFunction,
+    /visible_scores as \([\s\S]*?where leaderboard_visibility = 'public'\s+or \(p_scope = 'friends' and leaderboard_visibility = 'friends'\)/i,
+  );
+  assert.match(leaderboardFunction, /friendship\.status = 'accepted'/i);
+  assert.match(leaderboardFunction, /'listed', own\.listed/);
+  assert.doesNotMatch(leaderboardFunction, /leaderboard_visibility <> 'private'/i);
+});
+
+test('client profile snapshots cannot set Global XP; trusted server adjustments update the profile level', () => {
+  assert.match(globalXpLeaderboardMigration, /before update of app_data on public\.profiles/i);
+  assert.match(globalXpLeaderboardMigration, /focusmate\.trusted_profile_xp/);
+  assert.match(globalXpLeaderboardMigration, /to_jsonb\(coalesce\(old\.xp, 0\)\)/i);
+  assert.match(globalXpLeaderboardMigration, /set_config\('focusmate\.trusted_profile_xp', 'on', true\)/i);
+  assert.match(globalXpLeaderboardMigration, /set_config\('focusmate\.trusted_profile_xp', 'off', true\)/i);
+  assert.match(globalXpLeaderboardMigration, /profile\.xp as global_xp[\s\S]*?profile\.level/i);
+  assert.match(globalXpLeaderboardMigration, /row_number\(\) over \(\s*order by visible\.global_xp desc, visible\.user_id/i);
+  assert.match(globalXpLeaderboardMigration, /revoke all on function public\.get_focusmate_leaderboard\(text, integer, integer\)[\s\S]*?from public, anon, authenticated/i);
+  assert.match(globalXpLeaderboardMigration, /grant execute on function public\.get_focusmate_leaderboard\(text, integer, integer\)[\s\S]*?to authenticated/i);
+});
+
 test('UTC interval overlap, accepted-friend scope, opt-in privacy, deterministic ranks, and bounded paging are enforced', () => {
   assert.match(migration, /date_trunc\('week', now\(\) at time zone 'UTC'\) at time zone 'UTC'/i);
   assert.match(migration, /segment\.started_at < utc_week_end and segment\.ended_at > utc_week_start/i);
@@ -228,6 +301,10 @@ test('leaderboard UI strings are translated in every language and Arabic directi
       ...keys,
       'leaderboard.weekly',
       'leaderboard.all_time',
+      'leaderboard.xp',
+      'leaderboard.level',
+      'leaderboard.rank',
+      'leaderboard.globalXpSource',
       'leaderboard.global',
       'leaderboard.friends',
       'leaderboard.visibility.private',
@@ -244,4 +321,8 @@ test('leaderboard UI strings are translated in every language and Arabic directi
   assert.equal(textDirection('ar'), 'rtl');
   assert.match(component, /navigator\.onLine/);
   assert.match(component, /leaderboard\.error\.offline/);
+  assert.match(component, /entry\.global_xp/);
+  assert.match(component, /entry\.level/);
+  assert.match(component, /focusmate:room-progress-updated/);
+  assert.doesNotMatch(component, /focus_seconds|all_time_seconds|weekly_seconds/);
 });

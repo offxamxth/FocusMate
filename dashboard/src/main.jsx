@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { api, levelForXp } from './local-api.js';
 import { achievementCatalog, achievementProgress } from './achievement-data.js';
 import AuthGate from './AuthGate.jsx';
-import { claimTimerCompletion, playSessionCompletionBeep } from './timer-completion.js';
+import {
+  claimTimerCompletion,
+  playSessionCompletionBeep,
+  remainingFocusSeconds,
+} from './timer-completion.js';
 import {
   supabase,
   supabaseConfigurationError,
@@ -40,15 +44,24 @@ import {
 } from './navigation.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
 import {
+  focusBuddyCharacters,
+  focusMoodTip,
+  normalizeFocusBuddyPreferences,
+  readWaterReminderSchedule,
+  scheduleNextWaterReminder,
+  waterReminderIntervals,
+  waterReminderSnoozes,
+  waterReminderStorageKey,
+} from './focus-buddy.js';
+import {
   elapsedParticipantFocusSeconds,
   remainingRoomFocusSeconds,
   subscribeToRoomTimerState,
 } from './room-timer-sync.js';
-import { shouldConfirmSessionMood } from './session-mood.js';
 import {
   Activity, ArrowUpRight, Award, BarChart3, BookOpen, Check, ChevronDown, CircleHelp,
   Clock3, Coffee, Droplets, Flame, Focus, Heart, Home, ListTodo, LockKeyhole, LogOut,
-  Moon, MoreHorizontal, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles,
+  Moon, MoreHorizontal, Play, Plus, RotateCcw, Settings2, ShieldCheck, Sparkles,
   Sun, Timer, Trophy, UserRound, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import './style.css';
@@ -295,6 +308,9 @@ function FocusMateApp({
   const videoRef = useRef(null);
   const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
+  const streamRef = useRef(null);
+  const cameraStartGenerationRef = useRef(0);
+  const cameraBackendActiveRef = useRef(false);
   const detectionConfigurationRef = useRef(activeDetectionConfiguration);
   const detectionConfigurationVersionRef = useRef(
     camera?.live?.detection_configuration_version ?? null,
@@ -718,6 +734,7 @@ function FocusMateApp({
     if (live.session_active) {
       try {
         const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
+        cameraBackendActiveRef.current = false;
         setLive(data.live || {});
       } catch (error) {
         inform(`The active camera session could not be saved: ${error.message}`);
@@ -740,6 +757,8 @@ function FocusMateApp({
   };
 
   const startCamera = async (plan) => {
+    const generation = ++cameraStartGenerationRef.current;
+    const isCurrent = () => generation === cameraStartGenerationRef.current;
     let nextStream;
     let detectors;
     const sessionConfiguration = normalizeDetectionConfiguration(
@@ -750,40 +769,116 @@ function FocusMateApp({
       setCameraError('This browser does not provide webcam access. Use a supported browser on HTTPS or localhost.');
       return;
     }
+    if (!profile.session_preferences?.focus_monitoring) {
+      setCameraState('unavailable');
+      setCameraError('Webcam monitoring is turned off in session preferences. Your focus session will continue without the camera.');
+      return;
+    }
     setCameraState('starting');
     setCameraError('');
     try {
+      // Invoke getUserMedia directly from the Start Focus action. Do not let a
+      // module download delay the browser's permission request.
+      const mediaRequest = navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      nextStream = await mediaRequest;
+      if (!isCurrent()) {
+        nextStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = nextStream;
+      for (const track of nextStream.getTracks()) {
+        track.addEventListener('ended', () => {
+          if (streamRef.current !== nextStream) return;
+          streamRef.current = null;
+          setStream(null);
+          setCameraState('unavailable');
+          setCameraError('The camera disconnected. Your focus timer is still running.');
+        }, { once: true });
+      }
+      setStream(nextStream);
+      setCameraState('active');
       const { createVisionLandmarkers } = await import('./vision.js');
-      nextStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      if (!isCurrent()) return;
       detectors = await createVisionLandmarkers(sessionConfiguration);
-      const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, {
-        method: 'POST',
-        body: JSON.stringify({ ...plan, session_configuration: sessionConfiguration }),
-      });
+      if (!isCurrent()) {
+        detectors?.face?.close();
+        detectors?.pose?.close();
+        nextStream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        return;
+      }
       visionRef.current = detectors;
       setCameraState('active');
-      setCamera(data); setLive(data.live); setStream(nextStream); inform(data.message);
     } catch (error) {
       detectors?.face?.close();
       detectors?.pose?.close();
-      nextStream?.getTracks().forEach((track) => track.stop());
+      if (!isCurrent()) return;
+      if (!nextStream) {
+        nextStream?.getTracks().forEach((track) => track.stop());
+        if (streamRef.current === nextStream) streamRef.current = null;
+      }
       const permissionDenied = !nextStream && ['NotAllowedError', 'SecurityError'].includes(error.name);
       setCameraState(permissionDenied ? 'permission-denied' : nextStream ? 'analysis-unavailable' : 'unavailable');
       setCameraError(error.message || 'The camera could not be started.');
-      inform(error.message || 'Camera permission was denied.');
     }
   };
 
-  const stopCamera = async () => {
-    try {
-      const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
-      setLive(data.live || {}); inform(data.message);
-    } catch (error) { inform(error.message); }
-    stream?.getTracks().forEach((track) => track.stop());
+  const stopCamera = () => {
+    cameraStartGenerationRef.current += 1;
+    const activeStream = streamRef.current || stream;
+    activeStream?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
     setStream(null); setCamera(null);
     setCameraState(navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable');
     setCameraError('');
   };
+
+  const endFocusSession = async () => {
+    stopCamera();
+    if (!cameraBackendActiveRef.current && !live.session_active) return;
+    cameraBackendActiveRef.current = false;
+    try {
+      const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
+      setLive(data.live || {}); inform(data.message);
+    } catch (error) {
+      inform(`The camera stopped, but its session could not be saved: ${error.message}`);
+    }
+  };
+
+  const beginFocusSession = async (plan) => {
+    try {
+      const data = await api(`/api/webcam/start?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...plan,
+          session_only: true,
+          session_configuration: normalizeDetectionConfiguration(
+            plan.session_configuration || profile.session_preferences,
+          ),
+        }),
+      });
+      if (data.live.session_started_at !== plan.session_started_at) {
+        throw new Error('Another focus session is already active. End it before starting a new session.');
+      }
+      cameraBackendActiveRef.current = true;
+      setLive(data.live);
+      setCamera({ live: data.live });
+      return true;
+    } catch (error) {
+      inform(`Your timer is running, but this focus session could not be recorded: ${error.message}`);
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    const stopTracksOnPageHide = () => {
+      cameraStartGenerationRef.current += 1;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
+    window.addEventListener('pagehide', stopTracksOnPageHide);
+    return () => window.removeEventListener('pagehide', stopTracksOnPageHide);
+  }, []);
 
   if (loading) return <div className="boot-screen"><span className="brand-mark">f<span>✳</span></span><span>{translate(language, 'app.opening')}</span></div>;
   if (!profile) return <Welcome onLogin={login} onCloudLogin={onCloudLogin} cloudConfigurationError={cloudConfigurationError} notice={notice} />;
@@ -887,7 +982,7 @@ function FocusMateApp({
         {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <RoomFoundation account={account} language={language} profile={profile} pageActive={page === 'focus-room'} />
-          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onBeginSession={beginFocusSession} onStopSession={endFocusSession} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} pageActive={page === 'focus-room'} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
@@ -898,6 +993,7 @@ function FocusMateApp({
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
+      <FocusBuddy username={username} profile={profile} live={live} language={language} />
       <nav className="mobile-nav" aria-label={translate(language, 'app.primaryNavigation')}>
         {mobileDestinations.map((item) => {
           const Icon = item.icon;
@@ -1382,26 +1478,62 @@ function RoomDailyQuests({ daily, availableXp, language, onReroll, onClaim }) {
   );
 }
 
-function TimerPanel({ profile, username, onNotice, language }) {
-  const defaultDuration = Number(profile.session_preferences?.session_length_minutes || 25);
+function TimerPanel({
+  profile,
+  username,
+  onNotice,
+  language,
+  onSessionStart,
+  onSessionEnd,
+  onSessionStateChange,
+  pageActive,
+  canStart,
+}) {
+  const durationOptions = [15, 25, 45, 60, 90, 120];
+  const preferredDuration = Number(profile.session_preferences?.session_length_minutes || 25);
+  const defaultDuration = durationOptions.includes(preferredDuration) ? preferredDuration : 25;
   const [roomTimer, setRoomTimer] = useState(null);
   const roomSessionId = roomTimer
     ? `${roomTimer.roomId}:${roomTimer.sessionStartedAt}`
     : '';
   const roomDuration = roomTimer ? roomTimer.durationSeconds / 60 : null;
-  const durations = [...new Set([15, 25, 45, 60, 90, 120, defaultDuration, ...(roomDuration ? [roomDuration] : [])])]
+  const durations = [...new Set([...durationOptions, ...(roomDuration ? [roomDuration] : [])])]
     .sort((a, b) => a - b);
   const [duration, setDuration] = useState(defaultDuration);
   const [remaining, setRemaining] = useState(defaultDuration * 60);
   const [running, setRunning] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const [endedEarly, setEndedEarly] = useState(false);
+  const [reloadInterrupted, setReloadInterrupted] = useState(false);
   const [clientPerformanceNow, setClientPerformanceNow] = useState(() => performance.now());
-  const started = useRef(0);
-  const creditedSeconds = useRef(0);
+  const startedAtRef = useRef(0);
+  const localSessionActiveRef = useRef(false);
   const completionHandled = useRef(false);
   const activeRoomSession = useRef('');
   const chimeContext = useRef(null);
+  const endLocalSessionRef = useRef(null);
+  const timerStorageKey = `focusmate-active-timer:${username}`;
   useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
+  useEffect(() => {
+    const saved = sessionStorage.getItem(timerStorageKey);
+    if (!saved) return;
+    try {
+      const state = JSON.parse(saved);
+      const savedDuration = Number(state.duration);
+      if (!Number.isFinite(state.startedAt) || !durationOptions.includes(savedDuration)) throw new Error('Invalid saved timer');
+      startedAtRef.current = state.startedAt;
+      localSessionActiveRef.current = true;
+      completionHandled.current = false;
+      setDuration(savedDuration);
+      setRemaining(remainingFocusSeconds(state.startedAt, savedDuration * 60));
+      setRunning(true);
+      onSessionStateChange(true);
+      return;
+    } catch {
+      sessionStorage.removeItem(timerStorageKey);
+      setReloadInterrupted(true);
+    }
+  }, [timerStorageKey]);
   const playChime = () => {
     if (!profile.session_preferences?.session_chimes || chimeContext.current?.state !== 'running') return;
     const context = chimeContext.current;
@@ -1416,6 +1548,22 @@ function TimerPanel({ profile, username, onNotice, language }) {
     oscillator.start();
     oscillator.stop(context.currentTime + 0.33);
   };
+  const endLocalSession = (wasCompleted) => {
+    if (!localSessionActiveRef.current || !claimTimerCompletion(completionHandled)) return;
+    const completedByDeadline = wasCompleted
+      || remainingFocusSeconds(startedAtRef.current, duration * 60) === 0;
+    localSessionActiveRef.current = false;
+    setRunning(false);
+    setCompleted(completedByDeadline);
+    setEndedEarly(!completedByDeadline);
+    setRemaining(completedByDeadline ? 0 : remainingFocusSeconds(startedAtRef.current, duration * 60));
+    sessionStorage.removeItem(timerStorageKey);
+    onSessionStateChange(false);
+    onSessionEnd({ completed: completedByDeadline });
+    if (completedByDeadline) void playSessionCompletionBeep(chimeContext.current);
+  };
+  endLocalSessionRef.current = endLocalSession;
+  useEffect(() => () => endLocalSessionRef.current(false), []);
   useEffect(() => () => { chimeContext.current?.close(); }, []);
   useEffect(() => {
     reportPwaSessionActivity('timer', running);
@@ -1423,12 +1571,17 @@ function TimerPanel({ profile, username, onNotice, language }) {
   }, [running]);
   useEffect(() => {
     if (!running) return undefined;
-    const interval = window.setInterval(() => {
+    const refreshClock = () => {
       if (roomTimer) setClientPerformanceNow(performance.now());
-      else setRemaining((value) => Math.max(0, value - 1));
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [roomTimer, running]);
+      else setRemaining(remainingFocusSeconds(startedAtRef.current, duration * 60));
+    };
+    const interval = window.setInterval(refreshClock, 1000);
+    document.addEventListener('visibilitychange', refreshClock);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshClock);
+    };
+  }, [duration, roomTimer, running]);
   useEffect(() => {
     if (!roomTimer) {
       if (activeRoomSession.current) {
@@ -1443,8 +1596,8 @@ function TimerPanel({ profile, username, onNotice, language }) {
     if (activeRoomSession.current !== roomSessionId) {
       activeRoomSession.current = roomSessionId;
       completionHandled.current = false;
-      creditedSeconds.current = 0;
       setCompleted(false);
+      setEndedEarly(false);
     }
     setDuration(roomDuration);
     setRemaining(remainingRoomFocusSeconds(roomTimer, performance.now()));
@@ -1460,12 +1613,6 @@ function TimerPanel({ profile, username, onNotice, language }) {
     if (!roomTimer || roomTimer.status !== 'focusing') return;
     setRemaining(remainingRoomFocusSeconds(roomTimer, clientPerformanceNow));
   }, [clientPerformanceNow, roomTimer]);
-  useEffect(() => {
-    if (!running && !roomTimer) {
-      setDuration(defaultDuration);
-      setRemaining(defaultDuration * 60);
-    }
-  }, [defaultDuration, roomTimer, running]);
   useEffect(() => {
     if (roomTimer) {
       const roomFinished = roomTimer.status === 'finished';
@@ -1492,23 +1639,34 @@ function TimerPanel({ profile, username, onNotice, language }) {
       if (roomFinished) void playSessionCompletionBeep(chimeContext.current);
       return;
     }
-    if (remaining !== 0 || !running) return;
-    if (!claimTimerCompletion(completionHandled)) return;
-    setCompleted(true);
-    setRunning(false);
-    void playSessionCompletionBeep(chimeContext.current);
-    const secondsToCredit = Math.max(0, duration * 60 - creditedSeconds.current);
-    creditedSeconds.current = 0;
-    api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: secondsToCredit }) })
-      .then(() => onNotice(translate(language, 'focus.timerSaved')))
-      .catch((error) => onNotice(error.message));
-  }, [language, onNotice, profile.tasks, remaining, roomSessionId, roomTimer, running, username]);
-  const chooseDuration = (value) => { if (!running) { completionHandled.current = false; setCompleted(false); creditedSeconds.current = 0; setDuration(value); setRemaining(value * 60); } };
-  const start = () => {
-    if (roomTimer) return;
-    started.current = Date.now();
+    if (remaining !== 0 || !running || !localSessionActiveRef.current) return;
+    endLocalSession(true);
+  }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, profile.tasks, remaining, roomSessionId, roomTimer, running, timerStorageKey, username]);
+  useEffect(() => {
+    if (!pageActive && localSessionActiveRef.current) endLocalSession(false);
+  }, [pageActive, running]);
+  const chooseDuration = (value) => {
+    if (running || !durationOptions.includes(value)) return;
     completionHandled.current = false;
     setCompleted(false);
+    setEndedEarly(false);
+    setReloadInterrupted(false);
+    setDuration(value);
+    setRemaining(value * 60);
+  };
+  const start = () => {
+    if (roomTimer || localSessionActiveRef.current || !canStart || completed || endedEarly) return;
+    const startedAt = Date.now();
+    startedAtRef.current = startedAt;
+    localSessionActiveRef.current = true;
+    completionHandled.current = false;
+    setCompleted(false);
+    setReloadInterrupted(false);
+    setRemaining(duration * 60);
+    sessionStorage.setItem(timerStorageKey, JSON.stringify({ startedAt, duration }));
+    setRunning(true);
+    onSessionStateChange(true);
+    onSessionStart({ duration, startedAt });
     if (!chimeContext.current) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass) {
@@ -1523,89 +1681,296 @@ function TimerPanel({ profile, username, onNotice, language }) {
     resumeAudio?.then(() => {
       if (profile.session_preferences?.session_chimes) playChime();
     }).catch(() => {});
-    setRunning(true);
-  };
-  const pause = async () => {
-    if (roomTimer) return;
-    const elapsed = Math.max(0, Math.round((Date.now() - started.current) / 1000));
-    creditedSeconds.current += elapsed;
-    setRunning(false);
-    try { await api(`/api/timer/credit?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ seconds: elapsed }) }); }
-    catch (error) { onNotice(error.message); }
   };
   const reset = () => {
-    if (roomTimer) return;
+    if (roomTimer || running) return;
     completionHandled.current = false;
-    creditedSeconds.current = 0;
     setCompleted(false);
-    setRunning(false);
+    setEndedEarly(false);
     setRemaining(duration * 60);
   };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
   const t = (key, values) => translate(language, `focus.${key}`, values);
-  return <section className="timer-panel" id="focus-timer"><div className="timer-top"><span className="eyebrow">{t('timerEyebrow')}</span><label className="select-wrap"><select value={duration} disabled={running || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>{durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}</select><ChevronDown size={15} /></label></div><div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>{minutes}<span>:</span>{seconds}</div><div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div><p className="timer-caption">{t('timerCaption')}</p>{completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}<div className="timer-actions">{running ? <button className="primary-button" disabled={Boolean(roomTimer)} onClick={pause}><Pause size={17} /> {t('pause')}</button> : <button className="primary-button" disabled={Boolean(roomTimer) || remaining === 0} onClick={start}><Play size={17} />{remaining < duration * 60 ? t('resume') : t('startFocus')}</button>}<button className="outline-button" disabled={Boolean(roomTimer)} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button></div><small className="muted-note">{t('timerNote')}</small></section>;
+  return <section className="timer-panel" id="focus-timer">
+    <div className="timer-top">
+      <span className="eyebrow">{t('timerEyebrow')}</span>
+      <label className="select-wrap">
+        <select value={duration} disabled={running || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>
+          {durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}
+        </select>
+        <ChevronDown size={15} />
+      </label>
+    </div>
+    <div className={`timer-display ${running ? 'is-running' : ''}`} aria-label={`${t('timer')} ${minutes} ${t('minutes')} ${seconds}`}>
+      {minutes}<span>:</span>{seconds}
+    </div>
+    <div className="progress-track timer-progress"><span style={{ width: `${100 - (remaining / (duration * 60)) * 100}%` }} /></div>
+    <p className="timer-caption">{t('timerCaption')}</p>
+    {completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}
+    {endedEarly && <div className="timer-complete" role="status" aria-live="polite"><strong>{t('sessionEndedEarly')}</strong><span>{t('sessionEnded')}</span></div>}
+    {reloadInterrupted && <p className="timer-reload-note" role="status">{t('sessionReloadInterrupted')}</p>}
+    <div className="timer-actions">
+      {running ? (
+        <button className="outline-button" disabled={Boolean(roomTimer)} onClick={() => endLocalSession(false)}>
+          <VideoOff size={16} /> {t('endSession')}
+        </button>
+      ) : (
+        <button className="primary-button" disabled={Boolean(roomTimer) || remaining === 0 || completed || endedEarly || !canStart} onClick={start}>
+          <Play size={17} /> {t('startFocus')}
+        </button>
+      )}
+      <button className="outline-button" disabled={Boolean(roomTimer) || running} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
+    </div>
+    <small className="muted-note">{t('timerNote')}</small>
+  </section>;
 }
 
-function FocusRoom({ profile, live, stream, videoRef, onStartCamera, onStopCamera, onNotice, username, cameraState, cameraError, language }) {
+function FocusBuddy({ username, profile, live, language }) {
+  const preferences = normalizeFocusBuddyPreferences(profile.session_preferences);
+  const [roomTimer, setRoomTimer] = useState(null);
+  const [reminder, setReminder] = useState(null);
+  const [reaction, setReaction] = useState('');
+  const [scheduleVersion, setScheduleVersion] = useState(0);
+  const reactionTimeout = useRef(null);
+  const storageKey = waterReminderStorageKey(username);
+  const activeSession = Boolean(live.session_active || roomTimer?.status === 'focusing');
+  const allowDuringSession = preferences.focus_buddy_during_sessions;
+  const t = (key, values) => translate(language, `focusBuddy.${key}`, values);
+
+  useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
+  useEffect(() => {
+    if (!preferences.focus_buddy_enabled) {
+      localStorage.removeItem(storageKey);
+      setReminder(null);
+      setReaction('');
+      return undefined;
+    }
+    const nextAt = readWaterReminderSchedule(
+      localStorage,
+      storageKey,
+      preferences.focus_buddy_interval_minutes,
+    );
+    let timeout;
+    const checkReminder = () => {
+      const remaining = nextAt - Date.now();
+      if (remaining > 0) {
+        timeout = window.setTimeout(checkReminder, Math.min(remaining, 2_147_000_000));
+        return;
+      }
+      if (activeSession && !allowDuringSession) {
+        setReminder(null);
+        return;
+      }
+      setReminder((current) => current || { dueAt: nextAt });
+    };
+    checkReminder();
+    return () => window.clearTimeout(timeout);
+  }, [
+    activeSession,
+    allowDuringSession,
+    preferences.focus_buddy_enabled,
+    preferences.focus_buddy_interval_minutes,
+    scheduleVersion,
+    storageKey,
+  ]);
+  useEffect(() => () => window.clearTimeout(reactionTimeout.current), []);
+
+  if (!preferences.focus_buddy_enabled || (!reminder && !reaction)) return null;
+
+  const respond = (action) => {
+    const delay = action === 'done'
+      ? preferences.focus_buddy_interval_minutes
+      : preferences.focus_buddy_snooze_minutes;
+    scheduleNextWaterReminder(localStorage, storageKey, delay);
+    setScheduleVersion((version) => version + 1);
+    setReminder(null);
+    setReaction(action);
+    window.clearTimeout(reactionTimeout.current);
+    reactionTimeout.current = window.setTimeout(() => setReaction(''), 2400);
+  };
+  const name = preferences.focus_buddy_greet_by_name
+    ? String(profile.player_name || '').trim()
+    : '';
+  const greeting = reminder
+    ? name ? t('greeting', { name }) : t('greetingFallback')
+    : reaction === 'later' ? t('snoozed') : t('thanks');
+  const character = preferences.focus_buddy_character;
+  const expression = reaction === 'done' ? 'happy' : reaction === 'later' ? 'sad' : 'neutral';
+
+  return (
+    <div
+      className={`focus-buddy-overlay ${reminder ? 'is-reminding' : ''} ${reaction ? `is-${reaction}` : ''}`}
+      dir="ltr"
+    >
+      <div className="focus-buddy-bubble" role="status" aria-live="polite">
+        <p>{greeting}</p>
+        {reminder && (
+          <div className="focus-buddy-actions">
+            <button type="button" className="buddy-done" onClick={() => respond('done')}>{t('done')}</button>
+            <button type="button" className="buddy-later" onClick={() => respond('later')}>{t('later')}</button>
+          </div>
+        )}
+      </div>
+      <div className={`focus-buddy-character buddy-${character}`} aria-hidden="true">
+        <svg viewBox="0 0 100 126" role="presentation">
+          <ellipse cx="50" cy="119" rx="31" ry="5" fill="#0005" />
+          <path className="buddy-cape" d="M34 39 20 46 13 96 39 84 50 50Z" />
+          <g className="buddy-arm buddy-arm-left">
+            <path d="M34 48 22 65 29 75 42 61" />
+            <circle cx="28" cy="72" r="6" />
+          </g>
+          <g className="buddy-arm buddy-arm-right">
+            <path d="M65 48 77 62 72 72 60 61" />
+            <circle cx="73" cy="69" r="6" />
+          </g>
+          <path className="buddy-body" d="M35 40 Q50 34 65 40 L70 77 Q50 87 30 77Z" />
+          <path className="buddy-emblem" d="M50 48 54 55 62 56 56 61 58 69 50 65 43 69 45 61 39 56 47 55Z" />
+          <g className="buddy-leg buddy-leg-left">
+            <path d="M39 75 36 101" />
+            <path d="M36 100 28 109 42 111 47 103" />
+          </g>
+          <g className="buddy-leg buddy-leg-right">
+            <path d="M59 75 63 101" />
+            <path d="M63 100 70 109 57 111 52 103" />
+          </g>
+          <path className="buddy-head" d="M29 22 Q31 7 50 8 Q69 7 71 23 L68 39 Q61 49 50 49 Q39 49 32 39Z" />
+          <path className="buddy-mask" d="M30 25 Q50 16 70 25 L67 35 Q59 32 50 36 Q41 32 33 35Z" />
+          {character === 'cat' && <path className="buddy-ears" d="M33 19 29 5 44 13M56 13 71 5 67 21" />}
+          {character === 'frog' && <g className="buddy-eyebumps"><circle cx="38" cy="13" r="8" /><circle cx="62" cy="13" r="8" /></g>}
+          <g className={`buddy-eyes eyes-${expression}`}>
+            <ellipse cx="42" cy="28" rx="4" ry="2.7" />
+            <ellipse cx="58" cy="28" rx="4" ry="2.7" />
+            <path className="buddy-smile" d="M43 39 Q50 45 57 39" />
+            <path className="buddy-frown" d="M43 42 Q50 36 57 42" />
+          </g>
+          <g className="buddy-bottle">
+            <rect x="77" y="49" width="12" height="26" rx="4" />
+            <rect x="80" y="45" width="6" height="5" rx="1" />
+            <path d="M79 61h8" />
+          </g>
+          <path className="buddy-shoes" d="M27 108h17M54 108h18" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function FocusRoom({
+  profile,
+  live,
+  stream,
+  videoRef,
+  onStartCamera,
+  onBeginSession,
+  onStopSession,
+  onStopCamera,
+  onNotice,
+  username,
+  cameraState,
+  cameraError,
+  pageActive,
+  language,
+}) {
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
-  const [moodConfirmationOpen, setMoodConfirmationOpen] = useState(false);
+  const [sessionRunning, setSessionRunning] = useState(false);
+  const sessionLifecyclePromiseRef = useRef(Promise.resolve());
   const sessionConfiguration = normalizeDetectionConfiguration(
     live.session_active && live.session_configuration
       ? live.session_configuration
       : profile.session_preferences,
   );
-  const moodNeeded = profile.session_preferences?.mood_checkins !== false && profile.session_wellbeing?.mood_checkin_date !== new Date().toISOString().slice(0, 10);
   const t = (key, values) => translate(language, `focus.${key}`, values);
-  const startPlan = () => onStartCamera({
-    subject,
-    goal,
-    mood,
-    session_configuration: sessionConfiguration,
-  });
-  const requestSessionStart = () => {
-    if (shouldConfirmSessionMood(mood)) {
-      setMoodConfirmationOpen(true);
-      return;
-    }
-    startPlan();
+  const startSession = ({ duration, startedAt }) => {
+    const plan = {
+      subject,
+      goal,
+      mood,
+      session_started_at: new Date(startedAt).toISOString(),
+      session_duration_seconds: duration * 60,
+      session_configuration: sessionConfiguration,
+    };
+    sessionLifecyclePromiseRef.current = Promise.resolve(onBeginSession(plan));
+    void onStartCamera(plan);
   };
+  const endSession = () => {
+    void sessionLifecyclePromiseRef.current
+      .then((started) => {
+        if (started || live.session_active) return onStopSession();
+        return undefined;
+      })
+      .catch((error) => onNotice(`Your focus session could not be completed: ${error.message}`));
+  };
+  const canStart = Boolean(goal.trim()) && Boolean(mood);
   return <div className="page-content">
-    <div className="focus-grid"><TimerPanel profile={profile} username={username} onNotice={onNotice} language={language} />
-      <section className="session-panel surface-panel"><div className="panel-topline"><span className="eyebrow">{t('optionalCamera')}</span><span className={`connection-label ${live.session_active ? 'connected' : ''}`}><span className="live-dot" />{live.session_active ? t('live') : t('cameraOff')}</span></div><h3>{t('studyBuddy')}</h3><p className="panel-copy">{t('cameraIntro')}</p>
-        {stream ? <div className="camera-preview"><video ref={videoRef} autoPlay muted playsInline /><div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div><CameraDetectionOverlay live={live} configuration={sessionConfiguration} language={language} /><button className="camera-stop" onClick={onStopCamera}><VideoOff size={16} /> {t('stopCamera')}</button></div> : <div className="camera-placeholder"><Video size={25} /><span>{t('cameraPreview')}</span><small>{t('cameraLocal')}</small></div>}
-        {!stream && <><div className="form-grid"><label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label><label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>{moodNeeded && <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>}</div><button className="primary-button full-button" disabled={!goal.trim() || (moodNeeded && !mood) || cameraState === 'starting' || cameraState === 'unavailable'} onClick={requestSessionStart}><Video size={17} /> {cameraState === 'starting' ? t('cameraStarting') : t('startCamera')}</button></>}
-        {stream && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div><div><small>{t('posture')}</small><strong>{sessionConfiguration.monitor_posture ? postureStatusText(cameraState, live, language) : t('notMonitored')}</strong></div><div><small>{t('headTurn')}</small><strong>{sessionConfiguration.monitor_looking_away ? live.looking_away === null || live.looking_away === undefined ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn') : t('notMonitored')}</strong></div><div><small>{t('face')}</small><strong>{sessionConfiguration.monitor_face_missing ? live.face_detected ? t('detected') : t('notDetected') : t('notMonitored')}</strong></div><p>{t('cameraSignalsNote')}</p></div>}
-        {!stream && cameraState !== 'off' && <div className="camera-signals"><div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>{cameraError && <p role="status">{cameraError}</p>}</div>}
+    <div className="focus-grid">
+      <TimerPanel
+        profile={profile}
+        username={username}
+        onNotice={onNotice}
+        language={language}
+        onSessionStart={startSession}
+        onSessionEnd={endSession}
+        onSessionStateChange={setSessionRunning}
+        pageActive={pageActive}
+        canStart={canStart}
+      />
+      <section className="session-panel surface-panel">
+        <div className="panel-topline">
+          <span className="eyebrow">{t('optionalCamera')}</span>
+          <span className={`connection-label ${cameraState === 'active' ? 'connected' : ''}`}>
+            <span className="live-dot" />{cameraState === 'active' ? t('live') : t('cameraOff')}
+          </span>
+        </div>
+        <h3>{t('studyBuddy')}</h3>
+        <p className="panel-copy">{t('cameraIntro')}</p>
+        {stream ? (
+          <div className="camera-preview">
+            <video ref={videoRef} autoPlay muted playsInline />
+            <div className="camera-overlay"><span className="live-dot" /> {t('cameraActive').toUpperCase()}</div>
+            <CameraDetectionOverlay live={live} configuration={sessionConfiguration} language={language} />
+            <button className="camera-stop" type="button" onClick={onStopCamera}>
+              <VideoOff size={16} /> {t('stopCamera')}
+            </button>
+          </div>
+        ) : (
+          <div className="camera-placeholder">
+            <Video size={25} />
+            <span>{t('cameraPreview')}</span>
+            <small>{t('cameraLocal')}</small>
+          </div>
+        )}
+        {!sessionRunning && (
+          <div className="form-grid">
+            <label>{t('workingOn')}<select value={subject} onChange={(event) => setSubject(event.target.value)}>{['Mathematics', 'Science', 'Coding', 'Assignment', 'Other'].map((item) => <option key={item} value={item}>{t(`subject.${item}`)}</option>)}</select></label>
+            <label>{t('sessionGoal')}<input maxLength="200" value={goal} onChange={(event) => setGoal(event.target.value)} placeholder={t('goalPlaceholder')} /></label>
+            <label>{t('feeling')}<select value={mood} onChange={(event) => setMood(event.target.value)}><option value="">{t('chooseMood')}</option>{['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'].map((item) => <option key={item} value={item}>{t(`mood.${item}`)}</option>)}</select></label>
+          </div>
+        )}
+        {mood && !sessionRunning && (
+          <div className="mood-focus-tip" role="status" aria-live="polite">
+            <Sparkles size={16} aria-hidden="true" />
+            <p>{focusMoodTip(mood)}</p>
+          </div>
+        )}
+        {!stream && cameraState !== 'off' && (
+          <div className="camera-signals">
+            <div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>
+            {cameraError && <p role="status">{cameraError}</p>}
+          </div>
+        )}
+        {stream && <div className="camera-signals">
+          <div><small>{t('cameraStatusLabel')}</small><strong>{cameraStatusText(cameraState, live, language)}</strong></div>
+          <div><small>{t('posture')}</small><strong>{sessionConfiguration.monitor_posture ? postureStatusText(cameraState, live, language) : t('notMonitored')}</strong></div>
+          <div><small>{t('headTurn')}</small><strong>{sessionConfiguration.monitor_looking_away ? live.looking_away === null || live.looking_away === undefined ? t('waitingFace') : live.looking_away ? t('turnDetected') : t('noTurn') : t('notMonitored')}</strong></div>
+          <div><small>{t('face')}</small><strong>{sessionConfiguration.monitor_face_missing ? live.face_detected ? t('detected') : t('notDetected') : t('notMonitored')}</strong></div>
+          {cameraError && <p role="status">{cameraError}</p>}
+          <p>{t('cameraSignalsNote')}</p>
+        </div>}
       </section>
     </div>
-    {moodConfirmationOpen && (
-      <dialog
-        className="mood-confirmation"
-        open
-        role="alertdialog"
-        aria-labelledby="mood-confirmation-title"
-        aria-describedby="mood-confirmation-description"
-      >
-        <h2 id="mood-confirmation-title">{t('moodConfirmationTitle', { mood: t(`mood.${mood}`) })}</h2>
-        <p id="mood-confirmation-description">{t('moodConfirmationDescription')}</p>
-        <div className="mood-confirmation-actions">
-          <button className="outline-button" type="button" onClick={() => setMoodConfirmationOpen(false)}>
-            {t('takeBreak')}
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => {
-              setMoodConfirmationOpen(false);
-              startPlan();
-            }}
-          >{t('continueAnyway')}</button>
-        </div>
-      </dialog>
-    )}
   </div>;
 }
 
@@ -1873,6 +2238,12 @@ function Preferences({ profile, onSave }) {
     ...defaultDetectionConfiguration,
     mood_checkins: true,
     session_chimes: false,
+    focus_buddy_enabled: true,
+    focus_buddy_character: 'web-hero',
+    focus_buddy_interval_minutes: 60,
+    focus_buddy_snooze_minutes: 10,
+    focus_buddy_greet_by_name: true,
+    focus_buddy_during_sessions: false,
     session_length_minutes: 25,
     daily_goal_minutes: 60,
     language: 'system',
@@ -1967,6 +2338,47 @@ function Preferences({ profile, onSave }) {
             <i className="toggle-track" />
           </label>
         ))}
+        <div className="focus-buddy-preferences">
+          <div className="detection-preferences-heading">
+            <span className="eyebrow">{translate(language, 'focusBuddy.title')}</span>
+            <p>{translate(language, 'focusBuddy.description')}</p>
+          </div>
+          <label className="setting-row">
+            <span><strong>{translate(language, 'focusBuddy.enabled')}</strong><small>{translate(language, 'focusBuddy.enabledHelp')}</small></span>
+            <input type="checkbox" checked={Boolean(preferences.focus_buddy_enabled)} onChange={(event) => set('focus_buddy_enabled', event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+          <label className="buddy-setting-select">
+            <strong>{translate(language, 'focusBuddy.character')}</strong>
+            <select disabled={!preferences.focus_buddy_enabled} value={preferences.focus_buddy_character} onChange={(event) => set('focus_buddy_character', event.target.value)}>
+              {focusBuddyCharacters.map((character) => <option key={character} value={character}>{translate(language, `focusBuddy.${character === 'web-hero' ? 'webHero' : character === 'cape-hero' ? 'capeHero' : character}`)}</option>)}
+            </select>
+          </label>
+          <div className="buddy-number-settings">
+            <label>
+              {translate(language, 'focusBuddy.interval')}
+              <select disabled={!preferences.focus_buddy_enabled} value={preferences.focus_buddy_interval_minutes} onChange={(event) => set('focus_buddy_interval_minutes', Number(event.target.value))}>
+                {waterReminderIntervals.map((minutes) => <option key={minutes} value={minutes}>{minutes} {translate(language, 'focus.minutes')}</option>)}
+              </select>
+            </label>
+            <label>
+              {translate(language, 'focusBuddy.snooze')}
+              <select disabled={!preferences.focus_buddy_enabled} value={preferences.focus_buddy_snooze_minutes} onChange={(event) => set('focus_buddy_snooze_minutes', Number(event.target.value))}>
+                {waterReminderSnoozes.map((minutes) => <option key={minutes} value={minutes}>{minutes} {translate(language, 'focus.minutes')}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="setting-row">
+            <span><strong>{translate(language, 'focusBuddy.greetByName')}</strong></span>
+            <input type="checkbox" disabled={!preferences.focus_buddy_enabled} checked={Boolean(preferences.focus_buddy_greet_by_name)} onChange={(event) => set('focus_buddy_greet_by_name', event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+          <label className="setting-row">
+            <span><strong>{translate(language, 'focusBuddy.duringSessions')}</strong><small>{translate(language, 'focusBuddy.duringSessionsHelp')}</small></span>
+            <input type="checkbox" disabled={!preferences.focus_buddy_enabled} checked={Boolean(preferences.focus_buddy_during_sessions)} onChange={(event) => set('focus_buddy_during_sessions', event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+        </div>
         <div className="detection-preferences-heading">
           <span className="eyebrow">{translate(language, 'preferences.detectionHeading')}</span>
           <p>{translate(language, 'preferences.detectionDescription')}</p>

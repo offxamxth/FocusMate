@@ -57,3 +57,19 @@ test('room camera processing has no FocusMate network or room-payload path', asy
   assert.match(source, /getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
   assert.doesNotMatch(source, /\/api\/webcam\/start|fetch\(|\bapi\(|supabase|presence\.track|rpc\(/);
 });
+
+test('Focus page starts its camera from Start Focus and keeps the existing preview markup', async () => {
+  const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(source, /void onStartCamera\(plan\)/);
+  assert.doesNotMatch(source, /onClick=\{\(\) => void onStartCamera/);
+  assert.match(source, /className="camera-preview"/);
+  assert.match(source, /className="camera-placeholder"/);
+  assert.match(source, /t\('workingOn'\).*Mathematics/s);
+  assert.match(source, /t\('sessionGoal'\).*t\('feeling'\)/s);
+});
+
+test('restored focus timers complete their persisted active session after reload', async () => {
+  const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(source, /if \(started \|\| live\.session_active\) return onStopSession\(\)/);
+  assert.match(source, /sessionLifecyclePromiseRef\.current = Promise\.resolve\(onBeginSession\(plan\)\)/);
+});

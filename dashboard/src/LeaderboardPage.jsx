@@ -10,12 +10,7 @@ import {
 
 const pageSize = 20;
 
-function focusMinutes(seconds, language) {
-  return Math.floor(Number(seconds) / 60).toLocaleString(language);
-}
-
 export default function LeaderboardPage({ account, language }) {
-  const [period, setPeriod] = useState('weekly');
   const [scope, setScope] = useState('global');
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
   const [data, setData] = useState(null);
@@ -43,9 +38,17 @@ export default function LeaderboardPage({ account, language }) {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onProgressUpdate = () => setRefreshCount((value) => value + 1);
+    window.addEventListener('focusmate:room-progress-updated', onProgressUpdate);
+    return () => window.removeEventListener('focusmate:room-progress-updated', onProgressUpdate);
+  }, []);
+
+  useEffect(() => {
     const generation = ++requestGeneration.current;
     let active = true;
     setLoading(true);
+    setLoadingMore(false);
     setError('');
     setData(null);
     setEntries([]);
@@ -61,7 +64,7 @@ export default function LeaderboardPage({ account, language }) {
       return () => { active = false; };
     }
 
-    getFocusMateLeaderboard(supabase, { period, scope, limit: pageSize })
+    getFocusMateLeaderboard(supabase, { scope, limit: pageSize })
       .then((result) => {
         if (!active || generation !== requestGeneration.current) return;
         setData(result);
@@ -78,7 +81,7 @@ export default function LeaderboardPage({ account, language }) {
       });
 
     return () => { active = false; };
-  }, [account.id, online, period, scope, refreshCount]);
+  }, [account.id, online, scope, refreshCount]);
 
   const changeVisibility = async (event) => {
     const nextVisibility = event.target.value;
@@ -101,7 +104,6 @@ export default function LeaderboardPage({ account, language }) {
     setError('');
     try {
       const result = await getFocusMateLeaderboard(supabase, {
-        period,
         scope,
         limit: pageSize,
         offset: entries.length,
@@ -140,19 +142,6 @@ export default function LeaderboardPage({ account, language }) {
         </div>
 
         <div className="leaderboard-filters">
-          <div className="leaderboard-toggle" role="group" aria-label={t('period')}>
-            {['weekly', 'all_time'].map((value) => (
-              <button
-                className={period === value ? 'active' : ''}
-                key={value}
-                type="button"
-                aria-pressed={period === value}
-                onClick={() => setPeriod(value)}
-              >
-                {t(value)}
-              </button>
-            ))}
-          </div>
           <div className="leaderboard-toggle" role="group" aria-label={t('scope')}>
             {['global', 'friends'].map((value) => (
               <button
@@ -173,20 +162,18 @@ export default function LeaderboardPage({ account, language }) {
             <h3>{t('yourProgress')}</h3>
             <div className="leaderboard-progress-grid">
               <div>
-                <span>{t('allTimeTotal')}</span>
-                <strong>{focusMinutes(data.progress.all_time_seconds, language)}</strong>
-                <small>{t('minutes')}</small>
+                <span>{t('xp')}</span>
+                <strong>{Number(data.progress.global_xp).toLocaleString(language)}</strong>
               </div>
               <div>
-                <span>{t('weekTotal')}</span>
-                <strong>{focusMinutes(data.progress.weekly_seconds, language)}</strong>
-                <small>{t('minutes')}</small>
+                <span>{t('level')}</span>
+                <strong>{Number(data.progress.level).toLocaleString(language)}</strong>
               </div>
               <div>
-                <span>{t('weekRank')}</span>
-                <strong>{!data.progress.listed || data.progress.weekly_rank == null
+                <span>{t('rank')}</span>
+                <strong>{!data.progress.listed || data.progress.rank == null
                   ? t('unranked')
-                  : `#${Number(data.progress.weekly_rank).toLocaleString(language)}`}</strong>
+                  : `#${Number(data.progress.rank).toLocaleString(language)}`}</strong>
                 <small>{scope === 'friends' ? t('friends') : t('global')}</small>
               </div>
             </div>
@@ -215,7 +202,7 @@ export default function LeaderboardPage({ account, language }) {
 
         <div className="leaderboard-list-heading">
           <h3>{t('rankings')}</h3>
-          {data && <span>{t(period)} · {scope === 'friends' ? t('friends') : t('global')}</span>}
+          {data && <span>{t(scope === 'friends' ? 'friends' : 'global')}</span>}
         </div>
 
         {loading && <p className="leaderboard-status" role="status">{t('loading')}</p>}
@@ -251,9 +238,10 @@ export default function LeaderboardPage({ account, language }) {
                   <strong>{entry.display_name || entry.username}</strong>
                   <small>@{entry.username}</small>
                 </span>
-                <strong className="leaderboard-score">
-                  {focusMinutes(entry.focus_seconds, language)} <small>{t('minutes')}</small>
-                </strong>
+                <span className="leaderboard-score">
+                  <strong>{Number(entry.global_xp).toLocaleString(language)} {t('xp')}</strong>
+                  <small>{t('level')} {Number(entry.level).toLocaleString(language)}</small>
+                </span>
               </li>
             ))}
           </ol>
@@ -269,7 +257,7 @@ export default function LeaderboardPage({ account, language }) {
             {loadingMore ? t('loadingMore') : t('loadMore')}
           </button>
         )}
-        <p className="leaderboard-footnote">{t('verifiedSource')}</p>
+        <p className="leaderboard-footnote">{t('globalXpSource')}</p>
       </section>
     </section>
   );

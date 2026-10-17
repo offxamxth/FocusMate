@@ -91,13 +91,18 @@ export function localIdentityForAuthUser(userId) {
 export function authErrorMessage(error) {
   const message = String(error?.message || '').toLowerCase();
   const code = String(error?.code || '').toLowerCase();
+  const name = String(error?.name || '').toLowerCase();
   if (code === '23505' || /duplicate key|username.*(taken|already)|profiles_username/i.test(message)) {
     return 'That username is already taken. Choose another username.';
   }
   if (/invalid login credentials|email not confirmed|password/.test(message)) {
     return 'Authentication could not be completed.';
   }
-  if (/fetch failed|failed to fetch|network|connection|timeout/.test(message) || error instanceof TypeError) {
+  if (
+    /fetch failed|failed to fetch|failed to send a request to the edge function|network|connection|timeout|cors policy|err_failed/.test(message)
+    || name === 'functionsfetcherror'
+    || error instanceof TypeError
+  ) {
     return 'Network error — please check your connection and try again.';
   }
   return error?.message || 'FocusMate could not complete that request. Please try again.';

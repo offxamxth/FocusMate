@@ -1,5 +1,6 @@
 import { awardEligibleAchievements } from './achievement-data.js';
 import { localDateKey, refreshDailyQuests, rerollDailyQuest } from './progress-data.js';
+import { normalizeFocusBuddyPreferences } from './focus-buddy.js';
 import { defaultDetectionConfiguration, normalizeDetectionConfiguration } from './session-detection.js';
 
 const PROFILE_PREFIX = 'focusmate-profile:';
@@ -56,6 +57,12 @@ function freshProfile(username, name = 'Focus friend') {
       ...defaultDetectionConfiguration,
       mood_checkins: true,
       session_chimes: false,
+      focus_buddy_enabled: true,
+      focus_buddy_character: 'web-hero',
+      focus_buddy_interval_minutes: 60,
+      focus_buddy_snooze_minutes: 10,
+      focus_buddy_greet_by_name: true,
+      focus_buddy_during_sessions: false,
       session_length_minutes: 25,
       daily_goal_minutes: 60,
       language: 'system',
@@ -118,6 +125,8 @@ function readProfile(username) {
   profile.focus_timer_total_seconds = normalizeSeconds(profile.focus_timer_total_seconds);
   profile.session_preferences = { ...defaults.session_preferences, ...profile.session_preferences };
   Object.assign(profile.session_preferences, normalizeDetectionConfiguration(profile.session_preferences));
+  const buddyPreferences = normalizeFocusBuddyPreferences(profile.session_preferences);
+  Object.assign(profile.session_preferences, buddyPreferences);
   const preferences = profile.session_preferences;
   const sessionLength = Number(preferences.session_length_minutes);
   const dailyGoal = Number(preferences.daily_goal_minutes);
@@ -215,7 +224,35 @@ function readLive(username) {
     delete live.focus_score;
     localStorage.setItem(key, JSON.stringify(live));
   }
-  if (live.session_active && !cameraSessions.has(username)) {
+  if (live.session_active && !cameraSessions.has(username)
+      && live.timer_controlled_session === true
+      && Number.isFinite(Date.parse(live.session_started_at))) {
+    const startedAt = Date.parse(live.session_started_at);
+    if (Number.isFinite(startedAt)) {
+      const configuration = normalizeDetectionConfiguration(live.session_configuration);
+      cameraSessions.set(username, {
+        startedAt,
+        durationSeconds: Number(live.session_duration_seconds) || null,
+        lastFrameAt: Date.now(),
+        lastHistoryAt: Date.now(),
+        postureAlertAt: 0,
+        postureAlerted: false,
+        postureAlertPending: false,
+        sessionConfiguration: configuration,
+        configurationVersion: Number(live.detection_configuration_version) || 1,
+        postureReminderEnabled: configuration.posture_reminders,
+        signalStarts: {},
+        counts: {
+          eyes_closed: Number(live.fatigue_signals) || 0,
+          face_missing: Number(live.face_missing_alerts) || 0,
+          slouching: Number(live.posture_alerts) || 0,
+          distance_alert: Number(live.distance_alerts) || 0,
+          looking_away: Number(live.looking_away_alerts) || 0,
+        },
+        durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 },
+      });
+    }
+  } else if (live.session_active && !cameraSessions.has(username)) {
     live.session_active = false;
     live.session_completed = false;
     live.session_interrupted = true;
@@ -279,11 +316,14 @@ function finishCameraSession(username) {
   if (!runtime) throw new Error('This camera session was interrupted and cannot be completed after reloading.');
   const now = Date.now();
   const elapsed = Math.max(0, (now - runtime.startedAt) / 1000);
+  const sessionSeconds = runtime.durationSeconds
+    ? Math.min(elapsed, runtime.durationSeconds)
+    : elapsed;
   const profile = readProfile(username);
   live.session_active = false;
   live.session_completed = true;
-  live.session_seconds = Math.round(elapsed);
-  live.session_minutes = Math.round(elapsed / 60 * 100) / 100;
+  live.session_seconds = Math.round(sessionSeconds);
+  live.session_minutes = Math.round(sessionSeconds / 60 * 100) / 100;
   live.last_updated = new Date(now).toISOString();
   for (const [key, startedAt] of Object.entries(runtime.signalStarts)) {
     if (startedAt && (now - startedAt) / 1000 >= 2) {
@@ -318,6 +358,7 @@ function finishCameraSession(username) {
       ? live.face_detected : null,
     subject: plan.subject || 'Other',
     goal: plan.goal || '',
+    mood: plan.mood || null,
     challenge_count: challengeCount,
     focus_challenge_xp: challengeXp,
     xp: challengeXp,
@@ -467,7 +508,10 @@ function applyTelemetry(username, metrics) {
     runtime.postureAlerted = false;
   }
   if (!configuration.monitor_posture) runtime.postureAlertPending = false;
-  const sessionSeconds = Math.max(1, (now - runtime.startedAt) / 1000);
+  const elapsedSeconds = Math.max(1, (now - runtime.startedAt) / 1000);
+  const sessionSeconds = runtime.durationSeconds
+    ? Math.min(elapsedSeconds, runtime.durationSeconds)
+    : elapsedSeconds;
   const live = readLive(username);
   Object.assign(live, {
     session_active: true,
@@ -646,9 +690,18 @@ export async function api(path, options = {}) {
   }
   if (url.pathname === '/api/webcam/start' && method === 'POST') {
     const profile = readProfile(username);
-    if (!profile.session_preferences.focus_monitoring) throw new Error('Webcam monitoring is turned off in session preferences.');
+    if (!profile.session_preferences.focus_monitoring && body.session_only !== true) {
+      throw new Error('Webcam monitoring is turned off in session preferences.');
+    }
     if (cameraSessions.has(username)) return { ok: true, message: 'Your study session is already running.' };
     const now = Date.now();
+    const submittedStart = Date.parse(body.session_started_at);
+    const startedAt = Number.isFinite(submittedStart) && submittedStart <= now ? submittedStart : now;
+    const submittedDuration = Number(body.session_duration_seconds);
+    const flooredDuration = Math.floor(submittedDuration);
+    const durationSeconds = Number.isFinite(flooredDuration) && flooredDuration > 0
+      ? flooredDuration
+      : null;
     const sessionId = crypto.randomUUID();
     const configuration = normalizeDetectionConfiguration(
       body.session_configuration || profile.session_preferences,
@@ -656,13 +709,15 @@ export async function api(path, options = {}) {
     profile.active_session_plan = {
       subject: String(body.subject || 'Other').slice(0, 40),
       goal: String(body.goal || '').slice(0, 200),
+      mood: typeof body.mood === 'string' ? body.mood.slice(0, 40) : null,
       detection_configuration: configuration,
     };
     if (body.mood) profile.session_wellbeing = { ...profile.session_wellbeing, mood: String(body.mood), mood_checkin_date: today(), mood_updated_at: new Date(now).toISOString() };
     writeProfile(username, profile);
     const configurationVersion = 1;
-    const live = writeLive(username, { session_active: true, session_completed: false, session_id: sessionId, session_started_at: new Date(now).toISOString(), session_seconds: 0, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, detection_configuration_version: configurationVersion, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
-    cameraSessions.set(username, { startedAt: now, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, configurationVersion, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
+    const initialSessionSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
+    const live = writeLive(username, { session_active: true, session_completed: false, timer_controlled_session: body.session_only === true, session_id: sessionId, session_started_at: new Date(startedAt).toISOString(), session_duration_seconds: durationSeconds, session_seconds: durationSeconds ? Math.min(initialSessionSeconds, durationSeconds) : initialSessionSeconds, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, detection_configuration_version: configurationVersion, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
+    cameraSessions.set(username, { startedAt, durationSeconds, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, configurationVersion, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
     return { ok: true, message: 'Your study session has started.', live };
   }
   if (url.pathname === '/api/webcam/configuration' && method === 'POST') {

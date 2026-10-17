@@ -113,6 +113,10 @@ test('personalization preferences persist independently for each profile', async
           study_style: 'quiet',
           study_goal_type: 'coding',
           time_format: '24-hour',
+          focus_buddy_character: 'frog',
+          focus_buddy_interval_minutes: 30,
+          focus_buddy_snooze_minutes: 5,
+          focus_buddy_during_sessions: true,
         },
       },
     }),
@@ -125,6 +129,10 @@ test('personalization preferences persist independently for each profile', async
   assert.equal(firstAgain.profile.session_preferences.study_style, 'quiet');
   assert.equal(firstAgain.profile.session_preferences.study_goal_type, 'coding');
   assert.equal(firstAgain.profile.session_preferences.time_format, '24-hour');
+  assert.equal(firstAgain.profile.session_preferences.focus_buddy_character, 'frog');
+  assert.equal(firstAgain.profile.session_preferences.focus_buddy_interval_minutes, 30);
+  assert.equal(firstAgain.profile.session_preferences.focus_buddy_snooze_minutes, 5);
+  assert.equal(firstAgain.profile.session_preferences.focus_buddy_during_sessions, true);
   assert.equal(second.profile.session_preferences.theme, 'system');
   assert.equal(second.profile.session_preferences.study_style, 'normal');
 });
@@ -144,6 +152,123 @@ test('a camera session left active by a reload is interrupted without creating a
   assert.equal(restored.live.session_completed, false);
   assert.equal(restored.profile.session_history.length, 0);
   assert.match(restored.live.status, /interrupted after reload/);
+});
+
+test('a timer-controlled session keeps its original deadline and can complete once after reload', async () => {
+  values.clear();
+  await post('/api/login', { username: 'reloadtimer', name: 'Reload Timer' });
+  const originalNow = Date.now;
+  let now = 2_000_000;
+  Date.now = () => now;
+  try {
+    await post('/api/webcam/start?username=reloadtimer', {
+      session_only: true,
+      subject: 'Mathematics',
+      goal: 'Finish the practice set',
+      mood: 'Focused',
+      session_started_at: new Date(now).toISOString(),
+      session_duration_seconds: 60,
+    });
+    const reloadedApi = await import(`../src/local-api.js?timer-reload=${Date.now()}`);
+    const restored = await reloadedApi.api('/api/state?username=reloadtimer');
+    assert.equal(restored.live.session_active, true);
+    assert.equal(restored.live.session_duration_seconds, 60);
+    assert.equal(restored.live.session_interrupted, undefined);
+
+    now += 61_000;
+    const completed = await reloadedApi.api('/api/webcam/stop?username=reloadtimer', {
+      method: 'POST', body: '{}',
+    });
+    assert.equal(completed.live.session_completed, true);
+    assert.equal(completed.live.session_seconds, 60);
+    assert.equal(completed.live.session_id, restored.live.session_id);
+    const saved = await reloadedApi.api('/api/state?username=reloadtimer');
+    assert.equal(saved.profile.session_history.length, 1);
+    assert.equal(saved.profile.session_history[0].goal, 'Finish the practice set');
+    assert.equal(saved.profile.sessions_completed, 1);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('camera session accounting uses the shared focus timer start timestamp', async () => {
+  values.clear();
+  await post('/api/login', { username: 'sharedstart', name: 'Shared Start' });
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    const sharedStartedAt = new Date(now - 7_000).toISOString();
+    const started = await api('/api/webcam/start?username=sharedstart', {
+      method: 'POST',
+      body: JSON.stringify({
+        subject: 'Coding',
+        goal: 'Keep timer and camera aligned',
+        session_started_at: sharedStartedAt,
+        session_duration_seconds: 10,
+      }),
+    });
+    assert.equal(started.live.session_started_at, sharedStartedAt);
+    now += 6_500;
+    const stopped = await post('/api/webcam/stop?username=sharedstart', {});
+    assert.equal(stopped.live.session_seconds, 10);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('solo timer sessions save subject, goal, and mood once without webcam monitoring', async () => {
+  values.clear();
+  await post('/api/login', { username: 'solosession', name: 'Solo Session' });
+  await api('/api/state?username=solosession', {
+    method: 'PUT',
+    body: JSON.stringify({
+      profile: {
+        session_preferences: {
+          focus_monitoring: false,
+          mood_checkins: false,
+        },
+      },
+    }),
+  });
+  const originalNow = Date.now;
+  let now = 2_000_000;
+  Date.now = () => now;
+  try {
+    const started = await api('/api/webcam/start?username=solosession', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_only: true,
+        subject: 'Mathematics',
+        goal: 'Complete Chapter 4 exercises',
+        mood: 'Focused',
+        session_started_at: new Date(now).toISOString(),
+        session_duration_seconds: 15 * 60,
+      }),
+    });
+    assert.equal(started.live.session_active, true);
+    now += 15 * 60 * 1000;
+    const finished = await post('/api/webcam/stop?username=solosession', {});
+    assert.equal(finished.live.session_completed, true);
+    const saved = await api('/api/state?username=solosession');
+    assert.equal(saved.profile.sessions_completed, 1);
+    assert.equal(saved.profile.session_history.length, 1);
+    assert.equal(saved.profile.session_history[0].subject, 'Mathematics');
+    assert.equal(saved.profile.session_history[0].goal, 'Complete Chapter 4 exercises');
+    assert.equal(saved.profile.session_history[0].mood, 'Focused');
+    assert.equal(saved.profile.session_history[0].seconds, 15 * 60);
+    assert.ok(saved.profile.total_xp > 0);
+    await assert.rejects(
+      post('/api/webcam/stop?username=solosession', {}),
+      /There is no active camera session to stop/,
+    );
+    const afterDuplicateStop = await api('/api/state?username=solosession');
+    assert.equal(afterDuplicateStop.profile.sessions_completed, 1);
+    assert.equal(afterDuplicateStop.profile.session_history.length, 1);
+    assert.equal(afterDuplicateStop.profile.total_xp, saved.profile.total_xp);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test('XP, levels, sessions, and achievements persist per username across sign-ins', async () => {

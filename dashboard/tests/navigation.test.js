@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   isUnknownPath,
@@ -25,6 +26,13 @@ test('legacy and secondary destinations remain directly addressable', () => {
   assert.equal(mobileDestinationFromLocation(location('/', '#focus-room')), 'focus');
   assert.equal(pageFromLocation(location('/', '#leaderboard')), 'leaderboard');
   assert.equal(pageFromLocation(location('/contact')), 'contact');
+});
+
+test('authenticated leaderboard is wired into the application navigation and page shell', async () => {
+  const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(appSource, /import LeaderboardPage from '\.\/LeaderboardPage\.jsx'/);
+  assert.match(appSource, /\{\s*id: 'leaderboard', label: 'nav\.leaderboard', group: 'nav\.social', icon: Trophy, requiresCloud: true\s*\}/);
+  assert.match(appSource, /\{page === 'leaderboard' && account && <LeaderboardPage account=\{account\} language=\{language\} \/>\}/);
 });
 
 test('public pages resolve from clean paths without changing authenticated hash routes', () => {

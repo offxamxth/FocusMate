@@ -1,4 +1,3 @@
-const allowedPeriods = new Set(['weekly', 'all_time']);
 const allowedScopes = new Set(['global', 'friends']);
 const allowedVisibilities = new Set(['private', 'friends', 'public']);
 
@@ -12,6 +11,10 @@ function nonNegativeInteger(value) {
 
 function nullablePositiveInteger(value) {
   return value === null || (Number.isSafeInteger(value) && value >= 1);
+}
+
+function levelMatchesXp(xp, level) {
+  return Number.isSafeInteger(level) && level === Math.floor(xp / 100) + 1;
 }
 
 function leaderboardError(code, message) {
@@ -37,47 +40,41 @@ function normalizeLeaderboard(data) {
       || entry.rank < 1
       || typeof entry.username !== 'string'
       || typeof entry.display_name !== 'string'
-      || !nonNegativeInteger(entry.focus_seconds)) {
+      || !nonNegativeInteger(entry.global_xp)
+      || !levelMatchesXp(entry.global_xp, entry.level)) {
       throw leaderboardError('INVALID_RESPONSE', 'The leaderboard response was invalid.');
     }
     return {
       rank: Number(entry.rank),
       username: entry.username,
       display_name: entry.display_name,
-      focus_seconds: Number(entry.focus_seconds),
+      global_xp: Number(entry.global_xp),
+      level: Number(entry.level),
     };
   });
 
   const progress = data.progress;
-  if (!nonNegativeInteger(progress.all_time_seconds)
-    || !nonNegativeInteger(progress.weekly_seconds)
+  if (!nonNegativeInteger(progress.global_xp)
+    || !levelMatchesXp(progress.global_xp, progress.level)
     || !Object.hasOwn(progress, 'rank')
     || !nullablePositiveInteger(progress.rank)
-    || !Object.hasOwn(progress, 'weekly_rank')
-    || !nullablePositiveInteger(progress.weekly_rank)
     || !allowedVisibilities.has(progress.visibility)
     || typeof progress.listed !== 'boolean'
-    || !allowedPeriods.has(data.period)
     || !allowedScopes.has(data.scope)
     || typeof data.has_more !== 'boolean'
-    || !nonNegativeInteger(data.total_entries)
-    || typeof data.week_start !== 'string'
-    || !Number.isFinite(Date.parse(data.week_start))) {
+    || !nonNegativeInteger(data.total_entries)) {
     throw leaderboardError('INVALID_RESPONSE', 'The leaderboard response was invalid.');
   }
 
   return {
-    period: data.period,
     scope: data.scope,
-    week_start: data.week_start,
     entries,
     has_more: data.has_more,
     total_entries: data.total_entries,
     progress: {
-      all_time_seconds: progress.all_time_seconds,
-      weekly_seconds: progress.weekly_seconds,
+      global_xp: progress.global_xp,
+      level: progress.level,
       rank: progress.rank,
-      weekly_rank: progress.weekly_rank,
       visibility: progress.visibility,
       listed: progress.listed,
     },
@@ -86,18 +83,17 @@ function normalizeLeaderboard(data) {
 
 export async function getFocusMateLeaderboard(
   client,
-  { period = 'weekly', scope = 'global', limit = 20, offset = 0 } = {},
+  { scope = 'global', limit = 20, offset = 0 } = {},
 ) {
   assertLeaderboardClient(client);
 
-  if (!allowedPeriods.has(period) || !allowedScopes.has(scope)
+  if (!allowedScopes.has(scope)
     || !Number.isInteger(limit) || limit < 1 || limit > 50
     || !Number.isInteger(offset) || offset < 0 || offset > 10000) {
     throw leaderboardError('22023', 'The leaderboard request was invalid.');
   }
 
   const { data, error } = await client.rpc('get_focusmate_leaderboard', {
-    p_period: period,
     p_scope: scope,
     p_limit: limit,
     p_offset: offset,

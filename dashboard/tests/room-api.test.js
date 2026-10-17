@@ -299,6 +299,64 @@ test('timer migration locks transitions, uses server timestamps, and preserves n
   assert.doesNotMatch(sql, /p_(?:user_id|host_id|started_at|elapsed_seconds|state)\b/i);
 });
 
+test('forward-only host-leave repair preserves finished room state and active-room close behavior', async () => {
+  const migration = await readFile(
+    new URL('../../supabase/migrations/20261016220000_preserve_finished_room_state_on_host_leave.sql', import.meta.url),
+    'utf8',
+  );
+  const leaveFunction = migration.match(
+    /create or replace function public\.leave_focus_room\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+
+  assert.ok(leaveFunction);
+  assert.match(leaveFunction, /current_user_id is null[\s\S]*?Authentication required/i);
+  assert.match(leaveFunction, /member\.role into member_role[\s\S]*?member\.user_id = current_user_id[\s\S]*?for update/i);
+  assert.match(
+    leaveFunction,
+    /set state = case\s+when target_room\.state = 'finished' then 'finished'\s+else 'closed'\s+end/i,
+  );
+  assert.match(leaveFunction, /target_room\.state = 'focusing'[\s\S]*?active_segment_seconds/i);
+  assert.match(leaveFunction, /update public\.focus_room_members[\s\S]*?set left_at = transition_time/i);
+  assert.match(
+    migration,
+    /revoke all on function public\.leave_focus_room\(uuid\)[\s\S]*?from public, anon, authenticated/i,
+  );
+  assert.match(migration, /grant execute on function public\.leave_focus_room\(uuid\) to authenticated/i);
+});
+
+test('finished-room host leave keeps former participants authorized to retrieve results', async () => {
+  const migration = await readFile(
+    new URL('../../supabase/migrations/20261016220000_preserve_finished_room_state_on_host_leave.sql', import.meta.url),
+    'utf8',
+  );
+  const getRoomFunction = migration.match(
+    /create or replace function public\.get_focus_room\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  const snapshotFunction = migration.match(
+    /create or replace function public\.focus_room_snapshot\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+
+  assert.ok(getRoomFunction);
+  assert.ok(snapshotFunction);
+  assert.match(
+    getRoomFunction,
+    /room_state = 'finished'[\s\S]*?not exists[\s\S]*?host_member\.role = 'host'[\s\S]*?host_member\.left_at is null[\s\S]*?public\.is_focus_room_member\(p_room_id\)/i,
+  );
+  assert.match(
+    snapshotFunction,
+    /member\.left_at is null[\s\S]*?room\.state = 'closed'[\s\S]*?room\.state = 'finished'[\s\S]*?host_member\.role = 'host'[\s\S]*?host_member\.left_at is null/i,
+  );
+  assert.match(
+    migration,
+    /revoke all on function public\.get_focus_room\(uuid\)[\s\S]*?from public, anon, authenticated/i,
+  );
+  assert.match(migration, /grant execute on function public\.get_focus_room\(uuid\) to authenticated/i);
+  assert.match(
+    migration,
+    /revoke all on function public\.focus_room_snapshot\(uuid\)[\s\S]*?from public, anon, authenticated/i,
+  );
+});
+
 test('room readiness migration gates timer start in trusted SQL and scopes its RPC', async () => {
   const sql = await readFile(
     new URL('../../supabase/migrations/20261010120000_focus_room_readiness.sql', import.meta.url),

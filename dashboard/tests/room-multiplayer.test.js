@@ -76,3 +76,29 @@ test('late joins use the current active segment while server completion excludes
   assert.match(migration, /notify pgrst, 'reload schema'/i);
   assert.match(migration, /grant execute on function public\.join_focus_room\(text\) to authenticated/i);
 });
+
+test('forward-only late-join repair matches the authorized join and snapshot functions', async () => {
+  const [canonicalMigration, repairMigration] = await Promise.all([
+    readFile(
+      new URL('../../supabase/migrations/20261012130000_room_late_join.sql', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL('../../supabase/migrations/20261016210000_enable_verified_room_late_join.sql', import.meta.url),
+      'utf8',
+    ),
+  ]);
+  const extractFunction = (migration, name) => migration.match(
+    new RegExp(`create or replace function public\\.${name}\\([\\s\\S]*?\\n\\$\\$;`, 'i'),
+  )?.[0];
+
+  for (const functionName of ['join_focus_room', 'focus_room_snapshot']) {
+    assert.equal(extractFunction(repairMigration, functionName), extractFunction(canonicalMigration, functionName));
+  }
+  assert.match(
+    repairMigration,
+    /revoke all on function public\.join_focus_room\(text\)[\s\S]*?from public, anon, authenticated/i,
+  );
+  assert.match(repairMigration, /grant execute on function public\.join_focus_room\(text\) to authenticated/i);
+  assert.match(repairMigration, /notify pgrst, 'reload schema'/i);
+});

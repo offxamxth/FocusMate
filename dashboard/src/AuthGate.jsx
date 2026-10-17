@@ -271,6 +271,9 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
+  const [pinCursor, setPinCursor] = useState(0);
+  const [pinFocused, setPinFocused] = useState(false);
+  const pinInputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState(initialError);
@@ -279,6 +282,40 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
   const signup = view === 'signup';
   const migrating = view === 'migrate';
   const t = (key, values) => translate(language, `auth.${key}`, values);
+
+  const updatePin = (event) => {
+    const input = event.currentTarget;
+    const nextPin = input.value.replace(/[^0-9]/g, '').slice(0, 6);
+    setPin(nextPin);
+    const nextCursor = Math.min(input.selectionStart ?? nextPin.length, nextPin.length);
+    setPinCursor(nextCursor);
+  };
+
+  const focusPinDigit = (event) => {
+    const input = pinInputRef.current;
+    if (!input || event.currentTarget.getBoundingClientRect().width === 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const position = Math.min(
+      5,
+      Math.max(0, Math.floor(((event.clientX - bounds.left) / bounds.width) * 6)),
+    );
+    input.focus();
+    input.setSelectionRange(position, position);
+    setPinCursor(position);
+  };
+
+  const movePinCursor = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+    event.preventDefault();
+    const input = event.currentTarget;
+    const position = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? pin.length
+        : Math.max(0, Math.min(pin.length, (input.selectionStart || 0) + (event.key === 'ArrowRight' ? 1 : -1)));
+    input.setSelectionRange(position, position);
+    setPinCursor(position);
+  };
 
   const submit = async (event) => {
     event.preventDefault();
@@ -386,8 +423,36 @@ function AuthScreen({ initialError = '', onSignedIn, onLocal }) {
           <span className="auth-input-wrap"><span aria-hidden="true">@</span><input autoComplete="username" maxLength="32" value={username} onChange={(event) => setUsername(event.target.value)} required={!migrating} /></span>
           {migrating && <small className="field-hint">{t('migrationUsernameHelp')}</small>}
         </label>
-        <label>{t('pin')}
-          <span className="auth-input-wrap"><LockKeyhole size={16} aria-hidden="true" /><input type={showPin ? 'text' : 'password'} inputMode="numeric" pattern="[0-9]{6}" autoComplete="off" value={pin} onChange={(event) => setPin(event.target.value)} aria-describedby="pin-help" required /><button type="button" className="password-visibility" aria-label={showPin ? t('hidePin') : t('showPin')} onClick={() => setShowPin((visible) => !visible)}>{showPin ? <EyeOff size={17} /> : <Eye size={17} />}</button></span>
+        <label className="pin-field">{t('pin')}
+          <span className="pin-entry">
+            <span className="pin-digit-track" dir="ltr" onClick={focusPinDigit}>
+              {Array.from({ length: 6 }, (_, index) => (
+                <span
+                  className={`pin-digit ${pinFocused && (pinCursor === index || (pinCursor === pin.length && pin.length === 6 && index === 5)) ? 'active' : ''}`}
+                  key={index}
+                  aria-hidden="true"
+                >{pin[index] ? (showPin ? pin[index] : '•') : ''}</span>
+              ))}
+              <input
+                ref={pinInputRef}
+                className="pin-digit-input"
+                type={showPin ? 'text' : 'password'}
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                autoComplete="off"
+                value={pin}
+                onChange={updatePin}
+                onFocus={() => setPinFocused(true)}
+                onBlur={() => setPinFocused(false)}
+                onSelect={(event) => setPinCursor(event.currentTarget.selectionStart ?? pin.length)}
+                onKeyDown={movePinCursor}
+                aria-describedby="pin-help"
+                required
+              />
+            </span>
+            <button type="button" className="password-visibility" aria-label={showPin ? t('hidePin') : t('showPin')} onClick={() => setShowPin((visible) => !visible)}>{showPin ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+          </span>
           <small id="pin-help" className="field-hint">{t('pinHelp')}</small>
         </label>
         {error && <div className="form-error" role="alert">{error}</div>}

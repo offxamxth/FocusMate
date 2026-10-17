@@ -113,6 +113,23 @@ test('trusted room progress migration uses server-timed completions, unique awar
   assert.match(migration, /grant execute on function public\.reroll_focusmate_profile_quest[\s\S]*?to authenticated/i);
 });
 
+test('finished verified rooms award Global XP once through the profile progression record', async () => {
+  const [progressMigration, profileMigration, leaderboardMigration] = await Promise.all([
+    readFile(new URL('../../supabase/migrations/20261011120000_trusted_room_progress.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../../supabase/migrations/20261004160000_profile_cloud_fields.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../../supabase/migrations/20261017120000_global_xp_leaderboard.sql', import.meta.url), 'utf8'),
+  ]);
+  const completion = progressMigration.match(
+    /create or replace function private\.record_focusmate_room_completion\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(completion);
+  assert.match(completion, /if new\.state <> 'finished' or old\.state = 'finished' then/i);
+  assert.match(completion, /on conflict \(room_id, user_id\) do nothing[\s\S]*?if found then/i);
+  assert.match(completion, /perform private\.adjust_focusmate_profile_xp\(participant\.user_id, 20\)/i);
+  assert.match(profileMigration, /new\.level := new\.xp \/ 100 \+ 1/i);
+  assert.match(leaderboardMigration, /order by visible\.global_xp desc, visible\.user_id/i);
+});
+
 test('room quest rerolls retain the 5-XP threshold and charge exactly once after validation', async () => {
   const migration = await readFile(
     new URL('../../supabase/migrations/20261011170000_room_quest_reroll_guard.sql', import.meta.url),
@@ -166,6 +183,60 @@ test('room quest rerolls retain the 5-XP threshold and charge exactly once after
     originalMigration,
     /request_type text not null check \(request_type in \('reroll', 'profile_reroll', 'claim'\)\)/i,
   );
+});
+
+test('forward-only reroll repair restores both canonical RPCs and their separate request types', async () => {
+  const [canonicalMigration, repairMigration] = await Promise.all([
+    readFile(
+      new URL('../../supabase/migrations/20261011170000_room_quest_reroll_guard.sql', import.meta.url),
+      'utf8',
+    ),
+    readFile(
+      new URL('../../supabase/migrations/20261016200000_fix_room_quest_reroll_request_type.sql', import.meta.url),
+      'utf8',
+    ),
+  ]);
+  const extractRoomReroll = (migration) => migration.match(
+    /create or replace function public\.reroll_focusmate_room_quest\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  const extractProfileReroll = (migration) => migration.match(
+    /create or replace function public\.reroll_focusmate_profile_quest\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  const canonicalRoomReroll = extractRoomReroll(canonicalMigration);
+  const repairedRoomReroll = extractRoomReroll(repairMigration);
+  const canonicalProfileReroll = extractProfileReroll(canonicalMigration);
+  const repairedProfileReroll = extractProfileReroll(repairMigration);
+
+  assert.ok(canonicalRoomReroll);
+  assert.ok(repairedRoomReroll);
+  assert.ok(canonicalProfileReroll);
+  assert.ok(repairedProfileReroll);
+  assert.equal(repairedRoomReroll, canonicalRoomReroll);
+  assert.equal(repairedProfileReroll, canonicalProfileReroll);
+  assert.equal((repairMigration.match(/create or replace function/gi) || []).length, 2);
+  assert.match(repairedRoomReroll, /prior_request_type = 'reroll'/);
+  assert.match(repairedRoomReroll, /values \(current_user_id, p_request_id, 'reroll', result\)/);
+  assert.doesNotMatch(repairedRoomReroll, /adjust_focusmate_profile_xp/);
+  assert.match(repairedProfileReroll, /prior_request_type = 'profile_reroll'/);
+  assert.match(repairedProfileReroll, /values \(current_user_id, p_request_id, 'profile_reroll', result\)/);
+  assert.doesNotMatch(repairedProfileReroll, /adjust_focusmate_profile_xp/);
+  assert.match(
+    repairMigration,
+    /revoke all on function public\.reroll_focusmate_room_quest\(text, uuid\)[\s\S]*?from public, anon, authenticated/i,
+  );
+  assert.match(
+    repairMigration,
+    /grant execute on function public\.reroll_focusmate_room_quest\(text, uuid\) to authenticated/i,
+  );
+  assert.match(
+    repairMigration,
+    /revoke all on function public\.reroll_focusmate_profile_quest\(text, text, uuid\)[\s\S]*?from public, anon, authenticated/i,
+  );
+  assert.match(
+    repairMigration,
+    /grant execute on function public\.reroll_focusmate_profile_quest\(text, text, uuid\) to authenticated/i,
+  );
+  assert.doesNotMatch(repairMigration, /\b(?:drop|delete|truncate)\b/i);
 });
 
 test('profile quest rerolls keep their independent request type and profile quest storage', async () => {

@@ -4,6 +4,11 @@ export function claimTimerCompletion(state) {
   return true;
 }
 
+export function remainingFocusSeconds(startedAt, durationSeconds, now = Date.now()) {
+  if (![startedAt, durationSeconds, now].every(Number.isFinite) || durationSeconds < 0) return 0;
+  return Math.max(0, Math.ceil((startedAt + durationSeconds * 1000 - now) / 1000));
+}
+
 export async function playSessionCompletionBeep(context) {
   if (!context || typeof context.createOscillator !== 'function' || typeof context.createGain !== 'function') {
     return false;

@@ -161,7 +161,11 @@ The dashboard includes an overview, a focus room with a Pomodoro timer and task
 list, session insights, session reflections, daily quests, achievements, and
 profile/wellbeing settings. The interface supports English, Spanish, French,
 Arabic (RTL), and Hindi. The webcam is optional; the timer and task list work
-without it. Use the sidebar to switch between pages.
+without it. Personal focus sessions offer 15, 25, 45, 60, 90, and 120-minute
+durations. Personal focus sessions do not request camera access; camera access
+is reserved for features that explicitly use video, such as shared rooms. A
+page reload interrupts rather than silently restarting an in-progress personal
+session. Use the sidebar to switch between pages.
 
 ## Focus Rooms foundation
 
