@@ -28,12 +28,35 @@ export function rerollFocusmateRoomQuest(client, questId, requestId) {
   });
 }
 
-export function rerollFocusmateProfileQuest(client, questId, replacementId, requestId) {
-  return invokeProgressRpc(client, 'reroll_focusmate_profile_quest', {
+function dailyRerollError(error) {
+  const detail = `${error?.details || ''} ${error?.message || ''}`.toLowerCase();
+  let message = 'FocusMate could not reroll this daily quest. Please try again.';
+  let code = 'QUEST_REROLL_FAILED';
+  if (detail.includes('daily_reroll_insufficient_tokens')) {
+    message = 'You need one reroll token to replace a daily quest.';
+    code = 'QUEST_REROLL_INSUFFICIENT_TOKENS';
+  } else if (detail.includes('daily_reroll_daily_limit')) {
+    message = 'You have reached today’s reroll limit.';
+    code = 'QUEST_REROLL_DAILY_LIMIT';
+  } else if (detail.includes('daily_reroll_unavailable')) {
+    message = 'This daily quest cannot be rerolled or has no eligible replacement.';
+    code = 'QUEST_REROLL_UNAVAILABLE';
+  } else if (detail.includes('could not find the function')) {
+    message = 'Daily quest rerolls are unavailable until the database update is applied.';
+    code = 'QUEST_REROLL_UNAVAILABLE';
+  }
+  const normalized = new Error(message);
+  normalized.code = code;
+  return normalized;
+}
+
+export async function rerollFocusmateDailyQuest(client, questId, requestId) {
+  const { data, error } = await client.rpc('reroll_focusmate_daily_quest', {
     p_quest_id: questId,
-    p_replacement_id: replacementId,
     p_request_id: requestId,
   });
+  if (error) throw dailyRerollError(error);
+  return data;
 }
 
 export function claimFocusmateRoomQuest(client, questId, requestId) {

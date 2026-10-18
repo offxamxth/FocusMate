@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { translate } from './i18n.js';
 import { normalizeDetectionConfiguration } from './session-detection.js';
 import { roomCameraEligibility } from './room-camera.js';
@@ -17,74 +16,44 @@ const signalTranslationKeys = {
   'Too Far': 'camera.tooFar',
 };
 
-function cameraErrorTranslationKey(error) {
-  switch (error?.name) {
-    case 'NotAllowedError':
-    case 'SecurityError':
-      return 'camera.permissionDenied';
-    case 'NotFoundError':
-    case 'DevicesNotFoundError':
-      return 'camera.notFound';
-    case 'NotReadableError':
-    case 'TrackStartError':
-      return 'camera.inUse';
-    default:
-      return 'camera.unavailable';
-  }
-}
-
 function closeDetectors(detectors) {
   detectors?.face?.close();
   detectors?.pose?.close();
 }
 
-export default function RoomCameraMonitor({ roomStatus, pageActive, preferences, language }) {
-  const [cameraState, setCameraState] = useState('off');
-  const [cameraErrorKey, setCameraErrorKey] = useState('');
-  const [stream, setStream] = useState(null);
+export default function RoomCameraMonitor({
+  roomStatus,
+  pageActive,
+  preferences,
+  language,
+  stream,
+}) {
   const [signals, setSignals] = useState(null);
+  const [analysisError, setAnalysisError] = useState(false);
   const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const requestIdRef = useRef(0);
-  const eligible = roomCameraEligibility({ roomStatus, pageActive, preferences });
-  const eligibleRef = useRef(eligible);
-  eligibleRef.current = eligible;
   const configuration = normalizeDetectionConfiguration(preferences);
   const configurationKey = JSON.stringify(configuration);
+  const eligible = roomCameraEligibility({ roomStatus, pageActive, preferences });
   const t = (key) => translate(language, `room.camera.${key}`);
 
-  const stopCamera = useCallback(() => {
-    requestIdRef.current += 1;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    setStream(null);
-    setSignals(null);
-    setCameraState('off');
-    setCameraErrorKey('');
-  }, []);
-
   useEffect(() => {
-    if (!eligible) stopCamera();
-  }, [eligible, stopCamera]);
-
-  useEffect(() => () => {
-    requestIdRef.current += 1;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    if (!stream) return undefined;
     const video = videoRef.current;
     if (!video) return undefined;
-    video.srcObject = stream;
+    video.srcObject = stream || null;
+    if (stream) {
+      void video.play().catch(() => setAnalysisError(true));
+    }
     return () => {
       if (video.srcObject === stream) video.srcObject = null;
     };
   }, [stream]);
 
   useEffect(() => {
-    if (!stream) return undefined;
+    if (!eligible || !stream) {
+      setSignals(null);
+      setAnalysisError(false);
+      return undefined;
+    }
     let cancelled = false;
     let timeoutId = 0;
     let detectors = null;
@@ -107,11 +76,7 @@ export default function RoomCameraMonitor({ roomStatus, pageActive, preferences,
         );
         if (!cancelled) setSignals(metrics);
       } catch {
-        if (!cancelled) {
-          stopCamera();
-          setCameraState('error');
-          setCameraErrorKey('camera.analysisUnavailable');
-        }
+        if (!cancelled) setAnalysisError(true);
         return;
       } finally {
         detecting = false;
@@ -130,53 +95,19 @@ export default function RoomCameraMonitor({ roomStatus, pageActive, preferences,
         await videoRef.current?.play();
         if (!cancelled) void analyze(detectMetrics);
       } catch {
-        if (!cancelled) {
-          stopCamera();
-          setCameraState('error');
-          setCameraErrorKey('camera.analysisUnavailable');
-        }
+        if (!cancelled) setAnalysisError(true);
       }
     };
 
     setSignals(null);
+    setAnalysisError(false);
     void loadDetectors();
     return () => {
       cancelled = true;
       window.clearTimeout(timeoutId);
       closeDetectors(detectors);
     };
-  }, [configurationKey, preferences, stopCamera, stream]);
-
-  const startCamera = async () => {
-    if (!eligible || cameraState === 'starting' || streamRef.current) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraState('error');
-      setCameraErrorKey('camera.unavailable');
-      return;
-    }
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    setCameraErrorKey('');
-    setCameraState('starting');
-    try {
-      const nextStream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: 'user' },
-      });
-      if (requestId !== requestIdRef.current || !eligibleRef.current) {
-        nextStream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      streamRef.current = nextStream;
-      setStream(nextStream);
-      setCameraState('active');
-    } catch (error) {
-      if (requestId === requestIdRef.current) {
-        setCameraState('error');
-        setCameraErrorKey(cameraErrorTranslationKey(error));
-      }
-    }
-  };
+  }, [configurationKey, eligible, preferences, stream]);
 
   const reason = preferences?.focus_monitoring !== true
     ? t('disabledInSettings')
@@ -187,7 +118,7 @@ export default function RoomCameraMonitor({ roomStatus, pageActive, preferences,
       || configuration.monitor_distance
       || configuration.show_detection_overlay)
       ? t('noSignalsEnabled')
-      : !pageActive ? t('openRoomPage') : '';
+      : !pageActive ? t('openRoomPage') : !stream ? t('waitingForRoomCamera') : '';
   const signalKey = signals
     ? signalTranslationKeys[signals.status] || 'camera.noAlert'
     : 'camera.analyzing';
@@ -198,29 +129,19 @@ export default function RoomCameraMonitor({ roomStatus, pageActive, preferences,
         <strong>{t('title')}</strong>
         <p>{t('privacy')}</p>
       </div>
-      {eligible ? (
-        <div className="room-local-camera-controls">
-          {stream ? (
-            <button className="outline-button" type="button" onClick={stopCamera}>
-              <CameraOff size={15} /> {t('stop')}
-            </button>
-          ) : (
-            <button
-              className="outline-button"
-              type="button"
-              disabled={cameraState === 'starting'}
-              onClick={() => void startCamera()}
-            >
-              <Camera size={15} /> {t(cameraState === 'starting' ? 'starting' : 'start')}
-            </button>
-          )}
-          {cameraErrorKey && <p className="room-local-camera-error" role="alert">{t(cameraErrorKey)}</p>}
-          {stream && (
-            <div className="room-local-camera-active">
-              <video ref={videoRef} autoPlay muted playsInline aria-label={t('preview')} />
-              <p role="status">{t(signalKey)}</p>
-            </div>
-          )}
+      {eligible && stream ? (
+        <div className="room-local-camera-active">
+          <video
+            ref={videoRef}
+            className="room-analysis-video"
+            autoPlay
+            muted
+            playsInline
+            aria-hidden="true"
+          />
+          {analysisError
+            ? <p className="room-local-camera-error" role="alert">{t('analysisUnavailable')}</p>
+            : <p role="status">{t(signalKey)}</p>}
         </div>
       ) : <p className="room-local-camera-note">{reason}</p>}
     </section>

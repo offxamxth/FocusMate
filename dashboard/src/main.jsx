@@ -24,11 +24,12 @@ import {
 import SocialPage from './SocialPage.jsx';
 import LeaderboardPage from './LeaderboardPage.jsx';
 import RoomFoundation from './RoomFoundation.jsx';
+import FocusBuddyCharacter from './FocusBuddyCharacter.jsx';
 import {
   claimFocusmateRoomQuest,
   getFocusmateRoomProgress,
   publishFocusmateRoomProgress,
-  rerollFocusmateProfileQuest,
+  rerollFocusmateDailyQuest,
   rerollFocusmateRoomQuest,
 } from './room-progress.js';
 import ContactPage from './ContactPage.jsx';
@@ -54,6 +55,8 @@ import {
   waterReminderSnoozes,
   waterReminderDelayMs,
   waterReminderStorageKey,
+  transitionFocusBuddyAnimation,
+  waterReminderDelayForAction,
 } from './focus-buddy.js';
 import {
   elapsedParticipantFocusSeconds,
@@ -350,6 +353,9 @@ function FocusMateApp({
           : null,
       room_progress: trustedProgress?.room_progress || {},
       room_daily_quests: trustedProgress?.room_daily_quests || value.room_daily_quests || null,
+      daily_quests: trustedProgress?.daily_quests || null,
+      reroll_tokens: trustedProgress?.reroll_tokens ?? null,
+      rerolls_remaining_today: trustedProgress?.rerolls_remaining_today ?? null,
       achievements: existingAwards,
     };
   };
@@ -648,30 +654,13 @@ function FocusMateApp({
   };
 
   const rerollQuest = async (questId) => {
-    if (account) {
-      const preview = await api(`/api/quests/reroll-preview?username=${encodeURIComponent(username)}`, {
-        method: 'POST',
-        body: JSON.stringify({ quest_id: questId }),
-      });
-      const result = await rerollFocusmateProfileQuest(
-        supabase,
-        questId,
-        preview.replacement.id,
-        window.crypto.randomUUID(),
-      );
-      publishFocusmateRoomProgress(result);
-      const updated = await api(`/api/state?username=${encodeURIComponent(username)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ profile: { daily_quests: result.profile_daily_quests } }),
-      });
-      setProfile(presentProfile(updated.profile, { ...roomProgress, ...result }));
-      return;
-    }
-    const data = await api(`/api/quests/reroll?username=${encodeURIComponent(username)}`, {
-      method: 'POST',
-      body: JSON.stringify({ quest_id: questId }),
-    });
-    setProfile(presentProfile(data.profile));
+    if (!account) throw new Error('Verified reroll tokens require a cloud account.');
+    const result = await rerollFocusmateDailyQuest(
+      supabase,
+      questId,
+      window.crypto.randomUUID(),
+    );
+    publishFocusmateRoomProgress(result);
   };
 
   const rerollRoomQuest = async (questId) => {
@@ -724,7 +713,7 @@ function FocusMateApp({
     const data = await api('/api/login', { method: 'POST', body: JSON.stringify({ name, username: handle }) });
     setUsername(data.profile.username);
     if (!account) localStorage.setItem('focusmate-user', data.profile.username);
-    setProfile(data.profile);
+    setProfile(presentProfile(data.profile));
     setLive(data.live);
     const destination = window.location.pathname.replace(/\/+$/, '') === '/contact' ? 'contact' : 'overview';
     setPage(destination);
@@ -979,17 +968,26 @@ function FocusMateApp({
         </nav>
         <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
-        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={rerollQuest} onRoomReroll={rerollRoomQuest} onRoomClaim={claimRoomQuest} hasCloudAccount={Boolean(account)} />}
+        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress)} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
         {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
           <RoomFoundation account={account} language={language} profile={profile} pageActive={page === 'focus-room'} />
+          {account && profile && (
+            <RoomDailyQuests
+              daily={profile.room_daily_quests}
+              availableXp={profile.available_xp}
+              language={language}
+              onReroll={rerollRoomQuest}
+              onClaim={claimRoomQuest}
+            />
+          )}
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onBeginSession={beginFocusSession} onStopSession={endFocusSession} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} pageActive={page === 'focus-room'} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} language={language} />}
-        {page === 'quests' && <Quests profile={profile} language={language} onReroll={rerollQuest} onRoomReroll={rerollRoomQuest} onRoomClaim={claimRoomQuest} hasCloudAccount={Boolean(account)} />}
+        {page === 'quests' && <Quests profile={profile} language={language} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress)} />}
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
@@ -1139,9 +1137,8 @@ function Overview({
   onNavigate,
   onSave,
   onReroll,
-  onRoomReroll,
-  onRoomClaim,
-  hasCloudAccount,
+  cloudAccount,
+  dailyProgressLoading,
 }) {
   const now = new Date();
   const hour = now.getHours();
@@ -1224,9 +1221,8 @@ function Overview({
         language={language}
         onViewAll={() => onNavigate('quests')}
         onReroll={onReroll}
-        onRoomReroll={onRoomReroll}
-        onRoomClaim={onRoomClaim}
-        hasCloudAccount={hasCloudAccount}
+        cloudAccount={cloudAccount}
+        dailyProgressLoading={dailyProgressLoading}
       />
       <nav className="overview-shortcuts" aria-label={translate(language, 'dashboard.shortcuts')}>
         <button type="button" onClick={() => onNavigate('insights')}><BarChart3 size={17} /><span>{translate(language, 'nav.progress')}</span><ArrowUpRight size={15} /></button>
@@ -1284,28 +1280,36 @@ const questIcons = {
   session_count: BookOpen,
   session_xp: Sparkles,
   camera_alerts: Activity,
+  room_host_sessions: Users,
 };
 
 function questCopy(quest, language) {
   const target = quest.target;
   if (quest.category === 'focus_time') return {
     title: translate(language, 'quests.focusTitle', { target }),
-    description: translate(language, 'quests.focusDescription'),
+    description: translate(language, quest.verified ? 'quests.verifiedFocusDescription' : 'quests.focusDescription'),
     unit: 'min',
     max: target,
     current: Math.floor(Number(quest.progress || 0)),
   };
   if (quest.category === 'session_count') return {
-    title: translate(language, 'quests.sessionsTitle', { target }),
-    description: translate(language, 'quests.sessionsDescription'),
+    title: translate(language, quest.verified ? 'quests.verifiedSessionsTitle' : 'quests.sessionsTitle', { target }),
+    description: translate(language, quest.verified ? 'quests.verifiedSessionsDescription' : 'quests.sessionsDescription'),
     unit: 'sessions',
     max: target,
     current: Math.floor(Number(quest.progress || 0)),
   };
   if (quest.category === 'session_xp') return {
     title: translate(language, 'quests.xpTitle', { target }),
-    description: translate(language, 'quests.xpDescription'),
+    description: translate(language, quest.verified ? 'quests.verifiedXpDescription' : 'quests.xpDescription'),
     unit: 'XP',
+    max: target,
+    current: Math.floor(Number(quest.progress || 0)),
+  };
+  if (quest.category === 'room_host_sessions') return {
+    title: translate(language, 'quests.roomHostQuestTitle', { target }),
+    description: translate(language, 'quests.roomHostQuestDescription'),
+    unit: 'sessions',
     max: target,
     current: Math.floor(Number(quest.progress || 0)),
   };
@@ -1324,26 +1328,73 @@ function DailyQuests({
   language,
   onViewAll,
   onReroll,
-  onRoomReroll,
-  onRoomClaim,
-  hasCloudAccount,
+  cloudAccount = false,
+  dailyProgressLoading = false,
 }) {
   const [rerollingId, setRerollingId] = useState('');
   const [rerollError, setRerollError] = useState('');
+  const [confirmingQuestId, setConfirmingQuestId] = useState('');
+  const confirmationButtonRef = useRef(null);
+  const cancelButtonRef = useRef(null);
+  const tokenBalanceRef = useRef(null);
+  const rerollTriggerRef = useRef(null);
   const daily = profile.daily_quests;
+  useEffect(() => {
+    if (!confirmingQuestId) return undefined;
+    confirmationButtonRef.current?.focus();
+    const handleDialogKey = (event) => {
+      if (event.key === 'Escape') {
+        setConfirmingQuestId('');
+        setRerollError('');
+        window.requestAnimationFrame(() => rerollTriggerRef.current?.focus());
+      } else if (event.key === 'Tab' && event.shiftKey && document.activeElement === cancelButtonRef.current) {
+        event.preventDefault();
+        confirmationButtonRef.current?.focus();
+      } else if (event.key === 'Tab' && !event.shiftKey && document.activeElement === confirmationButtonRef.current) {
+        event.preventDefault();
+        cancelButtonRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleDialogKey);
+    return () => window.removeEventListener('keydown', handleDialogKey);
+  }, [confirmingQuestId]);
   if (!daily || !Array.isArray(daily.quests) || daily.quests.length !== 4) {
-    return <section className="surface-panel daily-quests" role="alert"><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.unavailable')}</p></section>;
+    const unavailableKey = cloudAccount
+      ? dailyProgressLoading ? 'quests.serverProgressLoading' : 'quests.serverUpdateRequired'
+      : 'quests.unavailable';
+    return <section className="surface-panel daily-quests" role="alert"><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, unavailableKey)}</p></section>;
   }
+  const tokenBalance = profile.reroll_tokens === null || profile.reroll_tokens === undefined
+    || !Number.isInteger(Number(profile.reroll_tokens))
+    ? null
+    : Number(profile.reroll_tokens);
+  const rerollsRemaining = profile.rerolls_remaining_today === null
+    || profile.rerolls_remaining_today === undefined
+    || !Number.isInteger(Number(profile.rerolls_remaining_today))
+    ? null
+    : Number(profile.rerolls_remaining_today);
+  const canReroll = Boolean(onReroll && tokenBalance > 0 && rerollsRemaining > 0);
   const completed = daily.quests.filter((quest) => quest.completed).length;
+  const confirmingQuest = daily.quests.find((quest) => quest.id === confirmingQuestId);
+  const closeRerollConfirmation = (restoreTrigger = true) => {
+    setConfirmingQuestId('');
+    setRerollError('');
+    window.requestAnimationFrame(() => (
+      restoreTrigger ? rerollTriggerRef.current?.focus() : tokenBalanceRef.current?.focus()
+    ));
+  };
   const reroll = async (questId) => {
     if (!onReroll) return;
     setRerollingId(questId);
     setRerollError('');
     try {
       await onReroll(questId);
+      closeRerollConfirmation(false);
     } catch (error) {
-      const key = error.code === 'QUEST_REROLL_INSUFFICIENT_XP'
-        ? 'quests.rerollInsufficientXp'
+      const key = error.code === 'QUEST_REROLL_INSUFFICIENT_TOKENS'
+        ? 'quests.rerollInsufficientTokens'
+        : error.code === 'QUEST_REROLL_DAILY_LIMIT'
+          ? 'quests.rerollDailyLimit'
         : error.code === 'QUEST_REROLL_UNAVAILABLE'
           ? 'quests.rerollUnavailable'
           : 'quests.rerollFailed';
@@ -1352,41 +1403,68 @@ function DailyQuests({
       setRerollingId('');
     }
   };
-  return <section className="daily-quests">
-    <div className="section-heading">
-      <div><span className="eyebrow">{translate(language, 'quests.available')}</span><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, 'quests.subtitle')}</p></div>
-      {onViewAll && <button className="outline-button" onClick={onViewAll}>{translate(language, 'quests.viewAll')}</button>}
-    </div>
-    <div className="quest-grid">
-      {daily.quests.map((quest) => {
-        const copy = questCopy(quest, language);
-        const Icon = questIcons[quest.category] || Award;
-        const difficulty = translate(language, `quests.${String(quest.difficulty || 'Easy').toLowerCase()}`);
-        return <article className={`daily-quest-card ${quest.completed ? 'is-complete' : ''}`} key={quest.id}>
-          <div className="daily-quest-top"><span className="quest-symbol"><Icon size={18} /></span><span className="difficulty-pill">{difficulty}</span></div>
-          <h4>{copy.title}</h4>
-          <p>{copy.description}</p>
-          {quest.category === 'camera_alerts' && <small className="quest-requirement">{translate(language, 'quests.cameraRequired')}</small>}
-          <div className="quest-progress-copy"><span>{translate(language, 'quests.progress')}</span><strong>{copy.current} / {copy.max} {copy.unit}</strong></div>
-          <div className="progress-track" role="progressbar" aria-label={copy.title} aria-valuemin="0" aria-valuemax={copy.max} aria-valuenow={Math.min(copy.max, copy.current)}><span style={{ width: `${Math.min(100, copy.current / copy.max * 100)}%` }} /></div>
-          <div className="quest-card-footer"><span className="xp-pill">+{quest.rewardXP} XP</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.completed ? <><Check size={15} /> {translate(language, 'quests.completed')}</> : translate(language, 'quests.inProgress')}</span></div>
-          {quest.completed && <small className="quest-reward-note">+{quest.rewardXP} XP {translate(language, 'quests.earned')}</small>}
-          {!quest.completed && onReroll && <button className="outline-button quest-reroll" type="button" disabled={Boolean(rerollingId)} onClick={() => void reroll(quest.id)}>{rerollingId === quest.id ? translate(language, 'auth.pleaseWait') : translate(language, 'quests.reroll')}</button>}
-        </article>;
-      })}
-    </div>
-    {hasCloudAccount && (
-      <RoomDailyQuests
-        daily={profile.room_daily_quests}
-        availableXp={profile.available_xp}
-        language={language}
-        onReroll={onRoomReroll}
-        onClaim={onRoomClaim}
-      />
-    )}
-    {rerollError && <p className="quest-reroll-error" role="alert">{rerollError}</p>}
-    {completed === 4 && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, 'quests.completedAll')}</strong><span>{translate(language, 'quests.congratulations')}</span></div>}
-  </section>;
+  return <>
+    <section className="daily-quests">
+      <div className="section-heading">
+        <div><span className="eyebrow">{translate(language, 'quests.available')}</span><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, cloudAccount ? 'quests.verifiedDailySubtitle' : 'quests.subtitle')}</p></div>
+        {onViewAll && <button className="outline-button" onClick={onViewAll}>{translate(language, 'quests.viewAll')}</button>}
+      </div>
+      {cloudAccount
+        ? <p className="reroll-token-balance" ref={tokenBalanceRef} role="status" tabIndex={-1}>{translate(language, 'quests.tokenBalance', { tokens: tokenBalance ?? '—', remaining: rerollsRemaining ?? '—' })}</p>
+        : <p className="muted-note">{translate(language, 'quests.tokensNeedCloudAccount')}</p>}
+      <div className="quest-grid">
+        {daily.quests.map((quest) => {
+          const copy = questCopy(quest, language);
+          const Icon = questIcons[quest.category] || Award;
+          const difficulty = translate(language, `quests.${String(quest.difficulty || 'Easy').toLowerCase()}`);
+          return <article className={`daily-quest-card ${quest.completed ? 'is-complete' : ''}`} key={quest.id}>
+            <div className="daily-quest-top"><span className="quest-symbol"><Icon size={18} /></span><span className="difficulty-pill">{difficulty}</span></div>
+            <h4>{copy.title}</h4>
+            <p>{copy.description}</p>
+            {quest.category === 'camera_alerts' && <small className="quest-requirement">{translate(language, 'quests.cameraRequired')}</small>}
+            <div className="quest-progress-copy"><span>{translate(language, 'quests.progress')}</span><strong>{copy.current} / {copy.max} {copy.unit}</strong></div>
+            <div className="progress-track" role="progressbar" aria-label={copy.title} aria-valuemin="0" aria-valuemax={copy.max} aria-valuenow={Math.min(copy.max, copy.current)}><span style={{ width: `${Math.min(100, copy.current / copy.max * 100)}%` }} /></div>
+            <div className="quest-card-footer"><span className="xp-pill">{quest.verified ? translate(language, 'quests.tokenMilestone') : `+${quest.rewardXP} XP`}</span><span className={`quest-state ${quest.completed ? 'complete' : ''}`}>{quest.completed ? <><Check size={15} /> {translate(language, 'quests.completed')}</> : translate(language, 'quests.inProgress')}</span></div>
+            {quest.completed && quest.verified && <small className="quest-reward-note">{translate(language, 'quests.tokenMilestoneProgress')}</small>}
+            {quest.completed && !quest.verified && <small className="quest-reward-note">+{quest.rewardXP} XP {translate(language, 'quests.earned')}</small>}
+            {!quest.completed && onReroll && <button
+              className="outline-button quest-reroll"
+              type="button"
+              disabled={!canReroll || Boolean(rerollingId)}
+              onClick={(event) => {
+                rerollTriggerRef.current = event.currentTarget;
+                setConfirmingQuestId(quest.id);
+              }}
+            >{rerollingId === quest.id ? translate(language, 'auth.pleaseWait') : translate(language, 'quests.reroll')}</button>}
+          </article>;
+        })}
+      </div>
+      {completed === 4 && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, cloudAccount ? 'quests.dailyTokenEarned' : 'quests.completedAll')}</strong><span>{translate(language, cloudAccount ? 'quests.dailyTokenEarnedDescription' : 'quests.congratulations')}</span></div>}
+    </section>
+    {confirmingQuest && <div className="quest-reroll-confirmation-backdrop">
+      <section
+        aria-labelledby="daily-quest-reroll-title"
+        aria-modal="true"
+        className="quest-reroll-confirmation"
+        role="dialog"
+      >
+        <h2 id="daily-quest-reroll-title">{translate(language, 'quests.rerollConfirmTitle')}</h2>
+        <p>{translate(language, 'quests.rerollConfirm', { quest: questCopy(confirmingQuest, language).title })}</p>
+        <p>{translate(language, 'quests.tokenBalance', { tokens: tokenBalance ?? '—', remaining: rerollsRemaining ?? '—' })}</p>
+        {rerollError && <p className="quest-reroll-error" role="alert">{rerollError}</p>}
+        <div className="quest-reroll-confirmation-actions">
+          <button className="outline-button" type="button" ref={cancelButtonRef} onClick={() => closeRerollConfirmation()}>{translate(language, 'quests.rerollCancel')}</button>
+          <button
+            className="primary-button"
+            type="button"
+            ref={confirmationButtonRef}
+            disabled={!canReroll || Boolean(rerollingId)}
+            onClick={() => void reroll(confirmingQuest.id)}
+          >{rerollingId === confirmingQuest.id ? translate(language, 'quests.rerolling') : translate(language, 'quests.rerollConfirmButton')}</button>
+        </div>
+      </section>
+    </div>}
+  </>;
 }
 
 function RoomDailyQuests({ daily, availableXp, language, onReroll, onClaim }) {
@@ -1466,7 +1544,7 @@ function RoomDailyQuests({ daily, availableXp, language, onReroll, onClaim }) {
                 )}
                 {!quest.completed && onReroll && (
                   <button className="outline-button quest-reroll" type="button" disabled={Boolean(busyId) || (roomXp !== null && roomXp < 5)} onClick={() => void runAction(quest.id, 'reroll', onReroll)}>
-                    {busyId === quest.id && busyAction === 'reroll' ? t('rerolling') : t('reroll')}
+                    {busyId === quest.id && busyAction === 'reroll' ? t('rerolling') : t('roomReroll')}
                   </button>
                 )}
               </article>
@@ -1732,11 +1810,12 @@ function FocusBuddy({ username, profile, live, language }) {
   const preferences = normalizeFocusBuddyPreferences(profile.session_preferences);
   const [roomTimer, setRoomTimer] = useState(null);
   const [reminder, setReminder] = useState(null);
-  const [reaction, setReaction] = useState('');
+  const [animationState, setAnimationState] = useState('hidden');
   const [scheduleVersion, setScheduleVersion] = useState(0);
-  const reactionTimeout = useRef(null);
+  const animationFallbackTimeout = useRef(null);
   const reminderResponseClaimed = useRef(false);
   const reminderPending = useRef(false);
+  const previousUsername = useRef(username);
   const storageKey = waterReminderStorageKey(username);
   const activeSession = Boolean(live.session_active || roomTimer?.status === 'focusing');
   const allowDuringSession = preferences.focus_buddy_during_sessions;
@@ -1744,11 +1823,20 @@ function FocusBuddy({ username, profile, live, language }) {
 
   useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
   useEffect(() => {
+    if (previousUsername.current === username) return;
+    previousUsername.current = username;
+    window.clearTimeout(animationFallbackTimeout.current);
+    reminderPending.current = false;
+    reminderResponseClaimed.current = false;
+    setReminder(null);
+    setAnimationState('hidden');
+  }, [username]);
+  useEffect(() => {
     if (!preferences.focus_buddy_enabled) {
       reminderPending.current = false;
       localStorage.removeItem(storageKey);
       setReminder(null);
-      setReaction('');
+      setAnimationState('hidden');
       return undefined;
     }
     const nextAt = readWaterReminderSchedule(
@@ -1769,12 +1857,15 @@ function FocusBuddy({ username, profile, live, language }) {
       if (document.visibilityState === 'hidden') return;
       if (activeSession && !allowDuringSession) {
         setReminder(null);
+        reminderPending.current = false;
+        setAnimationState('hidden');
         return;
       }
       if (reminderPending.current) return;
       reminderPending.current = true;
       reminderResponseClaimed.current = false;
       setReminder((current) => current || { dueAt: nextAt });
+      setAnimationState((current) => transitionFocusBuddyAnimation(current, 'reminderDue'));
     };
     const checkWhenActive = () => {
       if (document.visibilityState !== 'hidden') checkReminder();
@@ -1796,87 +1887,96 @@ function FocusBuddy({ username, profile, live, language }) {
     scheduleVersion,
     storageKey,
   ]);
-  useEffect(() => () => window.clearTimeout(reactionTimeout.current), []);
+  useEffect(() => {
+    window.clearTimeout(animationFallbackTimeout.current);
+    const fallbackDelays = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? { 'walking-in': 500, 'happy-swinging': 500, 'sad-walking-back': 500 }
+      : { 'walking-in': 1400, 'happy-swinging': 2600, 'sad-walking-back': 2200 };
+    const fallbackDelay = fallbackDelays[animationState];
+    if (!fallbackDelay) return undefined;
 
-  if (!preferences.focus_buddy_enabled || (!reminder && !reaction)) return null;
+    const finishAnimation = () => {
+      if (document.visibilityState === 'hidden') {
+        animationFallbackTimeout.current = window.setTimeout(finishAnimation, 500);
+        return;
+      }
+      if (animationState === 'walking-in') {
+        setAnimationState((current) => transitionFocusBuddyAnimation(current, 'entranceFinished'));
+        return;
+      }
+      setReminder(null);
+      reminderPending.current = false;
+      setAnimationState((current) => transitionFocusBuddyAnimation(current, 'reactionFinished'));
+    };
+    animationFallbackTimeout.current = window.setTimeout(finishAnimation, fallbackDelay);
+    return () => window.clearTimeout(animationFallbackTimeout.current);
+  }, [animationState]);
+
+  if (previousUsername.current !== username || !preferences.focus_buddy_enabled
+    || (!reminder && animationState !== 'walking-in' && animationState !== 'waiting'
+    && animationState !== 'happy-swinging' && animationState !== 'sad-walking-back')) return null;
 
   const respond = (action) => {
-    if (!reminder || !claimWaterReminderResponse(reminderResponseClaimed)) return;
-    const delay = action === 'done'
-      ? preferences.focus_buddy_interval_minutes
-      : preferences.focus_buddy_snooze_minutes;
+    const nextAnimationState = transitionFocusBuddyAnimation(animationState, action);
+    const delay = waterReminderDelayForAction(preferences, action);
+    if (!reminder || delay === null || nextAnimationState === animationState
+      || !claimWaterReminderResponse(reminderResponseClaimed)) return;
     scheduleNextWaterReminder(localStorage, storageKey, delay);
     setScheduleVersion((version) => version + 1);
-    reminderPending.current = false;
+    setAnimationState(nextAnimationState);
+  };
+  const onCharacterAnimationEnd = (event) => {
+    if (event.target !== event.currentTarget) return;
+    const expectedAnimations = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? {
+        'walking-in': 'buddy-reduced-enter',
+        'happy-swinging': 'buddy-reduced-happy',
+        'sad-walking-back': 'buddy-reduced-sad',
+      }
+      : {
+        'walking-in': 'buddy-enter',
+        'happy-swinging': 'buddy-happy-swing',
+        'sad-walking-back': 'buddy-sad-walk',
+      };
+    if (event.animationName !== expectedAnimations[animationState]) return;
+    window.clearTimeout(animationFallbackTimeout.current);
+    if (animationState === 'walking-in') {
+      setAnimationState((current) => transitionFocusBuddyAnimation(current, 'entranceFinished'));
+      return;
+    }
     setReminder(null);
-    setReaction(action);
-    window.clearTimeout(reactionTimeout.current);
-    reactionTimeout.current = window.setTimeout(() => setReaction(''), 2400);
+    reminderPending.current = false;
+    setAnimationState((current) => transitionFocusBuddyAnimation(current, 'reactionFinished'));
   };
   const name = preferences.focus_buddy_greet_by_name
     ? String(profile.player_name || '').trim()
     : '';
-  const greeting = reminder
-    ? name ? t('greeting', { name }) : t('greetingFallback')
-    : reaction === 'later' ? t('snoozed') : t('thanks');
+  const greeting = animationState === 'happy-swinging'
+    ? t('thanks')
+    : animationState === 'sad-walking-back'
+      ? t('snoozed')
+      : name ? t('greeting', { name }) : t('greetingFallback');
   const character = preferences.focus_buddy_character;
-  const expression = reaction === 'done' ? 'happy' : reaction === 'later' ? 'sad' : 'neutral';
 
   return (
     <div
-      className={`focus-buddy-overlay ${reminder ? 'is-reminding' : ''} ${reaction ? `is-${reaction}` : ''}`}
+      className={`focus-buddy-overlay is-${animationState}`}
       dir="ltr"
     >
       <div className="focus-buddy-bubble" role="status" aria-live="polite" dir={textDirection(language)}>
         <p>{greeting}</p>
-        {reminder && (
+        {reminder && (animationState === 'walking-in' || animationState === 'waiting') && (
           <div className="focus-buddy-actions">
-            <button type="button" className="buddy-done" onClick={() => respond('done')}>{t('done')}</button>
-            <button type="button" className="buddy-later" onClick={() => respond('later')}>{t('later')}</button>
+            <button type="button" className="buddy-done" disabled={animationState !== 'waiting'} onClick={() => respond('done')}>{t('done')}</button>
+            <button type="button" className="buddy-later" disabled={animationState !== 'waiting'} onClick={() => respond('later')}>{t('later')}</button>
           </div>
         )}
       </div>
-      <div className={`focus-buddy-character buddy-${character}`} aria-hidden="true">
-        <svg viewBox="0 0 100 126" role="presentation">
-          <ellipse cx="50" cy="119" rx="31" ry="5" fill="#0005" />
-          <path className="buddy-cape" d="M34 39 20 46 13 96 39 84 50 50Z" />
-          <g className="buddy-arm buddy-arm-left">
-            <path d="M34 48 22 65 29 75 42 61" />
-            <circle cx="28" cy="72" r="6" />
-          </g>
-          <g className="buddy-arm buddy-arm-right">
-            <path d="M65 48 77 62 72 72 60 61" />
-            <circle cx="73" cy="69" r="6" />
-          </g>
-          <path className="buddy-body" d="M35 40 Q50 34 65 40 L70 77 Q50 87 30 77Z" />
-          {character === 'web-hero' && <g className="buddy-web-mark"><path d="m34 48 9 6 7-6 7 6 9-6M37 57l8 5 5-4 5 4 8-5M50 41v8M41 44l3 7m15-7-3 7" /></g>}
-          <path className="buddy-emblem" d="M50 48 54 55 62 56 56 61 58 69 50 65 43 69 45 61 39 56 47 55Z" />
-          <g className="buddy-leg buddy-leg-left">
-            <path d="M39 75 36 101" />
-            <path d="M36 100 28 109 42 111 47 103" />
-          </g>
-          <g className="buddy-leg buddy-leg-right">
-            <path d="M59 75 63 101" />
-            <path d="M63 100 70 109 57 111 52 103" />
-          </g>
-          <path className="buddy-head" d="M29 22 Q31 7 50 8 Q69 7 71 23 L68 39 Q61 49 50 49 Q39 49 32 39Z" />
-          <path className="buddy-mask" d="M30 25 Q50 16 70 25 L67 35 Q59 32 50 36 Q41 32 33 35Z" />
-          {character === 'cat' && <path className="buddy-ears" d="M33 19 29 5 44 13M56 13 71 5 67 21" />}
-          {character === 'frog' && <g className="buddy-eyebumps"><circle cx="38" cy="13" r="8" /><circle cx="62" cy="13" r="8" /></g>}
-          <g className={`buddy-eyes eyes-${expression}`}>
-            <ellipse cx="42" cy="28" rx="4" ry="2.7" />
-            <ellipse cx="58" cy="28" rx="4" ry="2.7" />
-            <path className="buddy-smile" d="M43 39 Q50 45 57 39" />
-            <path className="buddy-frown" d="M43 42 Q50 36 57 42" />
-          </g>
-          <g className="buddy-bottle">
-            <rect x="77" y="49" width="12" height="26" rx="4" />
-            <rect x="80" y="45" width="6" height="5" rx="1" />
-            <path d="M79 61h8" />
-          </g>
-          <path className="buddy-shoes" d="M27 108h17M54 108h18" />
-        </svg>
-      </div>
+      <FocusBuddyCharacter
+        character={character}
+        animationState={animationState}
+        onAnimationEnd={onCharacterAnimationEnd}
+      />
     </div>
   );
 }
@@ -2249,11 +2349,10 @@ function Quests({
   profile,
   language,
   onReroll,
-  onRoomReroll,
-  onRoomClaim,
-  hasCloudAccount,
+  cloudAccount,
+  dailyProgressLoading,
 }) {
-  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} onRoomReroll={onRoomReroll} onRoomClaim={onRoomClaim} hasCloudAccount={hasCloudAccount} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
+  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} cloudAccount={cloudAccount} dailyProgressLoading={dailyProgressLoading} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
 }
 
 function Preferences({ profile, onSave }) {

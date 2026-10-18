@@ -1,8 +1,57 @@
 export const focusBuddyCharacters = ['web-hero', 'cape-hero', 'cat', 'frog'];
+export const focusBuddyImageFiles = [
+  'encourage.png',
+  'excited.png',
+  'happy.png',
+  'neutral.png',
+  'prepare-swing.png',
+  'sad.png',
+  'swing-1.png',
+  'thinking.png',
+  'walk-away.png',
+  'walk-in.png',
+  'wave.png',
+];
+export const focusBuddyImageFrames = {
+  'walking-in': ['walk-in.png'],
+  waiting: ['neutral.png'],
+  'happy-swinging': ['happy.png', 'prepare-swing.png', 'swing-1.png'],
+  'sad-walking-back': ['sad.png', 'walk-away.png'],
+};
 export const waterReminderIntervals = [15, 30, 45, 60, 90, 120];
 export const waterReminderSnoozes = [5, 10, 15, 20, 30];
+export const focusBuddyAnimationStates = [
+  'hidden',
+  'walking-in',
+  'waiting',
+  'happy-swinging',
+  'sad-walking-back',
+  'dismissed',
+];
+
+const focusBuddyAnimationTransitions = {
+  hidden: { reminderDue: 'walking-in' },
+  'walking-in': { entranceFinished: 'waiting' },
+  waiting: {
+    done: 'happy-swinging',
+    later: 'sad-walking-back',
+  },
+  'happy-swinging': { reactionFinished: 'dismissed' },
+  'sad-walking-back': { reactionFinished: 'dismissed' },
+  dismissed: { reminderDue: 'walking-in' },
+};
 
 export const focusMoods = ['Calm', 'Focused', 'Okay', 'Tired', 'Stressed'];
+
+export function transitionFocusBuddyAnimation(state, event) {
+  return focusBuddyAnimationTransitions[state]?.[event] || state;
+}
+
+export function waterReminderDelayForAction(preferences, action) {
+  if (action === 'done') return preferences.focus_buddy_interval_minutes;
+  if (action === 'later') return preferences.focus_buddy_snooze_minutes;
+  return null;
+}
 
 const defaults = {
   focus_buddy_enabled: true,

@@ -48,13 +48,54 @@ test('room camera privacy and error messages are localized in every supported la
         assert.notEqual(translate(language, `room.camera.${key}`), translate('en', `room.camera.${key}`));
       }
     }
+    for (const key of [
+      'title',
+      'privacy',
+      'connect',
+      'connecting',
+      'reconnecting',
+      'connected',
+      'disconnected',
+      'leave',
+      'cameraOn',
+      'cameraOffButton',
+      'microphoneOn',
+      'microphoneOffButton',
+      'microphoneOff',
+      'cameraOff',
+      'waitingForVideo',
+      'yourPreview',
+      'participantPreview',
+      'unknownParticipant',
+      'you',
+      'notConnected',
+      'enableSpeaker',
+      'sessionFinished',
+      'openRoomPage',
+      'notConfigured',
+      'membershipRequired',
+      'signInAgain',
+      'unavailable',
+      'mediaUnavailable',
+      'permissionDenied',
+      'deviceMissing',
+      'deviceInUse',
+      'connectFirst',
+      'connectionFailed',
+    ]) {
+      assert.notEqual(translate(language, `room.video.${key}`), `room.video.${key}`);
+      if (language !== 'en') {
+        assert.notEqual(translate(language, `room.video.${key}`), translate('en', `room.video.${key}`));
+      }
+    }
   }
 });
 
-test('room camera processing has no FocusMate network or room-payload path', async () => {
+test('room camera analysis consumes the shared local stream and has no network or signaling path', async () => {
   const source = await readFile(new URL('../src/RoomCameraMonitor.jsx', import.meta.url), 'utf8');
-  assert.match(source, /navigator\.mediaDevices\?\.getUserMedia/);
-  assert.match(source, /getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
+  assert.match(source, /stream,/);
+  assert.match(source, /video\.srcObject = stream \|\| null/);
+  assert.doesNotMatch(source, /navigator\.mediaDevices\?\.getUserMedia/);
   assert.doesNotMatch(source, /\/api\/webcam\/start|fetch\(|\bapi\(|supabase|presence\.track|rpc\(/);
 });
 

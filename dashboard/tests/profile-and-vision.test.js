@@ -16,7 +16,6 @@ const {
   dailyFocusSeconds,
   generateDailyQuests,
   localDateKey,
-  rerollDailyQuest,
   refreshDailyQuests,
   studyStreak,
 } = await import('../src/progress-data.js');
@@ -411,58 +410,19 @@ test('daily quest rotation changes by local date and avoids repeating the previo
   assert.notDeepEqual(generateDailyQuests('rotate-user', '2026-03-10').map((quest) => quest.id), next.map((quest) => quest.id));
 });
 
-test('daily quest rerolls use a new same-category challenge and do not repeat within the day', () => {
-  const date = '2026-06-12';
-  const profile = {
-    username: 'reroll-test',
-    session_history: [],
-    focus_timer_date: date,
-    focus_timer_seconds_today: 0,
-    daily_quests: { date, quests: generateDailyQuests('reroll-test', date) },
-  };
-  const original = profile.daily_quests.quests[0];
-  const replacement = rerollDailyQuest(profile, original.id, date);
-  assert.ok(replacement);
-  assert.equal(replacement.category, original.category);
-  assert.notEqual(replacement.id, original.id);
-  assert.deepEqual(replacement.rerollHistory, [original.id]);
-  profile.daily_quests.quests[0] = replacement;
-
-  const secondReplacement = rerollDailyQuest(profile, replacement.id, date);
-  assert.ok(secondReplacement);
-  assert.equal(secondReplacement.category, original.category);
-  assert.notEqual(secondReplacement.id, replacement.id);
-  assert.deepEqual(secondReplacement.rerollHistory, [original.id, replacement.id]);
-  profile.daily_quests.quests[0] = secondReplacement;
-  assert.equal(rerollDailyQuest(profile, secondReplacement.id, date), null);
-});
-
-test('quest reroll deducts exactly 5 XP only when a valid replacement is available', async () => {
+test('browser-only profiles cannot spend XP to reroll daily quests', async () => {
   values.clear();
   const created = await post('/api/login', { username: 'rerolluser', name: 'Reroll User' });
-  const quest = created.profile.daily_quests.quests[0];
-  await api('/api/state?username=rerolluser', {
-    method: 'PUT',
-    body: JSON.stringify({ profile: { total_xp: 12 } }),
-  });
-
-  const rerolled = await post('/api/quests/reroll?username=rerolluser', { quest_id: quest.id });
-  assert.equal(rerolled.profile.total_xp, 7);
-  const replacement = rerolled.profile.daily_quests.quests.find((item) => item.category === quest.category);
-  assert.notEqual(replacement.id, quest.id);
-  assert.deepEqual(replacement.rerollHistory, [quest.id]);
-
-  await api('/api/state?username=rerolluser', {
-    method: 'PUT',
-    body: JSON.stringify({ profile: { total_xp: 4 } }),
-  });
   await assert.rejects(
-    post('/api/quests/reroll?username=rerolluser', { quest_id: replacement.id }),
-    (error) => error.code === 'QUEST_REROLL_INSUFFICIENT_XP',
+    post('/api/quests/reroll?username=rerolluser', { quest_id: created.profile.daily_quests.quests[0].id }),
+    /not available in the browser-only deployment/i,
   );
   const unchanged = (await api('/api/state?username=rerolluser')).profile;
-  assert.equal(unchanged.total_xp, 4);
-  assert.equal(unchanged.daily_quests.quests.find((item) => item.category === quest.category).id, replacement.id);
+  assert.equal(unchanged.total_xp, created.profile.total_xp);
+  assert.deepEqual(
+    unchanged.daily_quests.quests.map((quest) => quest.id),
+    created.profile.daily_quests.quests.map((quest) => quest.id),
+  );
 });
 
 test('camera-alert quests treat disabled session signals as unmonitored, not zero alerts', async () => {
@@ -561,7 +521,22 @@ test('auth, mood confirmation, quest rerolls, and collection celebration are loc
     'focus.takeBreak',
     'focus.continueAnyway',
     'quests.reroll',
+    'quests.roomReroll',
     'quests.rerollInsufficientXp',
+    'quests.rerollInsufficientTokens',
+    'quests.rerollDailyLimit',
+    'quests.rerollConfirmTitle',
+    'quests.rerollConfirm',
+    'quests.rerollCancel',
+    'quests.rerollConfirmButton',
+    'quests.tokenBalance',
+    'quests.tokensNeedCloudAccount',
+    'quests.serverProgressLoading',
+    'quests.serverUpdateRequired',
+    'quests.verifiedFocusDescription',
+    'quests.verifiedSessionsTitle',
+    'quests.verifiedSessionsDescription',
+    'quests.verifiedXpDescription',
     'quests.rerollUnavailable',
     'achievements.fullCollectionTitle',
     'achievements.fullCollectionDescription',

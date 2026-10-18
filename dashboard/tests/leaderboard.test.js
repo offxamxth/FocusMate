@@ -312,6 +312,7 @@ test('leaderboard UI strings are translated in every language and Arabic directi
       'leaderboard.visibility.public',
       'leaderboard.error.offline',
       'leaderboard.error.generic',
+      'leaderboard.error.response',
       'nav.leaderboard',
       'heading.leaderboardTitle',
     ]) {
@@ -324,5 +325,6 @@ test('leaderboard UI strings are translated in every language and Arabic directi
   assert.match(component, /entry\.global_xp/);
   assert.match(component, /entry\.level/);
   assert.match(component, /focusmate:room-progress-updated/);
+  assert.match(component, /key\.startsWith\('leaderboard\.'\) \? key/);
   assert.doesNotMatch(component, /focus_seconds|all_time_seconds|weekly_seconds/);
 });

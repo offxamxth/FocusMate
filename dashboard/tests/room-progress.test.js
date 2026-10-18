@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   claimFocusmateRoomQuest,
   getFocusmateRoomProgress,
-  rerollFocusmateProfileQuest,
+  rerollFocusmateDailyQuest,
   rerollFocusmateRoomQuest,
 } from '../src/room-progress.js';
 import { achievementCatalog } from '../src/achievement-data.js';
@@ -23,8 +23,8 @@ function fakeRpcClient(responses) {
   };
 }
 
-test('cloud room XP, daily quest and profile rerolls use authenticated RPCs with idempotency keys', async () => {
-  const response = { xp_balance: 15, total_xp: 80 };
+test('cloud room XP and daily-token rerolls use authenticated RPCs with idempotency keys', async () => {
+  const response = { xp_balance: 15, total_xp: 80, reroll_tokens: 1 };
   const { client, calls } = fakeRpcClient([
     { data: response, error: null },
     { data: response, error: null },
@@ -36,17 +36,40 @@ test('cloud room XP, daily quest and profile rerolls use authenticated RPCs with
   assert.equal(await getFocusmateRoomProgress(client), response);
   assert.equal(await rerollFocusmateRoomQuest(client, 'room_sessions_1', requestId), response);
   assert.equal(await claimFocusmateRoomQuest(client, 'room_sessions_1', requestId), response);
-  assert.equal(await rerollFocusmateProfileQuest(client, 'focus_15', 'focus_25', requestId), response);
+  assert.equal(await rerollFocusmateDailyQuest(client, 'focus_15', requestId), response);
   assert.deepEqual(calls, [
     ['get_focusmate_room_progress', {}],
     ['reroll_focusmate_room_quest', { p_quest_id: 'room_sessions_1', p_request_id: requestId }],
     ['claim_focusmate_room_quest', { p_quest_id: 'room_sessions_1', p_request_id: requestId }],
-    ['reroll_focusmate_profile_quest', {
+    ['reroll_focusmate_daily_quest', {
       p_quest_id: 'focus_15',
-      p_replacement_id: 'focus_25',
       p_request_id: requestId,
     }],
   ]);
+});
+
+test('daily-token reroll errors are safe and distinguish token balance, cap, and migration failures', async () => {
+  const { client } = fakeRpcClient([
+    { data: null, error: { code: 'P0001', details: 'DAILY_REROLL_INSUFFICIENT_TOKENS', message: 'database detail' } },
+    { data: null, error: { code: 'P0001', details: 'DAILY_REROLL_DAILY_LIMIT', message: 'database detail' } },
+    { data: null, error: { code: 'PGRST202', message: 'Could not find the function in schema cache' } },
+  ]);
+  await assert.rejects(rerollFocusmateDailyQuest(client, 'focus_15', crypto.randomUUID()), (error) => {
+    assert.equal(error.code, 'QUEST_REROLL_INSUFFICIENT_TOKENS');
+    assert.match(error.message, /one reroll token/);
+    assert.doesNotMatch(error.message, /database detail/);
+    return true;
+  });
+  await assert.rejects(rerollFocusmateDailyQuest(client, 'focus_15', crypto.randomUUID()), (error) => {
+    assert.equal(error.code, 'QUEST_REROLL_DAILY_LIMIT');
+    assert.match(error.message, /limit/);
+    return true;
+  });
+  await assert.rejects(rerollFocusmateDailyQuest(client, 'focus_15', crypto.randomUUID()), (error) => {
+    assert.equal(error.code, 'QUEST_REROLL_UNAVAILABLE');
+    assert.match(error.message, /database update/);
+    return true;
+  });
 });
 
 test('room progress errors are explicit and do not expose backend details', async () => {
@@ -71,6 +94,7 @@ test('trusted room progress loads for cloud accounts outside the Focus Room page
   assert.match(appSource, /if \(!account \|\| !profile\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)[\s\S]*?setRoomProgress\(progress\)/);
   assert.match(appSource, /presentProfile = \(value, trustedProgress = roomProgressRef\.current\)/);
   assert.match(appSource, /roomProgressRef\.current = next/);
+  assert.match(appSource, /daily_quests: trustedProgress\?\.daily_quests \|\| null/);
   assert.match(roomSource, /if \(!account \|\| room\?\.status !== 'finished'\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)/);
   assert.doesNotMatch(roomSource, /if \(!account \|\| !pageActive\)/);
   assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance/);
@@ -279,6 +303,15 @@ test('profile quest rerolls keep their independent request type and profile ques
 
 test('room quest UI exposes a known balance, blocks unaffordable rerolls, and locks duplicate clicks', async () => {
   const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const dailyQuestsStart = appSource.indexOf('function DailyQuests(');
+  const roomDailyQuestsStart = appSource.indexOf('function RoomDailyQuests(');
+  const focusRoomPage = appSource.match(
+    /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<FocusRoom/,
+  )?.[0];
+  assert.ok(dailyQuestsStart >= 0 && roomDailyQuestsStart > dailyQuestsStart);
+  const dailyQuestsComponent = appSource.slice(dailyQuestsStart, roomDailyQuestsStart);
+  assert.doesNotMatch(dailyQuestsComponent, /RoomDailyQuests/);
+  assert.match(focusRoomPage || '', /<RoomDailyQuests/);
   assert.match(appSource, /verifiedXpBalance', \{ xp: roomXp \?\? '—' \}/);
   assert.match(appSource, /roomXp !== null && roomXp < 5/);
   assert.match(appSource, /busyRef\.current\) return/);

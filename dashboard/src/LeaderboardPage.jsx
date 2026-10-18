@@ -23,7 +23,10 @@ export default function LeaderboardPage({ account, language }) {
   const [saveError, setSaveError] = useState('');
   const [refreshCount, setRefreshCount] = useState(0);
   const requestGeneration = useRef(0);
-  const t = (key) => translate(language, `leaderboard.${key}`);
+  const t = (key) => translate(
+    language,
+    key.startsWith('leaderboard.') ? key : `leaderboard.${key}`,
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

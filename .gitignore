@@ -32,3 +32,4 @@ dashboard/node_modules/
 dashboard/dist/
 /package-lock.json
 /supabase/.temp/
+/dashboard/supabase/.temp/
