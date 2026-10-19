@@ -15,7 +15,10 @@ import {
 import {
   claimTimerCompletion,
   playSessionCompletionBeep,
+  pauseLocalFocusTimer,
   remainingFocusSeconds,
+  restoreLocalFocusTimer,
+  resumeLocalFocusTimer,
 } from '../src/timer-completion.js';
 
 test('Supabase auth validation and account-local storage identities are bounded', () => {
@@ -296,4 +299,57 @@ test('focus countdown remains anchored to the selected session start time', () =
   assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt + durationSeconds * 1000), 0);
   assert.equal(remainingFocusSeconds(startedAt, durationSeconds, startedAt + 60 * 60 * 1000), 0);
   assert.equal(remainingFocusSeconds(Number.NaN, durationSeconds, startedAt), 0);
+});
+
+test('focus timer state restores legacy running sessions and persisted pauses after refresh', () => {
+  const now = 1_000_000;
+  const options = [15, 25, 45, 60, 90, 120];
+  assert.deepEqual(
+    restoreLocalFocusTimer({ startedAt: now - 61_000, duration: 15 }, options, now),
+    { duration: 15, startedAt: now - 61_000, paused: false, remaining: 839 },
+  );
+  assert.deepEqual(
+    restoreLocalFocusTimer({
+      startedAt: now - 61_000,
+      duration: 15,
+      status: 'paused',
+      remainingSeconds: 420,
+    }, options, now),
+    { duration: 15, startedAt: now - 61_000, paused: true, remaining: 420 },
+  );
+  assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 17 }, options, now), null);
+  assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 15, status: 'unknown' }, options, now), null);
+});
+
+test('pausing freezes the remaining time and resuming anchors a fresh countdown', () => {
+  const startedAt = 1_000_000;
+  const durationSeconds = 900;
+  const pausedAt = startedAt + 125_000;
+  const remaining = pauseLocalFocusTimer(startedAt, durationSeconds, pausedAt);
+  assert.equal(remaining, 775);
+
+  const resumedAt = pausedAt + 300_000;
+  const resumedStart = resumeLocalFocusTimer(durationSeconds, remaining, resumedAt);
+  assert.equal(resumedStart, resumedAt - 125_000);
+  assert.equal(remainingFocusSeconds(resumedStart, durationSeconds, resumedAt), remaining);
+  assert.equal(resumeLocalFocusTimer(durationSeconds, 901, resumedAt), null);
+});
+
+test('timer integration keeps its owner mounted across navigation and stops camera tracks off the Focus Room', async () => {
+  const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const localApiSource = await readFile(new URL('../src/local-api.js', import.meta.url), 'utf8');
+  const timerPanel = source.slice(source.indexOf('function TimerPanel('), source.indexOf('function FocusBuddy('));
+  assert.match(source, /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<FocusRoom/);
+  assert.doesNotMatch(timerPanel, /pageActive|onSessionEnd\(\{\s*completed:\s*false\s*\}\)\s*;\s*return\s*;/);
+  assert.match(source, /if \(page !== 'focus-room' && \(streamRef\.current \|\| stream\)\) stopCamera\(\)/);
+  assert.match(source, /claimTimerCompletion\(completionHandled\)/);
+  assert.match(source, /sessionStorage\.setItem\(timerStorageKey, JSON\.stringify\(\{\s*startedAt,\s*duration,\s*status: 'running'/);
+  assert.match(source, /status: 'paused',\s*remainingSeconds/);
+  assert.match(source, /onSessionPause=\{pauseSession\}/);
+  assert.match(source, /onSessionResume=\{resumeSession\}/);
+  assert.match(source, /sessionRunning && !sessionPaused && profile\.session_preferences\?\.focus_monitoring/);
+  assert.match(localApiSource, /session_paused_at/);
+  assert.match(localApiSource, /ignored_paused_session/);
+  assert.match(localApiSource, /\/api\/webcam\/pause/);
+  assert.match(localApiSource, /\/api\/webcam\/resume/);
 });

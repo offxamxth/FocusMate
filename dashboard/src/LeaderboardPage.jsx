@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Trophy } from 'lucide-react';
-import { translate } from './i18n.js';
+import { translateLeaderboard } from './i18n.js';
 import { supabase } from './lib/supabase.js';
 import {
   getFocusMateLeaderboard,
@@ -23,10 +23,7 @@ export default function LeaderboardPage({ account, language }) {
   const [saveError, setSaveError] = useState('');
   const [refreshCount, setRefreshCount] = useState(0);
   const requestGeneration = useRef(0);
-  const t = (key) => translate(
-    language,
-    key.startsWith('leaderboard.') ? key : `leaderboard.${key}`,
-  );
+  const t = (key) => translateLeaderboard(language, key);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

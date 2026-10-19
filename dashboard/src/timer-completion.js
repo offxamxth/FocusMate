@@ -9,6 +9,44 @@ export function remainingFocusSeconds(startedAt, durationSeconds, now = Date.now
   return Math.max(0, Math.ceil((startedAt + durationSeconds * 1000 - now) / 1000));
 }
 
+export function restoreLocalFocusTimer(saved, durationOptions, now = Date.now()) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return null;
+  const duration = Number(saved.duration);
+  if (!durationOptions.includes(duration) || !Number.isFinite(saved.startedAt)) return null;
+  const durationSeconds = duration * 60;
+  if (saved.status === 'paused') {
+    if (!Number.isInteger(saved.remainingSeconds)
+      || saved.remainingSeconds < 0
+      || saved.remainingSeconds > durationSeconds) return null;
+    return {
+      duration,
+      startedAt: saved.startedAt,
+      paused: true,
+      remaining: saved.remainingSeconds,
+    };
+  }
+  if (saved.status !== undefined && saved.status !== 'running') return null;
+  return {
+    duration,
+    startedAt: saved.startedAt,
+    paused: false,
+    remaining: remainingFocusSeconds(saved.startedAt, durationSeconds, now),
+  };
+}
+
+export function pauseLocalFocusTimer(startedAt, durationSeconds, now = Date.now()) {
+  return remainingFocusSeconds(startedAt, durationSeconds, now);
+}
+
+export function resumeLocalFocusTimer(durationSeconds, remainingSeconds, now = Date.now()) {
+  if (![durationSeconds, remainingSeconds, now].every(Number.isFinite)
+    || durationSeconds < 0
+    || !Number.isInteger(remainingSeconds)
+    || remainingSeconds < 0
+    || remainingSeconds > durationSeconds) return null;
+  return now - (durationSeconds - remainingSeconds) * 1000;
+}
+
 export async function playSessionCompletionBeep(context) {
   if (!context || typeof context.createOscillator !== 'function' || typeof context.createGain !== 'function') {
     return false;

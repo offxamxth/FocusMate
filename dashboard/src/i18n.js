@@ -212,6 +212,7 @@ const translations = {
     'public.about': 'About',
     'public.privacy': 'Privacy',
     'public.contact': 'Contact Us',
+    'public.documentation': 'Documentation',
     'public.language': 'Language',
     'public.skipToContent': 'Skip to content',
   },
@@ -428,6 +429,7 @@ const translations = {
     'public.about': 'Acerca de',
     'public.privacy': 'Privacidad',
     'public.contact': 'Contacto',
+    'public.documentation': 'Documentación',
     'public.language': 'Idioma',
     'public.skipToContent': 'Saltar al contenido',
   },
@@ -644,6 +646,7 @@ const translations = {
     'public.about': 'À propos',
     'public.privacy': 'Confidentialité',
     'public.contact': 'Contact',
+    'public.documentation': 'Documentation',
     'public.language': 'Langue',
     'public.skipToContent': 'Aller au contenu',
   },
@@ -860,6 +863,7 @@ const translations = {
     'public.about': 'حول التطبيق',
     'public.privacy': 'الخصوصية',
     'public.contact': 'اتصل بنا',
+    'public.documentation': 'التوثيق',
     'public.language': 'اللغة',
     'public.skipToContent': 'انتقل إلى المحتوى',
   },
@@ -1076,6 +1080,7 @@ const translations = {
     'public.about': 'परिचय',
     'public.privacy': 'गोपनीयता',
     'public.contact': 'संपर्क करें',
+    'public.documentation': 'दस्तावेज़',
     'public.language': 'भाषा',
     'public.skipToContent': 'मुख्य सामग्री पर जाएँ',
   },
@@ -1087,7 +1092,7 @@ const sharedUiTranslations = {
     'nav.tasks': 'Tasks', 'nav.focus': 'Focus', 'nav.rooms': 'Rooms',
     'nav.profileShort': 'Profile',
     'nav.sessionResults': 'Session results', 'nav.achievements': 'Achievements', 'nav.quests': 'Daily quests',
-    'nav.preferences': 'Session preferences', 'nav.profile': 'Profile & wellbeing', 'nav.contact': 'Contact Us',
+    'nav.preferences': 'Session preferences', 'nav.profile': 'Profile & wellbeing', 'nav.contact': 'Contact Us', 'nav.documentation': 'Documentation',
     'nav.yourSpace': 'Your space', 'nav.habits': 'Build good habits',
     'app.opening': 'Opening your study space', 'app.welcomeBack': 'Welcome back', 'app.level': 'LEVEL',
     'app.toNextLevel': 'to your next level', 'app.progressNotPerfection': 'Progress, not perfection.',
@@ -1140,6 +1145,8 @@ const sharedUiTranslations = {
     'heading.profileText': 'Your name, wellbeing notes, and saved progress stay in your FocusMate profile.',
     'heading.contactEyebrow': 'HELP & SUPPORT', 'heading.contactTitle': 'Need help? We’re here.',
     'heading.contactText': 'Get help with technical problems, report bugs, or share feedback with the FocusMate team.',
+    'heading.documentationEyebrow': 'DOCUMENTATION', 'heading.documentationTitle': 'A guide to FocusMate.',
+    'heading.documentationText': 'Get started, understand your tools, and find help when something is not working.',
     'local.kicker': 'A FRESH START, AT YOUR PACE', 'local.title': 'Make room for your best work.',
     'local.description': 'Sign in with your username, or create a new local profile.',
     'local.username': 'Username', 'local.checking': 'Checking username…',
@@ -1176,7 +1183,7 @@ const sharedUiTranslations = {
     'nav.tasks': 'Tareas', 'nav.focus': 'Enfoque', 'nav.rooms': 'Salas',
     'nav.profileShort': 'Perfil',
     'nav.sessionResults': 'Resultados de sesión', 'nav.achievements': 'Logros', 'nav.quests': 'Misiones diarias',
-    'nav.preferences': 'Preferencias de sesión', 'nav.profile': 'Perfil y bienestar', 'nav.contact': 'Contáctanos',
+    'nav.preferences': 'Preferencias de sesión', 'nav.profile': 'Perfil y bienestar', 'nav.contact': 'Contáctanos', 'nav.documentation': 'Documentación',
     'nav.yourSpace': 'Tu espacio', 'nav.habits': 'Crea buenos hábitos',
     'app.opening': 'Abriendo tu espacio de estudio', 'app.welcomeBack': 'Te damos la bienvenida', 'app.level': 'NIVEL',
     'app.toNextLevel': 'para el siguiente nivel', 'app.progressNotPerfection': 'Progreso, no perfección.',
@@ -1215,6 +1222,8 @@ const sharedUiTranslations = {
     'heading.profileText': 'Tu nombre, notas de bienestar y progreso guardado están en tu perfil de FocusMate.',
     'heading.contactEyebrow': 'AYUDA Y SOPORTE', 'heading.contactTitle': '¿Necesitas ayuda? Aquí estamos.',
     'heading.contactText': 'Obtén ayuda técnica, informa de errores o comparte sugerencias con FocusMate.',
+    'heading.documentationEyebrow': 'DOCUMENTACIÓN', 'heading.documentationTitle': 'Guía de FocusMate.',
+    'heading.documentationText': 'Empieza, conoce tus herramientas y encuentra ayuda si algo no funciona.',
     'local.kicker': 'UN NUEVO COMIENZO A TU RITMO', 'local.title': 'Haz espacio para tu mejor trabajo.',
     'local.description': 'Inicia sesión con tu nombre de usuario o crea un perfil local.',
     'local.username': 'Nombre de usuario', 'local.checking': 'Comprobando nombre de usuario…',
@@ -1251,7 +1260,7 @@ const sharedUiTranslations = {
     'nav.tasks': 'Tâches', 'nav.focus': 'Focus', 'nav.rooms': 'Salles',
     'nav.profileShort': 'Profil',
     'nav.sessionResults': 'Résultats de session', 'nav.achievements': 'Succès', 'nav.quests': 'Défis quotidiens',
-    'nav.preferences': 'Préférences de session', 'nav.profile': 'Profil et bien-être', 'nav.contact': 'Nous contacter',
+    'nav.preferences': 'Préférences de session', 'nav.profile': 'Profil et bien-être', 'nav.contact': 'Nous contacter', 'nav.documentation': 'Documentation',
     'nav.yourSpace': 'Votre espace', 'nav.habits': 'Créer de bonnes habitudes',
     'app.opening': 'Ouverture de votre espace d’étude', 'app.welcomeBack': 'Ravi de vous revoir', 'app.level': 'NIVEAU',
     'app.toNextLevel': 'avant le niveau suivant', 'app.progressNotPerfection': 'Du progrès, pas la perfection.',
@@ -1290,6 +1299,8 @@ const sharedUiTranslations = {
     'heading.profileText': 'Votre nom, vos notes de bien-être et votre progression sont enregistrés dans votre profil.',
     'heading.contactEyebrow': 'AIDE ET ASSISTANCE', 'heading.contactTitle': 'Besoin d’aide ? Nous sommes là.',
     'heading.contactText': 'Obtenez de l’aide, signalez un bug ou partagez vos idées avec FocusMate.',
+    'heading.documentationEyebrow': 'DOCUMENTATION', 'heading.documentationTitle': 'Guide de FocusMate.',
+    'heading.documentationText': 'Démarrez, découvrez vos outils et trouvez de l’aide en cas de problème.',
     'local.kicker': 'UN NOUVEAU DÉPART À VOTRE RYTHME', 'local.title': 'Faites place à votre meilleur travail.',
     'local.description': 'Connectez-vous avec votre nom d’utilisateur ou créez un profil local.',
     'local.username': 'Nom d’utilisateur', 'local.checking': 'Vérification du nom d’utilisateur…',
@@ -1326,7 +1337,7 @@ const sharedUiTranslations = {
     'nav.tasks': 'المهام', 'nav.focus': 'التركيز', 'nav.rooms': 'الغرف',
     'nav.profileShort': 'الملف',
     'nav.sessionResults': 'نتائج الجلسة', 'nav.achievements': 'الإنجازات', 'nav.quests': 'المهام اليومية',
-    'nav.preferences': 'تفضيلات الجلسة', 'nav.profile': 'الملف والرفاهية', 'nav.contact': 'تواصل معنا',
+    'nav.preferences': 'تفضيلات الجلسة', 'nav.profile': 'الملف والرفاهية', 'nav.contact': 'تواصل معنا', 'nav.documentation': 'التوثيق',
     'nav.yourSpace': 'مساحتك', 'nav.habits': 'ابنِ عادات جيدة',
     'app.opening': 'جارٍ فتح مساحة دراستك', 'app.welcomeBack': 'مرحبًا بعودتك', 'app.level': 'المستوى',
     'app.toNextLevel': 'للوصول إلى المستوى التالي', 'app.progressNotPerfection': 'تقدّم لا كمال.',
@@ -1365,6 +1376,8 @@ const sharedUiTranslations = {
     'heading.profileText': 'اسمك وملاحظاتك وتقدمك المحفوظ ضمن ملف FocusMate.',
     'heading.contactEyebrow': 'المساعدة والدعم', 'heading.contactTitle': 'هل تحتاج إلى مساعدة؟ نحن هنا.',
     'heading.contactText': 'احصل على المساعدة أو أبلغ عن خطأ أو شارك اقتراحاتك مع FocusMate.',
+    'heading.documentationEyebrow': 'التوثيق', 'heading.documentationTitle': 'دليل FocusMate.',
+    'heading.documentationText': 'ابدأ باستخدام التطبيق، وتعرّف على أدواتك، واعثر على المساعدة عند الحاجة.',
     'local.kicker': 'بداية جديدة على مهل', 'local.title': 'اترك مساحة لأفضل ما لديك.',
     'local.description': 'سجّل الدخول باسم المستخدم أو أنشئ ملفًا محليًا.',
     'local.username': 'اسم المستخدم', 'local.checking': 'جارٍ التحقق من اسم المستخدم…',
@@ -1401,7 +1414,7 @@ const sharedUiTranslations = {
     'nav.tasks': 'कार्य', 'nav.focus': 'ध्यान', 'nav.rooms': 'रूम',
     'nav.profileShort': 'प्रोफ़ाइल',
     'nav.sessionResults': 'सत्र के नतीजे', 'nav.achievements': 'उपलब्धियाँ', 'nav.quests': 'दैनिक चुनौतियाँ',
-    'nav.preferences': 'सत्र प्राथमिकताएँ', 'nav.profile': 'प्रोफ़ाइल और कुशलता', 'nav.contact': 'संपर्क करें',
+    'nav.preferences': 'सत्र प्राथमिकताएँ', 'nav.profile': 'प्रोफ़ाइल और कुशलता', 'nav.contact': 'संपर्क करें', 'nav.documentation': 'दस्तावेज़',
     'nav.yourSpace': 'आपकी जगह', 'nav.habits': 'अच्छी आदतें बनाएँ',
     'app.opening': 'आपकी अध्ययन जगह खुल रही है', 'app.welcomeBack': 'वापसी पर स्वागत है', 'app.level': 'स्तर',
     'app.toNextLevel': 'अगले स्तर तक', 'app.progressNotPerfection': 'पूर्णता नहीं, प्रगति।',
@@ -1440,6 +1453,8 @@ const sharedUiTranslations = {
     'heading.profileText': 'आपका नाम, कुशलता नोट और सहेजी प्रगति FocusMate प्रोफ़ाइल में रहती है।',
     'heading.contactEyebrow': 'मदद और सहायता', 'heading.contactTitle': 'मदद चाहिए? हम यहाँ हैं।',
     'heading.contactText': 'तकनीकी मदद पाएँ, बग बताएँ या FocusMate टीम को सुझाव दें।',
+    'heading.documentationEyebrow': 'दस्तावेज़', 'heading.documentationTitle': 'FocusMate मार्गदर्शिका।',
+    'heading.documentationText': 'शुरुआत करें, अपने टूल समझें और समस्या आने पर मदद पाएँ।',
     'local.kicker': 'अपनी गति से नई शुरुआत', 'local.title': 'अपने बेहतर काम के लिए जगह बनाएँ।',
     'local.description': 'उपयोगकर्ता नाम से साइन इन करें या नई स्थानीय प्रोफ़ाइल बनाएँ।',
     'local.username': 'उपयोगकर्ता नाम', 'local.checking': 'उपयोगकर्ता नाम जाँचा जा रहा है…',
@@ -3122,6 +3137,7 @@ const leaderboardTranslations = {
     'leaderboard.error.request': 'The leaderboard request was invalid. Refresh and try again.',
     'leaderboard.error.forbidden': 'You are not allowed to view this leaderboard.',
     'leaderboard.error.response': 'The leaderboard returned an invalid response. Refresh and try again.',
+    'leaderboard.error.updateRequired': 'The leaderboard service needs a database update. Contact support if the problem continues.',
     'leaderboard.error.network': 'Network error. Check your connection and try again.',
     'leaderboard.error.generic': 'The leaderboard could not be loaded. Try again.',
   },
@@ -3168,6 +3184,7 @@ const leaderboardTranslations = {
     'leaderboard.error.request': 'La solicitud de clasificación no es válida. Actualiza e inténtalo de nuevo.',
     'leaderboard.error.forbidden': 'No tienes permiso para ver esta clasificación.',
     'leaderboard.error.response': 'La clasificación devolvió una respuesta no válida. Actualiza e inténtalo de nuevo.',
+    'leaderboard.error.updateRequired': 'El servicio de clasificación necesita una actualización de la base de datos. Contacta con soporte si el problema continúa.',
     'leaderboard.error.network': 'Error de red. Comprueba tu conexión e inténtalo de nuevo.',
     'leaderboard.error.generic': 'No se pudo cargar la clasificación. Inténtalo de nuevo.',
   },
@@ -3214,6 +3231,7 @@ const leaderboardTranslations = {
     'leaderboard.error.request': 'La demande de classement est invalide. Actualisez et réessayez.',
     'leaderboard.error.forbidden': 'Vous n’êtes pas autorisé à consulter ce classement.',
     'leaderboard.error.response': 'Le classement a renvoyé une réponse invalide. Actualisez et réessayez.',
+    'leaderboard.error.updateRequired': 'Le service de classement nécessite une mise à jour de la base de données. Contactez l’assistance si le problème persiste.',
     'leaderboard.error.network': 'Erreur réseau. Vérifiez votre connexion puis réessayez.',
     'leaderboard.error.generic': 'Impossible de charger le classement. Réessayez.',
   },
@@ -3260,6 +3278,7 @@ const leaderboardTranslations = {
     'leaderboard.error.request': 'طلب لوحة المتصدرين غير صالح. حدّث الصفحة وحاول مجددًا.',
     'leaderboard.error.forbidden': 'لا يُسمح لك بعرض لوحة المتصدرين هذه.',
     'leaderboard.error.response': 'أعادت لوحة المتصدرين استجابة غير صالحة. حدّث الصفحة وحاول مجددًا.',
+    'leaderboard.error.updateRequired': 'تحتاج خدمة لوحة المتصدرين إلى تحديث قاعدة البيانات. تواصل مع الدعم إذا استمرت المشكلة.',
     'leaderboard.error.network': 'خطأ في الشبكة. تحقق من اتصالك ثم حاول مجددًا.',
     'leaderboard.error.generic': 'تعذّر تحميل لوحة المتصدرين. حاول مجددًا.',
   },
@@ -3306,6 +3325,7 @@ const leaderboardTranslations = {
     'leaderboard.error.request': 'लीडरबोर्ड अनुरोध मान्य नहीं है। रीफ़्रेश करके फिर कोशिश करें।',
     'leaderboard.error.forbidden': 'आपको यह लीडरबोर्ड देखने की अनुमति नहीं है।',
     'leaderboard.error.response': 'लीडरबोर्ड से अमान्य जवाब मिला। रीफ़्रेश करके फिर कोशिश करें।',
+    'leaderboard.error.updateRequired': 'लीडरबोर्ड सेवा को डेटाबेस अपडेट की आवश्यकता है। समस्या बनी रहे तो सहायता से संपर्क करें।',
     'leaderboard.error.network': 'नेटवर्क त्रुटि। कनेक्शन जाँचकर फिर कोशिश करें।',
     'leaderboard.error.generic': 'लीडरबोर्ड लोड नहीं हो सका। फिर कोशिश करें।',
   },
@@ -4027,6 +4047,19 @@ export function browserLanguage(languages = navigator.languages || [navigator.la
 export function translate(language, key, values = {}) {
   const template = translations[language]?.[key] || translations.en[key] || key;
   return template.replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ''));
+}
+
+export function translateLeaderboard(language, key) {
+  let normalizedKey = key;
+  while (normalizedKey.startsWith('leaderboard.leaderboard.')) {
+    normalizedKey = normalizedKey.slice('leaderboard.'.length);
+  }
+  return translate(
+    language,
+    normalizedKey.startsWith('leaderboard.')
+      ? normalizedKey
+      : `leaderboard.${normalizedKey}`,
+  );
 }
 
 export function translateAchievement(language, id, part, fallback) {

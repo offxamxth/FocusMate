@@ -16,11 +16,13 @@ const knownPages = new Set([
   'session-preferences',
   'profile',
   'contact',
+  'documentation',
 ]);
 
 const publicPaths = new Map([
   ['/about', 'about'],
   ['/contact', 'contact'],
+  ['/documentation.html', 'documentation'],
   ['/privacy', 'privacy'],
 ]);
 

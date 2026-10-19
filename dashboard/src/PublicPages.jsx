@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import ContactPage from './ContactPage.jsx';
+import DocumentationPage from './DocumentationPage.jsx';
 import {
   browserLanguage,
   supportedLanguages,
@@ -21,6 +22,11 @@ export const PUBLIC_PAGE_METADATA = {
     title: 'Contact FocusMate | Help and Support',
     description: 'Contact FocusMate support, report an issue, share feedback, or find answers in the frequently asked questions.',
     url: `${siteUrl}/contact`,
+  },
+  documentation: {
+    title: 'FocusMate Documentation | Getting Started and Help',
+    description: 'Getting-started instructions, feature guides, privacy notes, troubleshooting, and verified FocusMate update history.',
+    url: `${siteUrl}/documentation.html`,
   },
   privacy: {
     title: 'Privacy Policy | FocusMate',
@@ -172,6 +178,7 @@ function PublicHeader({ language, onLanguageChange }) {
       </a>
       <nav className="public-nav" aria-label={t('navigation')}>
         <a href="/about">{t('about')}</a>
+        <a href="/documentation.html">{t('documentation')}</a>
         <a href="/privacy">{t('privacy')}</a>
         <a href="/contact">{t('contact')}</a>
       </nav>
@@ -296,12 +303,14 @@ export default function PublicPages({ page, metadata }) {
       <PublicHeader language={language} onLanguageChange={changeLanguage} />
       <main id="main-content" className={page === 'contact' ? 'public-main public-main-contact' : 'public-main'}>
         {page === 'about' && <AboutContent />}
+        {page === 'documentation' && <DocumentationPage publicPage />}
         {page === 'privacy' && <PrivacyContent />}
         {page === 'contact' && <div className="public-content"><ContactPage language={language} /></div>}
         {page === 'not-found' && <NotFoundContent />}
       </main>
       <footer className="public-footer">
         <a href="/about">{translate(language, 'public.about')}</a>
+        <a href="/documentation.html">{translate(language, 'public.documentation')}</a>
         <a href="/privacy">{translate(language, 'public.privacy')}</a>
         <a href="/contact">{translate(language, 'public.contact')}</a>
         <span>© FocusMate</span>

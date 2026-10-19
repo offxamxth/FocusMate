@@ -315,18 +315,22 @@ function finishCameraSession(username) {
   if (!live.session_active) throw new Error('There is no active camera session to stop.');
   if (!runtime) throw new Error('This camera session was interrupted and cannot be completed after reloading.');
   const now = Date.now();
-  const elapsed = Math.max(0, (now - runtime.startedAt) / 1000);
+  const pausedAt = live.session_paused_at ? Date.parse(live.session_paused_at) : now;
+  if (!Number.isFinite(pausedAt)) throw new Error('The saved focus-session pause state is invalid.');
+  const sessionEndedAt = Math.min(now, pausedAt);
+  const elapsed = Math.max(0, (sessionEndedAt - runtime.startedAt) / 1000);
   const sessionSeconds = runtime.durationSeconds
     ? Math.min(elapsed, runtime.durationSeconds)
     : elapsed;
   const profile = readProfile(username);
   live.session_active = false;
   live.session_completed = true;
+  delete live.session_paused_at;
   live.session_seconds = Math.round(sessionSeconds);
   live.session_minutes = Math.round(sessionSeconds / 60 * 100) / 100;
   live.last_updated = new Date(now).toISOString();
   for (const [key, startedAt] of Object.entries(runtime.signalStarts)) {
-    if (startedAt && (now - startedAt) / 1000 >= 2) {
+    if (startedAt && (sessionEndedAt - startedAt) / 1000 >= 2) {
       runtime.counts[key] += 1;
     }
   }
@@ -385,6 +389,40 @@ function finishCameraSession(username) {
   writeLive(username, live);
   cameraSessions.delete(username);
   return { ok: true, message: 'Session ended. Your progress has been saved.', live };
+}
+
+function pauseCameraSession(username) {
+  const runtime = cameraSessions.get(username);
+  const live = readLive(username);
+  if (!live.session_active || !runtime) throw new Error('There is no active focus session to pause.');
+  if (live.session_paused_at) return { ok: true, live };
+
+  const now = Date.now();
+  for (const [key, startedAt] of Object.entries(runtime.signalStarts)) {
+    if (startedAt && (now - startedAt) / 1000 >= 2) runtime.counts[key] += 1;
+    runtime.signalStarts[key] = 0;
+  }
+  live.session_paused_at = new Date(now).toISOString();
+  live.session_seconds = Math.round(Math.max(0, (now - runtime.startedAt) / 1000));
+  live.status = 'Focus session paused';
+  return { ok: true, live: writeLive(username, live) };
+}
+
+function resumeCameraSession(username) {
+  const runtime = cameraSessions.get(username);
+  const live = readLive(username);
+  if (!live.session_active || !runtime) throw new Error('There is no active focus session to resume.');
+  if (!live.session_paused_at) return { ok: true, live };
+
+  const pausedAt = Date.parse(live.session_paused_at);
+  if (!Number.isFinite(pausedAt)) throw new Error('The saved focus-session pause state is invalid.');
+  const now = Date.now();
+  runtime.startedAt += Math.max(0, now - pausedAt);
+  runtime.lastFrameAt = now;
+  delete live.session_paused_at;
+  live.status = 'Waiting for camera signals';
+  live.session_seconds = Math.round(Math.max(0, (now - runtime.startedAt) / 1000));
+  return { ok: true, live: writeLive(username, live) };
 }
 
 function updateCameraSessionConfiguration(username, submittedConfiguration) {
@@ -468,12 +506,16 @@ function updateCameraSessionConfiguration(username, submittedConfiguration) {
 function applyTelemetry(username, metrics) {
   const runtime = cameraSessions.get(username);
   if (!runtime) throw new Error('The camera session is no longer active.');
+  const currentLive = readLive(username);
+  if (currentLive.session_paused_at) {
+    return { ok: true, ignored_paused_session: true, live: currentLive };
+  }
   if (metrics.detection_configuration_version !== undefined
     && metrics.detection_configuration_version !== runtime.configurationVersion) {
     return {
       ok: true,
       ignored_stale_configuration: true,
-      live: readLive(username),
+      live: currentLive,
     };
   }
   const now = Date.now();
@@ -512,7 +554,7 @@ function applyTelemetry(username, metrics) {
   const sessionSeconds = runtime.durationSeconds
     ? Math.min(elapsedSeconds, runtime.durationSeconds)
     : elapsedSeconds;
-  const live = readLive(username);
+  const live = currentLive;
   Object.assign(live, {
     session_active: true,
     session_seconds: Math.round(sessionSeconds),
@@ -689,6 +731,8 @@ export async function api(path, options = {}) {
   if (url.pathname === '/api/webcam/configuration' && method === 'POST') {
     return updateCameraSessionConfiguration(username, body.session_configuration);
   }
+  if (url.pathname === '/api/webcam/pause' && method === 'POST') return pauseCameraSession(username);
+  if (url.pathname === '/api/webcam/resume' && method === 'POST') return resumeCameraSession(username);
   if (url.pathname === '/api/camera/telemetry' && method === 'POST') return applyTelemetry(username, body);
   if (url.pathname === '/api/webcam/stop' && method === 'POST') return finishCameraSession(username);
   throw new Error('This feature is not available in the browser-only deployment.');

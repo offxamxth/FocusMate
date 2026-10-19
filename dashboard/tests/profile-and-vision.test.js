@@ -190,6 +190,64 @@ test('a timer-controlled session keeps its original deadline and can complete on
   }
 });
 
+test('paused focus sessions exclude paused time across reload and complete only once', async () => {
+  values.clear();
+  await post('/api/login', { username: 'pausedtimer', name: 'Paused Timer' });
+  const originalNow = Date.now;
+  let now = 3_000_000;
+  Date.now = () => now;
+  try {
+    await post('/api/webcam/start?username=pausedtimer', {
+      session_only: true,
+      subject: 'Coding',
+      goal: 'Pause safely',
+      mood: 'Focused',
+      session_started_at: new Date(now).toISOString(),
+      session_duration_seconds: 60,
+    });
+    now += 20_000;
+    const paused = await post('/api/webcam/pause?username=pausedtimer', {});
+    assert.equal(paused.live.session_active, true);
+    assert.equal(paused.live.session_seconds, 20);
+    assert.ok(paused.live.session_paused_at);
+
+    const ignoredTelemetry = await post('/api/camera/telemetry?username=pausedtimer', {
+      posture: 'Slouching',
+      pose_detected: true,
+    });
+    assert.equal(ignoredTelemetry.ignored_paused_session, true);
+
+    now += 300_000;
+    const reloadedApi = await import(`../src/local-api.js?paused-timer-reload=${Date.now()}`);
+    const restored = await reloadedApi.api('/api/state?username=pausedtimer');
+    assert.equal(restored.live.session_active, true);
+    assert.ok(restored.live.session_paused_at);
+
+    await reloadedApi.api('/api/webcam/resume?username=pausedtimer', {
+      method: 'POST',
+      body: '{}',
+    });
+    now += 40_000;
+    const completed = await reloadedApi.api('/api/webcam/stop?username=pausedtimer', {
+      method: 'POST',
+      body: '{}',
+    });
+    assert.equal(completed.live.session_seconds, 60);
+    assert.equal(completed.live.session_completed, true);
+    assert.equal(completed.live.session_paused_at, undefined);
+
+    const saved = await reloadedApi.api('/api/state?username=pausedtimer');
+    assert.equal(saved.profile.session_history.length, 1);
+    assert.equal(saved.profile.sessions_completed, 1);
+    await assert.rejects(
+      reloadedApi.api('/api/webcam/stop?username=pausedtimer', { method: 'POST', body: '{}' }),
+      /no active camera session/,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('camera session accounting uses the shared focus timer start timestamp', async () => {
   values.clear();
   await post('/api/login', { username: 'sharedstart', name: 'Shared Start' });

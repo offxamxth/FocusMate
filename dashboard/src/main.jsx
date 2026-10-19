@@ -5,8 +5,11 @@ import { achievementCatalog, achievementProgress } from './achievement-data.js';
 import AuthGate from './AuthGate.jsx';
 import {
   claimTimerCompletion,
+  pauseLocalFocusTimer,
   playSessionCompletionBeep,
   remainingFocusSeconds,
+  restoreLocalFocusTimer,
+  resumeLocalFocusTimer,
 } from './timer-completion.js';
 import {
   supabase,
@@ -33,6 +36,7 @@ import {
   rerollFocusmateRoomQuest,
 } from './room-progress.js';
 import ContactPage from './ContactPage.jsx';
+import DocumentationPage from './DocumentationPage.jsx';
 import PublicPages, { PUBLIC_PAGE_METADATA } from './PublicPages.jsx';
 import PwaControls from './PwaControls.jsx';
 import { pwaSurfaceForApp } from './pwa-presentation.js';
@@ -90,6 +94,7 @@ const pages = [
   { id: 'session-preferences', label: 'nav.preferences', group: 'nav.habits', icon: Settings2 },
   { id: 'profile', label: 'nav.profile', group: 'nav.habits', icon: UserRound },
   { id: 'contact', label: 'nav.contact', group: 'nav.habits', icon: CircleHelp },
+  { id: 'documentation', label: 'nav.documentation', group: 'nav.habits', icon: BookOpen },
 ];
 
 const mobileDestinations = [
@@ -824,6 +829,10 @@ function FocusMateApp({
     setCameraError('');
   };
 
+  useEffect(() => {
+    if (page !== 'focus-room' && (streamRef.current || stream)) stopCamera();
+  }, [page]);
+
   const endFocusSession = async () => {
     stopCamera();
     if (!cameraBackendActiveRef.current && !live.session_active) return;
@@ -982,7 +991,7 @@ function FocusMateApp({
               onClaim={claimRoomQuest}
             />
           )}
-          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onBeginSession={beginFocusSession} onStopSession={endFocusSession} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} pageActive={page === 'focus-room'} language={language} />
+          <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onBeginSession={beginFocusSession} onStopSession={endFocusSession} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
@@ -991,6 +1000,7 @@ function FocusMateApp({
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
+        {page === 'documentation' && <DocumentationPage />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
       <FocusBuddy key={username} username={username} profile={profile} live={live} language={language} />
@@ -1121,6 +1131,7 @@ function PageHeading({ page, profile, language }) {
     'session-preferences': ['heading.preferencesEyebrow', 'heading.preferencesTitle', 'heading.preferencesText'],
     profile: ['heading.profileEyebrow', 'heading.profileTitle', 'heading.profileText'],
     contact: ['heading.contactEyebrow', 'heading.contactTitle', 'heading.contactText'],
+    documentation: ['heading.documentationEyebrow', 'heading.documentationTitle', 'heading.documentationText'],
   }[page.id];
   if (page.id === 'overview') return null;
   return <header className="page-heading"><span className="eyebrow">{translate(language, content[0])}</span><h1>{translate(language, content[1], { name: profile.player_name || 'friend' })}</h1><p>{translate(language, content[2])}</p></header>;
@@ -1565,8 +1576,10 @@ function TimerPanel({
   language,
   onSessionStart,
   onSessionEnd,
+  onSessionPause,
+  onSessionResume,
   onSessionStateChange,
-  pageActive,
+  onSessionPauseStateChange,
   canStart,
 }) {
   const durationOptions = [15, 25, 45, 60, 90, 120];
@@ -1582,6 +1595,8 @@ function TimerPanel({
   const [duration, setDuration] = useState(defaultDuration);
   const [remaining, setRemaining] = useState(defaultDuration * 60);
   const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [endedEarly, setEndedEarly] = useState(false);
   const [reloadInterrupted, setReloadInterrupted] = useState(false);
@@ -1591,23 +1606,26 @@ function TimerPanel({
   const completionHandled = useRef(false);
   const activeRoomSession = useRef('');
   const chimeContext = useRef(null);
-  const endLocalSessionRef = useRef(null);
   const timerStorageKey = `focusmate-active-timer:${username}`;
   useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
   useEffect(() => {
     const saved = sessionStorage.getItem(timerStorageKey);
     if (!saved) return;
     try {
-      const state = JSON.parse(saved);
-      const savedDuration = Number(state.duration);
-      if (!Number.isFinite(state.startedAt) || !durationOptions.includes(savedDuration)) throw new Error('Invalid saved timer');
+      const state = restoreLocalFocusTimer(
+        JSON.parse(saved),
+        durationOptions,
+      );
+      if (!state) throw new Error('Invalid saved timer');
       startedAtRef.current = state.startedAt;
       localSessionActiveRef.current = true;
       completionHandled.current = false;
-      setDuration(savedDuration);
-      setRemaining(remainingFocusSeconds(state.startedAt, savedDuration * 60));
-      setRunning(true);
+      setDuration(state.duration);
+      setRemaining(state.remaining);
+      setPaused(state.paused);
+      setRunning(!state.paused);
       onSessionStateChange(true);
+      onSessionPauseStateChange(state.paused);
       return;
     } catch {
       sessionStorage.removeItem(timerStorageKey);
@@ -1630,20 +1648,23 @@ function TimerPanel({
   };
   const endLocalSession = (wasCompleted) => {
     if (!localSessionActiveRef.current || !claimTimerCompletion(completionHandled)) return;
+    const remainingAtEnd = paused
+      ? remaining
+      : remainingFocusSeconds(startedAtRef.current, duration * 60);
     const completedByDeadline = wasCompleted
-      || remainingFocusSeconds(startedAtRef.current, duration * 60) === 0;
+      || remainingAtEnd === 0;
     localSessionActiveRef.current = false;
     setRunning(false);
+    setPaused(false);
+    onSessionPauseStateChange(false);
     setCompleted(completedByDeadline);
     setEndedEarly(!completedByDeadline);
-    setRemaining(completedByDeadline ? 0 : remainingFocusSeconds(startedAtRef.current, duration * 60));
+    setRemaining(completedByDeadline ? 0 : remainingAtEnd);
     sessionStorage.removeItem(timerStorageKey);
     onSessionStateChange(false);
     onSessionEnd({ completed: completedByDeadline });
     if (completedByDeadline) void playSessionCompletionBeep(chimeContext.current);
   };
-  endLocalSessionRef.current = endLocalSession;
-  useEffect(() => () => endLocalSessionRef.current(false), []);
   useEffect(() => () => { chimeContext.current?.close(); }, []);
   useEffect(() => {
     reportPwaSessionActivity('timer', running);
@@ -1719,18 +1740,16 @@ function TimerPanel({
       if (roomFinished) void playSessionCompletionBeep(chimeContext.current);
       return;
     }
-    if (remaining !== 0 || !running || !localSessionActiveRef.current) return;
+    if (remaining !== 0 || (!running && !paused) || !localSessionActiveRef.current) return;
     endLocalSession(true);
-  }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, profile.tasks, remaining, roomSessionId, roomTimer, running, timerStorageKey, username]);
-  useEffect(() => {
-    if (!pageActive && localSessionActiveRef.current) endLocalSession(false);
-  }, [pageActive, running]);
+  }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, paused, profile.tasks, remaining, roomSessionId, roomTimer, running, timerStorageKey, username]);
   const chooseDuration = (value) => {
     if (running || !durationOptions.includes(value)) return;
     completionHandled.current = false;
     setCompleted(false);
     setEndedEarly(false);
     setReloadInterrupted(false);
+    setPaused(false);
     setDuration(value);
     setRemaining(value * 60);
   };
@@ -1741,9 +1760,15 @@ function TimerPanel({
     localSessionActiveRef.current = true;
     completionHandled.current = false;
     setCompleted(false);
+    setPaused(false);
+    onSessionPauseStateChange(false);
     setReloadInterrupted(false);
     setRemaining(duration * 60);
-    sessionStorage.setItem(timerStorageKey, JSON.stringify({ startedAt, duration }));
+    sessionStorage.setItem(timerStorageKey, JSON.stringify({
+      startedAt,
+      duration,
+      status: 'running',
+    }));
     setRunning(true);
     onSessionStateChange(true);
     onSessionStart({ duration, startedAt });
@@ -1763,11 +1788,71 @@ function TimerPanel({
     }).catch(() => {});
   };
   const reset = () => {
-    if (roomTimer || running) return;
+    if (roomTimer || running || paused || localSessionActiveRef.current) return;
     completionHandled.current = false;
     setCompleted(false);
     setEndedEarly(false);
     setRemaining(duration * 60);
+  };
+  const pause = async () => {
+    if (roomTimer || paused || !localSessionActiveRef.current) return;
+    const remainingSeconds = pauseLocalFocusTimer(
+      startedAtRef.current,
+      duration * 60,
+    );
+    if (remainingSeconds === 0) {
+      endLocalSession(true);
+      return;
+    }
+    setTransitioning(true);
+    try {
+      await onSessionPause();
+    } catch (error) {
+      onNotice(`Your focus timer could not be paused: ${error.message}`);
+      return;
+    } finally {
+      setTransitioning(false);
+    }
+    setRemaining(remainingSeconds);
+    setRunning(false);
+    setPaused(true);
+    onSessionPauseStateChange(true);
+    sessionStorage.setItem(timerStorageKey, JSON.stringify({
+      startedAt: startedAtRef.current,
+      duration,
+      status: 'paused',
+      remainingSeconds,
+    }));
+  };
+  const resume = async () => {
+    if (roomTimer || !paused || !localSessionActiveRef.current) return;
+    if (remaining === 0) {
+      endLocalSession(true);
+      return;
+    }
+    setTransitioning(true);
+    try {
+      await onSessionResume();
+    } catch (error) {
+      onNotice(`Your focus timer could not be resumed: ${error.message}`);
+      return;
+    } finally {
+      setTransitioning(false);
+    }
+    const startedAt = resumeLocalFocusTimer(
+      duration * 60,
+      remaining,
+    );
+    if (startedAt === null) return;
+    startedAtRef.current = startedAt;
+    setPaused(false);
+    setRunning(true);
+    onSessionPauseStateChange(false);
+    sessionStorage.setItem(timerStorageKey, JSON.stringify({
+      startedAt,
+      duration,
+      status: 'running',
+    }));
   };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
   const seconds = String(remaining % 60).padStart(2, '0');
@@ -1776,7 +1861,7 @@ function TimerPanel({
     <div className="timer-top">
       <span className="eyebrow">{t('timerEyebrow')}</span>
       <label className="select-wrap">
-        <select value={duration} disabled={running || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>
+        <select value={duration} disabled={running || paused || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>
           {durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}
         </select>
         <ChevronDown size={15} />
@@ -1792,15 +1877,29 @@ function TimerPanel({
     {reloadInterrupted && <p className="timer-reload-note" role="status">{t('sessionReloadInterrupted')}</p>}
     <div className="timer-actions">
       {running ? (
-        <button className="outline-button" disabled={Boolean(roomTimer)} onClick={() => endLocalSession(false)}>
-          <VideoOff size={16} /> {t('endSession')}
-        </button>
+        <>
+          <button className="outline-button" disabled={Boolean(roomTimer) || transitioning} onClick={pause}>
+            <Coffee size={16} /> {t('pause')}
+          </button>
+          <button className="outline-button" disabled={Boolean(roomTimer) || transitioning} onClick={() => endLocalSession(false)}>
+            <VideoOff size={16} /> {t('endSession')}
+          </button>
+        </>
+      ) : paused ? (
+        <>
+          <button className="primary-button" disabled={transitioning} onClick={resume}>
+            <Play size={17} /> {t('resume')}
+          </button>
+          <button className="outline-button" disabled={transitioning} onClick={() => endLocalSession(false)}>
+            <VideoOff size={16} /> {t('endSession')}
+          </button>
+        </>
       ) : (
         <button className="primary-button" disabled={Boolean(roomTimer) || remaining === 0 || completed || endedEarly || !canStart} onClick={start}>
           <Play size={17} /> {t('startFocus')}
         </button>
       )}
-      <button className="outline-button" disabled={Boolean(roomTimer) || running} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
+      <button className="outline-button" disabled={Boolean(roomTimer) || running || paused || transitioning} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
     </div>
     <small className="muted-note">{t('timerNote')}</small>
   </section>;
@@ -1994,13 +2093,13 @@ function FocusRoom({
   username,
   cameraState,
   cameraError,
-  pageActive,
   language,
 }) {
   const [subject, setSubject] = useState('Mathematics');
   const [goal, setGoal] = useState('');
   const [mood, setMood] = useState('');
   const [sessionRunning, setSessionRunning] = useState(false);
+  const [sessionPaused, setSessionPaused] = useState(false);
   const sessionLifecyclePromiseRef = useRef(Promise.resolve());
   const sessionConfiguration = normalizeDetectionConfiguration(
     live.session_active && live.session_configuration
@@ -2028,6 +2127,27 @@ function FocusRoom({
       })
       .catch((error) => onNotice(`Your focus session could not be completed: ${error.message}`));
   };
+  const pauseSession = async () => {
+    const started = await sessionLifecyclePromiseRef.current;
+    if (started || live.session_active) {
+      const data = await api(`/api/webcam/pause?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        body: '{}',
+      });
+      setLive(data.live || {});
+    }
+    onStopCamera();
+  };
+  const resumeSession = async () => {
+    const started = await sessionLifecyclePromiseRef.current;
+    if (started || live.session_active) {
+      const data = await api(`/api/webcam/resume?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        body: '{}',
+      });
+      setLive(data.live || {});
+    }
+  };
   const canStart = Boolean(goal.trim()) && Boolean(mood);
   return <div className="page-content">
     <div className="focus-grid">
@@ -2038,8 +2158,10 @@ function FocusRoom({
         language={language}
         onSessionStart={startSession}
         onSessionEnd={endSession}
+        onSessionPause={pauseSession}
+        onSessionResume={resumeSession}
         onSessionStateChange={setSessionRunning}
-        pageActive={pageActive}
+        onSessionPauseStateChange={setSessionPaused}
         canStart={canStart}
       />
       <section className="session-panel surface-panel">
@@ -2065,6 +2187,13 @@ function FocusRoom({
             <Video size={25} />
             <span>{t('cameraPreview')}</span>
             <small>{t('cameraLocal')}</small>
+            {sessionRunning && !sessionPaused && profile.session_preferences?.focus_monitoring && (
+              <button
+                className="outline-button"
+                type="button"
+                onClick={() => onStartCamera({ session_configuration: sessionConfiguration })}
+              ><Video size={16} /> {t('enableCamera')}</button>
+            )}
           </div>
         )}
         {!sessionRunning && (

@@ -14,6 +14,7 @@ test('public pages have distinct indexable metadata and matching canonical URLs'
   const pages = [
     ['about.html', 'https://getfocusmate.vercel.app/about'],
     ['contact.html', 'https://getfocusmate.vercel.app/contact'],
+    ['documentation.html', 'https://getfocusmate.vercel.app/documentation.html'],
     ['privacy.html', 'https://getfocusmate.vercel.app/privacy'],
   ];
   const titles = new Set();
@@ -43,7 +44,7 @@ test('Vercel clean routes map to the static pages and stay outside the SPA fallb
 
   const viteConfig = await readDashboardFile('vite.config.js');
   assert.match(viteConfig, /navigateFallbackDenylist:[\s\S]*about\|contact\|privacy/);
-  assert.match(viteConfig, /globIgnores:[\s\S]*about\.html[\s\S]*contact\.html[\s\S]*privacy\.html/);
+  assert.match(viteConfig, /globIgnores:[\s\S]*about\.html[\s\S]*contact\.html[\s\S]*documentation\.html[\s\S]*privacy\.html/);
   assert.doesNotMatch(viteConfig, /runtimeCaching/);
   assert.match(viteConfig, /navigateFallbackDenylist:[\s\S]*\(\?!\$\|/);
 });

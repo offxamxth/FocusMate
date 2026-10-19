@@ -6,7 +6,12 @@ import {
   leaderboardErrorTranslationKey,
   setFocusMateLeaderboardVisibility,
 } from '../src/leaderboard-api.js';
-import { supportedLanguages, textDirection, translate } from '../src/i18n.js';
+import {
+  supportedLanguages,
+  textDirection,
+  translate,
+  translateLeaderboard,
+} from '../src/i18n.js';
 
 const migration = await readFile(
   new URL('../../supabase/migrations/20261004240000_verified_focus_leaderboard.sql', import.meta.url),
@@ -211,6 +216,56 @@ test('database errors are translated into safe, useful retry states', async () =
   assert.equal(leaderboardErrorTranslationKey(new Error('unknown')), 'leaderboard.error.generic');
 });
 
+test('older verified-focus leaderboard responses clearly report a required database update', async () => {
+  const oldResponse = {
+    scope: 'global',
+    entries: [{
+      rank: 1,
+      username: 'alex',
+      display_name: 'Alex',
+      focus_seconds: 3600,
+    }],
+    has_more: false,
+    total_entries: 1,
+    progress: {
+      all_time_seconds: 3600,
+      weekly_seconds: 1800,
+      rank: 1,
+      visibility: 'public',
+      listed: true,
+    },
+  };
+  const { client } = fakeClient({ data: oldResponse, error: null });
+
+  await assert.rejects(getFocusMateLeaderboard(client), (error) => {
+    assert.equal(error.code, 'MIGRATION_REQUIRED');
+    assert.equal(
+      leaderboardErrorTranslationKey(error),
+      'leaderboard.error.updateRequired',
+    );
+    return true;
+  });
+});
+
+test('leaderboard error translation accepts complete keys without duplicating the namespace', () => {
+  const key = leaderboardErrorTranslationKey(
+    Object.assign(new Error('invalid response'), { code: 'INVALID_RESPONSE' }),
+  );
+  assert.equal(key, 'leaderboard.error.response');
+  assert.equal(
+    translateLeaderboard('en', key),
+    'The leaderboard returned an invalid response. Refresh and try again.',
+  );
+  assert.equal(
+    translateLeaderboard('en', 'error.response'),
+    'The leaderboard returned an invalid response. Refresh and try again.',
+  );
+  assert.equal(
+    translateLeaderboard('en', 'leaderboard.leaderboard.error.response'),
+    'The leaderboard returned an invalid response. Refresh and try again.',
+  );
+});
+
 test('private ledger writes are trigger-only and leaderboard RPCs require authenticated callers', () => {
   assert.match(migration, /create table if not exists private\.focusmate_verified_focus_segments/i);
   assert.match(migration, /alter table private\.focusmate_verified_focus_segments enable row level security/i);
@@ -313,6 +368,7 @@ test('leaderboard UI strings are translated in every language and Arabic directi
       'leaderboard.error.offline',
       'leaderboard.error.generic',
       'leaderboard.error.response',
+      'leaderboard.error.updateRequired',
       'nav.leaderboard',
       'heading.leaderboardTitle',
     ]) {
@@ -325,6 +381,6 @@ test('leaderboard UI strings are translated in every language and Arabic directi
   assert.match(component, /entry\.global_xp/);
   assert.match(component, /entry\.level/);
   assert.match(component, /focusmate:room-progress-updated/);
-  assert.match(component, /key\.startsWith\('leaderboard\.'\) \? key/);
+  assert.match(component, /translateLeaderboard\(language, key\)/);
   assert.doesNotMatch(component, /focus_seconds|all_time_seconds|weekly_seconds/);
 });

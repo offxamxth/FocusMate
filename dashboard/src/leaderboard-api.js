@@ -23,6 +23,17 @@ function leaderboardError(code, message) {
   return error;
 }
 
+function isLegacyLeaderboardResponse(data) {
+  return isRecord(data)
+    && Array.isArray(data.entries)
+    && (
+      data.entries.some((entry) => isRecord(entry) && Object.hasOwn(entry, 'focus_seconds'))
+      || (isRecord(data.progress)
+        && (Object.hasOwn(data.progress, 'all_time_seconds')
+          || Object.hasOwn(data.progress, 'weekly_seconds')))
+    );
+}
+
 function assertLeaderboardClient(client) {
   if (!client || typeof client.rpc !== 'function') {
     throw leaderboardError('28000', 'Authentication is required to load the leaderboard.');
@@ -30,6 +41,12 @@ function assertLeaderboardClient(client) {
 }
 
 function normalizeLeaderboard(data) {
+  if (isLegacyLeaderboardResponse(data)) {
+    throw leaderboardError(
+      'MIGRATION_REQUIRED',
+      'The leaderboard database needs an update before Global XP rankings are available.',
+    );
+  }
   if (!isRecord(data) || !Array.isArray(data.entries) || !isRecord(data.progress)) {
     throw leaderboardError('INVALID_RESPONSE', 'The leaderboard response was invalid.');
   }
@@ -123,6 +140,7 @@ export function leaderboardErrorTranslationKey(error) {
   if (code === '28000') return 'leaderboard.error.signIn';
   if (code === '22023') return 'leaderboard.error.request';
   if (code === '42501') return 'leaderboard.error.forbidden';
+  if (code === 'MIGRATION_REQUIRED') return 'leaderboard.error.updateRequired';
   if (code === 'INVALID_RESPONSE') return 'leaderboard.error.response';
   if (error instanceof TypeError || /fetch failed|failed to fetch|network|connection|timeout/i.test(error?.message || '')) {
     return 'leaderboard.error.network';

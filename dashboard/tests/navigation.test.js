@@ -40,6 +40,8 @@ test('public pages resolve from clean paths without changing authenticated hash 
     assert.equal(publicPageFromLocation(location(`/${page}`)), page);
     assert.equal(pageFromLocation(location(`/${page}`)), page);
   }
+  assert.equal(publicPageFromLocation(location('/documentation.html')), 'documentation');
+  assert.equal(pageFromLocation(location('/documentation.html')), 'documentation');
   assert.equal(navigationPath('about'), '/about');
   assert.equal(navigationPath('contact'), '/#contact');
   assert.equal(navigationPath('privacy'), '/privacy');
@@ -57,6 +59,34 @@ test('navigation paths retain the existing contact path and hash routes', () => 
   assert.equal(navigationPath('overview'), '/#overview');
   assert.equal(navigationPath('tasks'), '/#tasks');
   assert.equal(navigationPath('leaderboard'), '/#leaderboard');
+test('documentation is available in the app navigation and public page shell', async () => {
+  const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const publicSource = await readFile(new URL('../src/PublicPages.jsx', import.meta.url), 'utf8');
+  const docsSource = await readFile(new URL('../src/DocumentationPage.jsx', import.meta.url), 'utf8');
+  const viteConfig = await readFile(new URL('../vite.config.js', import.meta.url), 'utf8');
+  const docsHtml = await readFile(new URL('../documentation.html', import.meta.url), 'utf8');
+  assert.match(appSource, /\{ id: 'documentation', label: 'nav\.documentation'/);
+  assert.match(appSource, /\{page === 'documentation' && <DocumentationPage \/>}/);
+  assert.match(publicSource, /page === 'documentation' && <DocumentationPage publicPage \/>/);
+  assert.match(viteConfig, /documentation: resolve\(dashboardRoot, 'documentation\.html'\)/);
+  assert.match(viteConfig, /documentation\\\.html/);
+  assert.match(docsHtml, /<title>Documentation \| FocusMate<\/title>/);
+  assert.match(docsHtml, /canonical" href="https:\/\/getfocusmate\.vercel\.app\/documentation\.html"/);
+  for (const section of [
+    'getting-started',
+    'focus-sessions',
+    'features',
+    'focus-score',
+    'privacy',
+    'troubleshooting',
+    'updates',
+  ]) {
+    assert.match(docsSource, new RegExp(`id="${section}"`));
+  }
+  assert.match(docsSource, /FocusMate does not currently show a Focus Score/);
+  assert.match(docsSource, /commit: 'e824c4b'/);
+});
   assert.equal(navigationPath('contact'), '/#contact');
+  assert.equal(navigationPath('documentation'), '/#documentation');
   assert.equal(navigationPath('privacy'), '/privacy');
 });
