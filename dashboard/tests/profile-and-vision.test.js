@@ -113,6 +113,7 @@ test('personalization preferences persist independently for each profile', async
           study_goal_type: 'coding',
           time_format: '24-hour',
           focus_buddy_character: 'frog',
+          focus_buddy_sounds_enabled: false,
           focus_buddy_interval_minutes: 30,
           focus_buddy_snooze_minutes: 5,
           focus_buddy_during_sessions: true,
@@ -129,6 +130,7 @@ test('personalization preferences persist independently for each profile', async
   assert.equal(firstAgain.profile.session_preferences.study_goal_type, 'coding');
   assert.equal(firstAgain.profile.session_preferences.time_format, '24-hour');
   assert.equal(firstAgain.profile.session_preferences.focus_buddy_character, 'frog');
+  assert.equal(firstAgain.profile.session_preferences.focus_buddy_sounds_enabled, false);
   assert.equal(firstAgain.profile.session_preferences.focus_buddy_interval_minutes, 30);
   assert.equal(firstAgain.profile.session_preferences.focus_buddy_snooze_minutes, 5);
   assert.equal(firstAgain.profile.session_preferences.focus_buddy_during_sessions, true);
@@ -190,6 +192,155 @@ test('a timer-controlled session keeps its original deadline and can complete on
   }
 });
 
+test('normal timer completion grants completion progress while ending early preserves only study history', async () => {
+  values.clear();
+  await post('/api/login', { username: 'completion-check', name: 'Completion Check' });
+  const originalNow = Date.now;
+  let now = 5_000_000;
+  Date.now = () => now;
+  try {
+    await post('/api/webcam/start?username=completion-check', {
+      session_only: true,
+      session_id: 'full-session',
+      session_started_at: new Date(now - 600_000).toISOString(),
+      session_duration_seconds: 600,
+      subject: 'Maths',
+      goal: 'Complete a block',
+    });
+    const completeResult = await post('/api/webcam/stop?username=completion-check', { completed: true });
+    assert.equal(completeResult.live.session_completed, true);
+    assert.equal(completeResult.live.session_ended_early, false);
+    let profile = (await api('/api/state?username=completion-check')).profile;
+    assert.equal(profile.session_history[0].completed, true);
+    assert.equal(profile.sessions_completed, 1);
+    assert.equal(profile.total_study_seconds, 600);
+    assert.ok(profile.total_xp > 0);
+    const completedXp = profile.total_xp;
+    const claimsBeforeEarly = new Set(profile.daily_quest_claims.map((claim) => claim.quest_id));
+    await assert.rejects(
+      post('/api/webcam/stop?username=completion-check', {
+        completed: true,
+        session_id: 'not-the-current-session',
+      }),
+      /session changed/,
+    );
+    assert.equal((await api('/api/state?username=completion-check')).profile.total_xp, completedXp);
+
+    now += 1000;
+    await post('/api/webcam/start?username=completion-check', {
+      session_only: true,
+      session_id: 'early-session',
+      session_started_at: new Date(now - 300_000).toISOString(),
+      session_duration_seconds: 600,
+      subject: 'Maths',
+      goal: 'Study for a while',
+    });
+    const earlyResult = await post('/api/webcam/stop?username=completion-check', { completed: false });
+    assert.equal(earlyResult.live.session_completed, false);
+    assert.equal(earlyResult.live.session_ended_early, true);
+    assert.equal(earlyResult.live.session_seconds, 300);
+    profile = (await api('/api/state?username=completion-check')).profile;
+    const earlyHistory = profile.session_history.find((item) => item.session_id === 'early-session');
+    assert.equal(earlyHistory.completed, false);
+    assert.equal(earlyHistory.seconds, 300);
+    assert.equal(earlyHistory.xp, 0);
+    assert.equal(profile.sessions_completed, 1);
+    assert.equal(profile.total_study_seconds, 900);
+    assert.equal(profile.session_reflections.length, 1);
+    const newlyClaimedQuests = profile.daily_quest_claims
+      .filter((claim) => !claimsBeforeEarly.has(claim.quest_id))
+      .map((claim) => profile.daily_quests.quests.find((quest) => quest.id === claim.quest_id)?.category);
+    assert.ok(newlyClaimedQuests.every((category) => category === 'focus_time'));
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('a failed profile write remains retryable and awards completion progress only once', async () => {
+  values.clear();
+  await post('/api/login', { username: 'save-retry', name: 'Save Retry' });
+  const originalNow = Date.now;
+  const originalSetItem = localStorage.setItem;
+  let now = 8_000_000;
+  Date.now = () => now;
+  try {
+    await post('/api/webcam/start?username=save-retry', {
+      session_only: true,
+      session_id: 'retry-profile-write',
+      session_started_at: new Date(now - 600_000).toISOString(),
+      session_duration_seconds: 600,
+    });
+    let failProfileWrite = true;
+    localStorage.setItem = (key, value) => {
+      if (key === 'focusmate-profile:save-retry' && failProfileWrite) {
+        failProfileWrite = false;
+        throw new Error('storage unavailable');
+      }
+      originalSetItem.call(localStorage, key, value);
+    };
+    await assert.rejects(
+      post('/api/webcam/stop?username=save-retry', { completed: true }),
+      /storage unavailable/,
+    );
+    assert.ok(values.has('focusmate-session-save:save-retry'));
+    localStorage.setItem = originalSetItem;
+    const retried = await post('/api/webcam/stop?username=save-retry', { completed: true });
+    assert.equal(retried.live.session_completed, true);
+    const xpAfterRetry = (await api('/api/state?username=save-retry')).profile.total_xp;
+    await post('/api/webcam/stop?username=save-retry', { completed: true });
+    const profile = (await api('/api/state?username=save-retry')).profile;
+    assert.equal(profile.total_xp, xpAfterRetry);
+    assert.equal(profile.session_history.filter((item) => item.session_id === 'retry-profile-write').length, 1);
+    assert.equal(profile.sessions_completed, 1);
+  } finally {
+    localStorage.setItem = originalSetItem;
+    Date.now = originalNow;
+  }
+});
+
+test('a partial live-session write retries without duplicating profile rewards', async () => {
+  values.clear();
+  await post('/api/login', { username: 'partial-retry', name: 'Partial Retry' });
+  const originalNow = Date.now;
+  const originalSetItem = localStorage.setItem;
+  let now = 12_000_000;
+  Date.now = () => now;
+  try {
+    await post('/api/webcam/start?username=partial-retry', {
+      session_only: true,
+      session_id: 'retry-live-write',
+      session_started_at: new Date(now - 600_000).toISOString(),
+      session_duration_seconds: 600,
+    });
+    let failLiveWrite = true;
+    localStorage.setItem = (key, value) => {
+      if (key === 'focusmate-live:partial-retry' && failLiveWrite) {
+        failLiveWrite = false;
+        throw new Error('live storage unavailable');
+      }
+      originalSetItem.call(localStorage, key, value);
+    };
+    await assert.rejects(
+      post('/api/webcam/stop?username=partial-retry', { completed: true }),
+      /live storage unavailable/,
+    );
+    const profileBeforeRetry = JSON.parse(values.get('focusmate-profile:partial-retry'));
+    assert.equal(profileBeforeRetry.session_history.filter((item) => item.session_id === 'retry-live-write').length, 1);
+    const xpBeforeRetry = profileBeforeRetry.total_xp;
+    localStorage.setItem = originalSetItem;
+    const retried = await post('/api/webcam/stop?username=partial-retry', { completed: true });
+    assert.equal(retried.live.session_completed, true);
+    const profile = (await api('/api/state?username=partial-retry')).profile;
+    assert.equal(profile.total_xp, xpBeforeRetry);
+    assert.equal(profile.session_history.filter((item) => item.session_id === 'retry-live-write').length, 1);
+    assert.equal(profile.sessions_completed, 1);
+    assert.equal(values.has('focusmate-session-save:partial-retry'), false);
+  } finally {
+    localStorage.setItem = originalSetItem;
+    Date.now = originalNow;
+  }
+});
+
 test('paused focus sessions exclude paused time across reload and complete only once', async () => {
   values.clear();
   await post('/api/login', { username: 'pausedtimer', name: 'Paused Timer' });
@@ -227,8 +378,21 @@ test('paused focus sessions exclude paused time across reload and complete only 
       method: 'POST',
       body: '{}',
     });
-    now += 40_000;
-    const completed = await reloadedApi.api('/api/webcam/stop?username=pausedtimer', {
+    now += 10_000;
+    const pausedAgain = await reloadedApi.api('/api/webcam/pause?username=pausedtimer', {
+      method: 'POST',
+      body: '{}',
+    });
+    assert.equal(pausedAgain.live.session_seconds, 30);
+    now += 120_000;
+    const pausedAgainReload = await import(`../src/local-api.js?paused-timer-second-reload=${Date.now()}`);
+    await pausedAgainReload.api('/api/state?username=pausedtimer');
+    await pausedAgainReload.api('/api/webcam/resume?username=pausedtimer', {
+      method: 'POST',
+      body: '{}',
+    });
+    now += 30_000;
+    const completed = await pausedAgainReload.api('/api/webcam/stop?username=pausedtimer', {
       method: 'POST',
       body: '{}',
     });
@@ -239,10 +403,14 @@ test('paused focus sessions exclude paused time across reload and complete only 
     const saved = await reloadedApi.api('/api/state?username=pausedtimer');
     assert.equal(saved.profile.session_history.length, 1);
     assert.equal(saved.profile.sessions_completed, 1);
-    await assert.rejects(
-      reloadedApi.api('/api/webcam/stop?username=pausedtimer', { method: 'POST', body: '{}' }),
-      /no active camera session/,
-    );
+    const duplicateStop = await reloadedApi.api('/api/webcam/stop?username=pausedtimer', {
+      method: 'POST',
+      body: '{}',
+    });
+    assert.equal(duplicateStop.live.session_id, completed.live.session_id);
+    const afterDuplicateStop = await reloadedApi.api('/api/state?username=pausedtimer');
+    assert.equal(afterDuplicateStop.profile.session_history.length, 1);
+    assert.equal(afterDuplicateStop.profile.sessions_completed, 1);
   } finally {
     Date.now = originalNow;
   }
@@ -315,10 +483,8 @@ test('solo timer sessions save subject, goal, and mood once without webcam monit
     assert.equal(saved.profile.session_history[0].mood, 'Focused');
     assert.equal(saved.profile.session_history[0].seconds, 15 * 60);
     assert.ok(saved.profile.total_xp > 0);
-    await assert.rejects(
-      post('/api/webcam/stop?username=solosession', {}),
-      /There is no active camera session to stop/,
-    );
+    const duplicateStop = await post('/api/webcam/stop?username=solosession', {});
+    assert.equal(duplicateStop.live.session_id, finished.live.session_id);
     const afterDuplicateStop = await api('/api/state?username=solosession');
     assert.equal(afterDuplicateStop.profile.sessions_completed, 1);
     assert.equal(afterDuplicateStop.profile.session_history.length, 1);
@@ -552,6 +718,10 @@ test('detection settings, overlay, and result labels have localized text in ever
     'preferences.faceMissingMonitoring',
     'preferences.distanceMonitoring',
     'preferences.detectionOverlaySetting',
+    'focus.sessionSavePending',
+    'focus.sessionSaveSucceeded',
+    'focus.sessionSaveFailed',
+    'focus.retrySessionSave',
     'focus.detectionOverlay',
     'focus.notMonitored',
     'results.signalCounts',

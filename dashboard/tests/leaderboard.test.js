@@ -216,6 +216,56 @@ test('database errors are translated into safe, useful retry states', async () =
   assert.equal(leaderboardErrorTranslationKey(new Error('unknown')), 'leaderboard.error.generic');
 });
 
+test('missing leaderboard RPC codes and schema-cache details request a database update', async () => {
+  for (const rpcError of [
+    { code: 'PGRST202', message: 'Could not find the function in the schema cache' },
+    { code: '42883', message: 'function public.get_focusmate_leaderboard does not exist' },
+    {
+      code: 'PGRST999',
+      message: 'RPC error',
+      details: 'The function get_focusmate_leaderboard was not found in the schema cache.',
+    },
+  ]) {
+    const { client } = fakeClient({ data: null, error: rpcError });
+    await assert.rejects(getFocusMateLeaderboard(client), (error) => {
+      assert.equal(error.code, 'MIGRATION_REQUIRED');
+      assert.equal(
+        leaderboardErrorTranslationKey(error),
+        'leaderboard.error.updateRequired',
+      );
+      return true;
+    });
+  }
+  const { client: visibilityClient } = fakeClient({
+    data: null,
+    error: { code: '42883', message: 'undefined function' },
+  });
+  await assert.rejects(
+    setFocusMateLeaderboardVisibility(visibilityClient, 'friends'),
+    (error) => leaderboardErrorTranslationKey(error) === 'leaderboard.error.updateRequired',
+  );
+});
+
+test('authentication, permission, network, malformed, and generic RPC failures stay distinguishable', async () => {
+  for (const [rpcError, expectedKey] of [
+    [{ code: '28000', message: 'auth required' }, 'leaderboard.error.signIn'],
+    [{ code: '42501', message: 'permission denied' }, 'leaderboard.error.forbidden'],
+    [{ code: 'PGRST000', message: 'Network connection timeout' }, 'leaderboard.error.network'],
+    [{ code: 'XX000', message: 'unexpected database error' }, 'leaderboard.error.generic'],
+  ]) {
+    const { client } = fakeClient({ data: null, error: rpcError });
+    await assert.rejects(getFocusMateLeaderboard(client), (error) => {
+      assert.equal(leaderboardErrorTranslationKey(error), expectedKey);
+      return true;
+    });
+  }
+  const { client } = fakeClient({ data: { entries: 'not-an-array' }, error: null });
+  await assert.rejects(getFocusMateLeaderboard(client), (error) => {
+    assert.equal(leaderboardErrorTranslationKey(error), 'leaderboard.error.response');
+    return true;
+  });
+});
+
 test('older verified-focus leaderboard responses clearly report a required database update', async () => {
   const oldResponse = {
     scope: 'global',

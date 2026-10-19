@@ -143,13 +143,14 @@ export function dailyFocusSeconds(profile, live = {}, date = localDateKey()) {
 
 function questValue(profile, live, quest, date) {
   const sessions = sessionsForDate(profile, date);
+  const completedSessions = sessions.filter((session) => session.completed !== false);
   switch (quest.category) {
     case 'focus_time':
       return dailyFocusSeconds(profile, live, date) / 60;
     case 'session_count':
-      return sessions.length;
+      return completedSessions.length;
     case 'session_xp':
-      return sessions.reduce((total, session) => total + Math.max(0, Number(session.xp) || 0), 0);
+      return completedSessions.reduce((total, session) => total + Math.max(0, Number(session.xp) || 0), 0);
     case 'camera_alerts': {
       const monitoredSignal = {
         posture_alerts: 'slouching',
@@ -157,7 +158,7 @@ function questValue(profile, live, quest, date) {
         looking_away_alerts: 'looking_away',
       }[quest.signal];
       if (!monitoredSignal) return 0;
-      return sessions.some((session) =>
+      return completedSessions.some((session) =>
         isDetectionSignalMonitored(session, monitoredSignal)
         && Object.hasOwn(session, quest.signal)
         && Number(session[quest.signal]) === 0,

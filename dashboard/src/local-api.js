@@ -5,6 +5,7 @@ import { defaultDetectionConfiguration, normalizeDetectionConfiguration } from '
 
 const PROFILE_PREFIX = 'focusmate-profile:';
 const LIVE_PREFIX = 'focusmate-live:';
+const SESSION_SAVE_PREFIX = 'focusmate-session-save:';
 const PROFILE_SCHEMA_VERSION = 3;
 const cameraSessions = new Map();
 
@@ -59,6 +60,7 @@ function freshProfile(username, name = 'Focus friend') {
       session_chimes: false,
       focus_buddy_enabled: true,
       focus_buddy_character: 'web-hero',
+      focus_buddy_sounds_enabled: true,
       focus_buddy_interval_minutes: 60,
       focus_buddy_snooze_minutes: 10,
       focus_buddy_greet_by_name: true,
@@ -227,7 +229,8 @@ function readLive(username) {
   if (live.session_active && !cameraSessions.has(username)
       && live.timer_controlled_session === true
       && Number.isFinite(Date.parse(live.session_started_at))) {
-    const startedAt = Date.parse(live.session_started_at);
+    const startedAt = Date.parse(live.session_active_started_at)
+      || Date.parse(live.session_started_at);
     if (Number.isFinite(startedAt)) {
       const configuration = normalizeDetectionConfiguration(live.session_configuration);
       cameraSessions.set(username, {
@@ -309,30 +312,84 @@ function reflectionFor(live) {
   };
 }
 
-function finishCameraSession(username) {
+function applySessionSaveJournal(username, journal) {
+  const profile = readProfile(username);
+  if (!profile.session_history.some((item) => item.session_id === journal.session_id)) {
+    profile.total_study_seconds += journal.history.seconds;
+    profile.total_xp += journal.xp_delta;
+    if (journal.completed) profile.sessions_completed += 1;
+    profile.session_history.push(journal.history);
+    profile.session_history = profile.session_history.slice(-1000);
+    const achievementIds = new Set(profile.achievements.map((item) =>
+      typeof item === 'string' ? item : item?.id,
+    ));
+    profile.achievements.push(...journal.new_achievements.filter((item) => !achievementIds.has(item.id)));
+    const claimIds = new Set(profile.daily_quest_claims.map((claim) => `${claim.date}:${claim.quest_id}`));
+    profile.daily_quest_claims.push(...journal.new_quest_claims.filter((claim) =>
+      !claimIds.has(`${claim.date}:${claim.quest_id}`),
+    ));
+    profile.daily_quest_claims = profile.daily_quest_claims.slice(-120);
+    profile.daily_quests = journal.daily_quests;
+    if (journal.reflection
+      && !profile.session_reflections.some((item) => item.session_id === journal.session_id)) {
+      profile.session_reflections.push(journal.reflection);
+      profile.session_reflections = profile.session_reflections.slice(-100);
+    }
+    profile.active_session_plan = {};
+    writeProfile(username, profile);
+  }
+  writeLive(username, journal.live);
+  localStorage.removeItem(`${SESSION_SAVE_PREFIX}${username}`);
+  cameraSessions.delete(username);
+  return {
+    ok: true,
+    message: 'Session ended. Your progress has been saved.',
+    live: journal.live,
+  };
+}
+
+function finishCameraSession(username, requestedCompleted = true, requestedSessionId = '') {
+  const journalKey = `${SESSION_SAVE_PREFIX}${username}`;
+  const pendingJournal = read(journalKey, null);
+  const currentLive = readLive(username);
+  if (requestedSessionId && requestedSessionId !== currentLive.session_id) {
+    throw new Error('The focus session changed before it could be saved. Your current session was left untouched.');
+  }
+  if (pendingJournal && pendingJournal.session_id === currentLive.session_id) {
+    return applySessionSaveJournal(username, pendingJournal);
+  }
+  if (!currentLive.session_active) {
+    const profile = readProfile(username);
+    const saved = profile.session_history.find((item) => item.session_id === currentLive.session_id);
+    if (saved) return { ok: true, message: 'Session ended. Your progress has been saved.', live: currentLive };
+    throw new Error('There is no active focus session to stop.');
+  }
   const runtime = cameraSessions.get(username);
-  const live = readLive(username);
-  if (!live.session_active) throw new Error('There is no active camera session to stop.');
   if (!runtime) throw new Error('This camera session was interrupted and cannot be completed after reloading.');
   const now = Date.now();
-  const pausedAt = live.session_paused_at ? Date.parse(live.session_paused_at) : now;
+  const pausedAt = currentLive.session_paused_at ? Date.parse(currentLive.session_paused_at) : now;
   if (!Number.isFinite(pausedAt)) throw new Error('The saved focus-session pause state is invalid.');
   const sessionEndedAt = Math.min(now, pausedAt);
   const elapsed = Math.max(0, (sessionEndedAt - runtime.startedAt) / 1000);
+  const durationReached = runtime.durationSeconds !== null
+    && elapsed >= runtime.durationSeconds;
+  const completed = requestedCompleted && (runtime.durationSeconds === null || durationReached);
   const sessionSeconds = runtime.durationSeconds
     ? Math.min(elapsed, runtime.durationSeconds)
     : elapsed;
-  const profile = readProfile(username);
-  live.session_active = false;
-  live.session_completed = true;
+  const live = {
+    ...currentLive,
+    session_active: false,
+    session_completed: completed,
+    session_ended_early: !completed,
+  };
   delete live.session_paused_at;
+  delete live.session_active_started_at;
   live.session_seconds = Math.round(sessionSeconds);
   live.session_minutes = Math.round(sessionSeconds / 60 * 100) / 100;
   live.last_updated = new Date(now).toISOString();
   for (const [key, startedAt] of Object.entries(runtime.signalStarts)) {
-    if (startedAt && (sessionEndedAt - startedAt) / 1000 >= 2) {
-      runtime.counts[key] += 1;
-    }
+    if (startedAt && (sessionEndedAt - startedAt) / 1000 >= 2) runtime.counts[key] += 1;
   }
   const configuration = runtime.sessionConfiguration;
   live.posture_alerts = configuration.monitor_posture ? runtime.counts.slouching : null;
@@ -341,14 +398,24 @@ function finishCameraSession(username) {
   live.fatigue_signals = configuration.monitor_eye_closure ? runtime.counts.eyes_closed : null;
   live.face_missing_alerts = configuration.monitor_face_missing ? runtime.counts.face_missing : null;
   live.session_configuration = configuration;
+
+  const profile = readProfile(username);
+  const previousXp = profile.total_xp;
+  const previousAchievements = new Set(profile.achievements.map((item) =>
+    typeof item === 'string' ? item : item?.id,
+  ));
+  const previousClaims = new Set(profile.daily_quest_claims.map((claim) =>
+    `${claim.date}:${claim.quest_id}`,
+  ));
   const plan = profile.active_session_plan || {};
-  const challengeCount = Math.floor(live.session_seconds / 600);
+  const challengeCount = completed ? Math.floor(live.session_seconds / 600) : 0;
   const challengeXp = challengeCount * 25;
   const history = {
     session_id: live.session_id,
     date: today(),
     session_started_at: live.session_started_at,
     seconds: live.session_seconds,
+    completed,
     posture_alerts: live.posture_alerts,
     distance_alerts: live.distance_alerts,
     looking_away_alerts: live.looking_away_alerts,
@@ -369,26 +436,49 @@ function finishCameraSession(username) {
   };
   profile.session_history.push(history);
   profile.session_history = profile.session_history.slice(-1000);
-  profile.sessions_completed += 1;
   profile.total_study_seconds += live.session_seconds;
   profile.active_session_plan = {};
-  profile.total_xp += challengeXp;
-  const unlocked = awardEligibleAchievements(profile, { type: 'session', live });
-  const achievementXp = unlocked.reduce((total, item) => total + item.xp, 0);
-  history.achievements_unlocked = unlocked.map((item) => item.id);
-  history.xp = challengeXp + achievementXp;
-  live.achievements_unlocked = unlocked.map((item) => item.id);
-  live.focus_challenge_xp = challengeXp;
-  live.study_subject = history.subject;
-  live.study_goal = history.goal;
-  const reflection = reflectionFor(live);
-  profile.session_reflections.push(reflection);
-  profile.session_reflections = profile.session_reflections.slice(-100);
+  let reflection = null;
+  if (completed) {
+    profile.sessions_completed += 1;
+    profile.total_xp += challengeXp;
+    const unlocked = awardEligibleAchievements(profile, { type: 'session', live });
+    const achievementXp = unlocked.reduce((total, item) => total + item.xp, 0);
+    history.achievements_unlocked = unlocked.map((item) => item.id);
+    history.xp = challengeXp + achievementXp;
+    live.achievements_unlocked = unlocked.map((item) => item.id);
+    live.focus_challenge_xp = challengeXp;
+    live.study_subject = history.subject;
+    live.study_goal = history.goal;
+    reflection = reflectionFor(live);
+    profile.session_reflections.push(reflection);
+    profile.session_reflections = profile.session_reflections.slice(-100);
+  }
   updateDailyQuests(profile, live);
-  writeProfile(username, profile);
-  writeLive(username, live);
-  cameraSessions.delete(username);
-  return { ok: true, message: 'Session ended. Your progress has been saved.', live };
+  const journal = {
+    session_id: live.session_id,
+    completed,
+    live,
+    history,
+    xp_delta: profile.total_xp - previousXp,
+    new_achievements: profile.achievements.filter((item) => {
+      const id = typeof item === 'string' ? item : item?.id;
+      return id && !previousAchievements.has(id) && typeof item === 'object';
+    }),
+    new_quest_claims: profile.daily_quest_claims.filter((claim) =>
+      !previousClaims.has(`${claim.date}:${claim.quest_id}`),
+    ),
+    daily_quests: profile.daily_quests,
+    reflection,
+  };
+  localStorage.setItem(journalKey, JSON.stringify(journal));
+  return applySessionSaveJournal(username, journal);
+}
+
+function recoverPendingSessionSave(username) {
+  const journal = read(`${SESSION_SAVE_PREFIX}${username}`, null);
+  if (journal) return applySessionSaveJournal(username, journal);
+  return null;
 }
 
 function pauseCameraSession(username) {
@@ -420,6 +510,7 @@ function resumeCameraSession(username) {
   runtime.startedAt += Math.max(0, now - pausedAt);
   runtime.lastFrameAt = now;
   delete live.session_paused_at;
+  live.session_active_started_at = new Date(runtime.startedAt).toISOString();
   live.status = 'Waiting for camera signals';
   live.session_seconds = Math.round(Math.max(0, (now - runtime.startedAt) / 1000));
   return { ok: true, live: writeLive(username, live) };
@@ -609,6 +700,7 @@ export async function api(path, options = {}) {
     const username = normalizeUsername(body.username);
     const name = String(body.name || '').trim().slice(0, 80);
     if (!username) throw new Error('Enter a username using letters, numbers, dots, dashes, or underscores.');
+    recoverPendingSessionSave(username);
     const existing = Boolean(profileStorageKey(username));
     if (!existing && !name) throw new Error('Enter your name to create a new profile.');
     const profile = existing ? readProfile(username) : freshProfile(username, name);
@@ -618,6 +710,7 @@ export async function api(path, options = {}) {
   }
 
   const username = requireUsername(url);
+  recoverPendingSessionSave(username);
   if (url.pathname === '/api/state' && method === 'GET') {
     const profile = readProfile(username);
     const live = readLive(username);
@@ -701,7 +794,16 @@ export async function api(path, options = {}) {
     if (!profile.session_preferences.focus_monitoring && body.session_only !== true) {
       throw new Error('Webcam monitoring is turned off in session preferences.');
     }
-    if (cameraSessions.has(username)) return { ok: true, message: 'Your study session is already running.' };
+    const requestedSessionId = typeof body.session_id === 'string'
+      ? body.session_id.trim().slice(0, 160)
+      : '';
+    if (cameraSessions.has(username)) {
+      const existingLive = readLive(username);
+      if (requestedSessionId && requestedSessionId === existingLive.session_id) {
+        return { ok: true, message: 'Your study session is already running.', live: existingLive };
+      }
+      throw new Error('Another focus session is already active. End it before starting a new session.');
+    }
     const now = Date.now();
     const submittedStart = Date.parse(body.session_started_at);
     const startedAt = Number.isFinite(submittedStart) && submittedStart <= now ? submittedStart : now;
@@ -710,7 +812,7 @@ export async function api(path, options = {}) {
     const durationSeconds = Number.isFinite(flooredDuration) && flooredDuration > 0
       ? flooredDuration
       : null;
-    const sessionId = crypto.randomUUID();
+    const sessionId = requestedSessionId || crypto.randomUUID();
     const configuration = normalizeDetectionConfiguration(
       body.session_configuration || profile.session_preferences,
     );
@@ -724,7 +826,7 @@ export async function api(path, options = {}) {
     writeProfile(username, profile);
     const configurationVersion = 1;
     const initialSessionSeconds = Math.max(0, Math.round((now - startedAt) / 1000));
-    const live = writeLive(username, { session_active: true, session_completed: false, timer_controlled_session: body.session_only === true, session_id: sessionId, session_started_at: new Date(startedAt).toISOString(), session_duration_seconds: durationSeconds, session_seconds: durationSeconds ? Math.min(initialSessionSeconds, durationSeconds) : initialSessionSeconds, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, detection_configuration_version: configurationVersion, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
+    const live = writeLive(username, { session_active: true, session_completed: false, timer_controlled_session: body.session_only === true, session_id: sessionId, session_started_at: new Date(startedAt).toISOString(), session_active_started_at: new Date(startedAt).toISOString(), session_duration_seconds: durationSeconds, session_seconds: durationSeconds ? Math.min(initialSessionSeconds, durationSeconds) : initialSessionSeconds, posture_alerts: configuration.monitor_posture ? 0 : null, distance_alerts: configuration.monitor_distance ? 0 : null, looking_away_alerts: configuration.monitor_looking_away ? 0 : null, fatigue_signals: configuration.monitor_eye_closure ? 0 : null, face_missing_alerts: configuration.monitor_face_missing ? 0 : null, session_configuration: configuration, detection_configuration_version: configurationVersion, history: [], status: 'Waiting for camera signals', posture: configuration.monitor_posture ? 'Unknown' : 'Not monitored', pose_detected: configuration.monitor_posture ? false : null, pose_detection_status: configuration.monitor_posture ? 'checking' : 'not-monitored', distance_status: configuration.monitor_distance ? 'Unknown' : 'Not monitored', face_detected: configuration.monitor_face_missing || configuration.monitor_looking_away || configuration.monitor_eye_closure || configuration.monitor_distance || configuration.show_detection_overlay ? false : null });
     cameraSessions.set(username, { startedAt, durationSeconds, lastFrameAt: now, lastHistoryAt: now, postureAlertAt: 0, postureAlerted: false, postureAlertPending: false, sessionConfiguration: configuration, configurationVersion, postureReminderEnabled: configuration.posture_reminders, signalStarts: {}, counts: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 }, durations: { eyes_closed: 0, face_missing: 0, slouching: 0, distance_alert: 0, looking_away: 0 } });
     return { ok: true, message: 'Your study session has started.', live };
   }
@@ -734,6 +836,11 @@ export async function api(path, options = {}) {
   if (url.pathname === '/api/webcam/pause' && method === 'POST') return pauseCameraSession(username);
   if (url.pathname === '/api/webcam/resume' && method === 'POST') return resumeCameraSession(username);
   if (url.pathname === '/api/camera/telemetry' && method === 'POST') return applyTelemetry(username, body);
-  if (url.pathname === '/api/webcam/stop' && method === 'POST') return finishCameraSession(username);
+  if (url.pathname === '/api/webcam/stop' && method === 'POST') {
+    const sessionId = typeof body.session_id === 'string'
+      ? body.session_id.trim().slice(0, 160)
+      : '';
+    return finishCameraSession(username, body.completed !== false, sessionId);
+  }
   throw new Error('This feature is not available in the browser-only deployment.');
 }

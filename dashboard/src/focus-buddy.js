@@ -56,6 +56,7 @@ export function waterReminderDelayForAction(preferences, action) {
 const defaults = {
   focus_buddy_enabled: true,
   focus_buddy_character: 'web-hero',
+  focus_buddy_sounds_enabled: true,
   focus_buddy_interval_minutes: 60,
   focus_buddy_snooze_minutes: 10,
   focus_buddy_greet_by_name: true,
@@ -68,6 +69,7 @@ export function normalizeFocusBuddyPreferences(preferences = {}) {
     focus_buddy_character: focusBuddyCharacters.includes(preferences.focus_buddy_character)
       ? preferences.focus_buddy_character
       : defaults.focus_buddy_character,
+    focus_buddy_sounds_enabled: preferences.focus_buddy_sounds_enabled !== false,
     focus_buddy_interval_minutes: waterReminderIntervals.includes(Number(preferences.focus_buddy_interval_minutes))
       ? Number(preferences.focus_buddy_interval_minutes)
       : defaults.focus_buddy_interval_minutes,
@@ -111,5 +113,19 @@ export function waterReminderDelayMs(nextAt, now = Date.now()) {
 export function claimWaterReminderResponse(state) {
   if (state.current) return false;
   state.current = true;
+  return true;
+}
+
+export function claimFocusBuddyAppearanceSound(
+  state,
+  { visible, character, enabled },
+  now = 0,
+) {
+  const newlyAppeared = visible
+    && (!state.visible || state.character !== character);
+  state.visible = visible;
+  state.character = character;
+  if (!newlyAppeared || !enabled || now - state.lastPlayedAt < 250) return false;
+  state.lastPlayedAt = now;
   return true;
 }

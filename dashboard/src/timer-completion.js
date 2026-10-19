@@ -14,6 +14,26 @@ export function restoreLocalFocusTimer(saved, durationOptions, now = Date.now())
   const duration = Number(saved.duration);
   if (!durationOptions.includes(duration) || !Number.isFinite(saved.startedAt)) return null;
   const durationSeconds = duration * 60;
+  const sessionId = typeof saved.sessionId === 'string'
+    ? { sessionId: saved.sessionId }
+    : {};
+  if (saved.status === 'save-pending') {
+    if (typeof saved.sessionId !== 'string' || !saved.sessionId
+      || typeof saved.completed !== 'boolean'
+      || !Number.isInteger(saved.remainingSeconds)
+      || saved.remainingSeconds < 0
+      || saved.remainingSeconds > durationSeconds) return null;
+    return {
+      duration,
+      startedAt: saved.startedAt,
+      paused: false,
+      remaining: saved.remainingSeconds,
+      pendingSave: {
+        ...saved,
+        status: 'save-pending',
+      },
+    };
+  }
   if (saved.status === 'paused') {
     if (!Number.isInteger(saved.remainingSeconds)
       || saved.remainingSeconds < 0
@@ -23,6 +43,7 @@ export function restoreLocalFocusTimer(saved, durationOptions, now = Date.now())
       startedAt: saved.startedAt,
       paused: true,
       remaining: saved.remainingSeconds,
+      ...sessionId,
     };
   }
   if (saved.status !== undefined && saved.status !== 'running') return null;
@@ -31,6 +52,7 @@ export function restoreLocalFocusTimer(saved, durationOptions, now = Date.now())
     startedAt: saved.startedAt,
     paused: false,
     remaining: remainingFocusSeconds(saved.startedAt, durationSeconds, now),
+    ...sessionId,
   };
 }
 

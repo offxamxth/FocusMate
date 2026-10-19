@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
+  claimFocusBuddyAppearanceSound,
   claimWaterReminderResponse,
   focusBuddyCharacters,
   focusBuddyAnimationStates,
@@ -18,6 +19,7 @@ import {
   waterReminderStorageKey,
   transitionFocusBuddyAnimation,
 } from '../src/focus-buddy.js';
+import { playFocusBuddyAppearanceSound } from '../src/buddy-sound.js';
 import { supportedLanguages, translate } from '../src/i18n.js';
 
 function createStorage() {
@@ -42,6 +44,7 @@ test('Focus Buddy and every mood tip are translated in every supported language'
     'focusBuddy.title', 'focusBuddy.description', 'focusBuddy.enabled',
     'focusBuddy.placeholder',
     'focusBuddy.enabledHelp', 'focusBuddy.character', 'focusBuddy.webHero',
+    'focusBuddy.soundsEnabled', 'focusBuddy.soundsHelp',
     'focusBuddy.capeHero', 'focusBuddy.cat', 'focusBuddy.frog',
     'focusBuddy.interval', 'focusBuddy.snooze', 'focusBuddy.greetByName',
     'focusBuddy.duringSessions', 'focusBuddy.duringSessionsHelp',
@@ -72,6 +75,7 @@ test('Focus Buddy preferences validate character and reminder intervals', () => 
     focus_buddy_interval_minutes: 30,
     focus_buddy_snooze_minutes: 5,
     focus_buddy_enabled: false,
+    focus_buddy_sounds_enabled: true,
     focus_buddy_greet_by_name: false,
     focus_buddy_during_sessions: true,
   });
@@ -80,6 +84,7 @@ test('Focus Buddy preferences validate character and reminder intervals', () => 
     focus_buddy_character: 'frog',
     focus_buddy_interval_minutes: 30,
     focus_buddy_snooze_minutes: 5,
+    focus_buddy_sounds_enabled: true,
     focus_buddy_greet_by_name: false,
     focus_buddy_during_sessions: true,
   });
@@ -88,6 +93,94 @@ test('Focus Buddy preferences validate character and reminder intervals', () => 
     normalizeFocusBuddyPreferences({ focus_buddy_character: 'copied-hero', focus_buddy_interval_minutes: 1 }),
     normalizeFocusBuddyPreferences(),
   );
+});
+
+test('buddy appearance sound plays once per visible appearance and is throttled during rapid switches', () => {
+  const state = {
+    visible: false,
+    character: '',
+    lastPlayedAt: Number.NEGATIVE_INFINITY,
+  };
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'web-hero', enabled: true,
+  }, 1000), true);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'web-hero', enabled: true,
+  }, 1100), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cape-hero', enabled: true,
+  }, 1200), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cape-hero', enabled: true,
+  }, 1300), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: false, character: 'cape-hero', enabled: true,
+  }, 1400), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cape-hero', enabled: true,
+  }, 1500), true);
+});
+
+test('disabled buddy sounds stay silent and reenabling does not replay the current appearance', () => {
+  const state = {
+    visible: false,
+    character: '',
+    lastPlayedAt: Number.NEGATIVE_INFINITY,
+  };
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cat', enabled: false,
+  }, 1000), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cat', enabled: true,
+  }, 1300), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: false, character: 'cat', enabled: true,
+  }, 1400), false);
+  assert.equal(claimFocusBuddyAppearanceSound(state, {
+    visible: true, character: 'cat', enabled: true,
+  }, 1500), true);
+});
+
+test('the synthesized buddy sound uses mocked Web Audio and safely handles blocked playback', async () => {
+  let started = 0;
+  const context = {
+    state: 'suspended',
+    currentTime: 0,
+    destination: {},
+    async resume() { this.state = 'running'; },
+    createOscillator() {
+      return {
+        type: '',
+        frequency: { value: 0 },
+        connect() {},
+        start() { started += 1; },
+        stop() {},
+      };
+    },
+    createGain() {
+      return {
+        gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+        connect() {},
+      };
+    },
+  };
+  assert.equal(await playFocusBuddyAppearanceSound(context), true);
+  assert.equal(started, 2);
+  assert.equal(await playFocusBuddyAppearanceSound(null), false);
+  assert.equal(await playFocusBuddyAppearanceSound({
+    ...context,
+    state: 'suspended',
+    async resume() { throw new Error('autoplay blocked'); },
+  }), false);
+});
+
+test('FocusBuddy gates appearance events by the saved sound preference and initializes audio after interaction', () => {
+  const source = readFileSync(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(source, /claimFocusBuddyAppearanceSound\([\s\S]*?buddyVisible,\s*character,\s*enabled:\s*buddySoundsEnabled/);
+  assert.match(source, /window\.addEventListener\('pointerdown', initializeBuddyAudio\)/);
+  assert.match(source, /window\.addEventListener\('keydown', initializeBuddyAudio\)/);
+  assert.match(source, /focus_buddy_sounds_enabled/);
+  assert.match(source, /playFocusBuddyAppearanceSound\(buddyAudioContext\.current\)/);
 });
 
 test('every supplied Focus Buddy PNG exists and has a valid RGBA PNG header', () => {

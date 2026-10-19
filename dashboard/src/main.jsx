@@ -11,6 +11,7 @@ import {
   restoreLocalFocusTimer,
   resumeLocalFocusTimer,
 } from './timer-completion.js';
+import { playFocusBuddyAppearanceSound } from './buddy-sound.js';
 import {
   supabase,
   supabaseConfigurationError,
@@ -50,6 +51,7 @@ import {
 import { reportPwaSessionActivity } from './pwa-session-state.js';
 import {
   focusBuddyCharacters,
+  claimFocusBuddyAppearanceSound,
   focusMoods,
   normalizeFocusBuddyPreferences,
   claimWaterReminderResponse,
@@ -475,7 +477,7 @@ function FocusMateApp({
   }, [mobileMoreOpen]);
 
   useEffect(() => {
-    if (!account && page === 'friends') {
+    if (!account && pages.some((item) => item.id === page && item.requiresCloud)) {
       setPage('overview');
       setMobileDestination('overview');
       window.history.replaceState({}, '', navigationPath('overview'));
@@ -729,7 +731,10 @@ function FocusMateApp({
   const logout = async () => {
     if (live.session_active) {
       try {
-        const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
+        const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, {
+          method: 'POST',
+          body: JSON.stringify({ completed: false }),
+        });
         cameraBackendActiveRef.current = false;
         setLive(data.live || {});
       } catch (error) {
@@ -833,16 +838,16 @@ function FocusMateApp({
     if (page !== 'focus-room' && (streamRef.current || stream)) stopCamera();
   }, [page]);
 
-  const endFocusSession = async () => {
+  const endFocusSession = async ({ completed = true, sessionId = '' } = {}) => {
     stopCamera();
     if (!cameraBackendActiveRef.current && !live.session_active) return;
+    const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, {
+      method: 'POST',
+      body: JSON.stringify({ completed, session_id: sessionId }),
+    });
     cameraBackendActiveRef.current = false;
-    try {
-      const data = await api(`/api/webcam/stop?username=${encodeURIComponent(username)}`, { method: 'POST', body: '{}' });
-      setLive(data.live || {}); inform(data.message);
-    } catch (error) {
-      inform(`The camera stopped, but its session could not be saved: ${error.message}`);
-    }
+    setLive(data.live || {});
+    inform(data.message);
   };
 
   const beginFocusSession = async (plan) => {
@@ -1113,6 +1118,7 @@ function Welcome({ onLogin, onCloudLogin, cloudConfigurationError, notice }) {
         {onCloudLogin && <button className="outline-button auth-local-link" type="button" onClick={onCloudLogin}>{t('local.signInCloud')}</button>}
         {cloudConfigurationError && <small className="privacy-note cloud-config-warning" role="status">{cloudConfigurationError}</small>}
         <small className="privacy-note"><LockKeyhole size={14} /> {t('local.localNote')}</small>
+        <a className="welcome-documentation-link" href="/documentation.html">{translate(language, 'public.documentation')}</a>
       </form>
     </main>
   );
@@ -1239,7 +1245,7 @@ function Overview({
         <button type="button" onClick={() => onNavigate('insights')}><BarChart3 size={17} /><span>{translate(language, 'nav.progress')}</span><ArrowUpRight size={15} /></button>
         <button type="button" onClick={() => onNavigate('achievements')}><Trophy size={17} /><span>{translate(language, 'nav.achievements')}</span><ArrowUpRight size={15} /></button>
         <button type="button" onClick={() => onNavigate('session-preferences')}><Settings2 size={17} /><span>{translate(language, 'nav.preferences')}</span><ArrowUpRight size={15} /></button>
-        {hasCloudAccount && <button type="button" onClick={() => onNavigate('friends')}><Users size={17} /><span>{translate(language, 'nav.friends')}</span><ArrowUpRight size={15} /></button>}
+        {cloudAccount && <button type="button" onClick={() => onNavigate('friends')}><Users size={17} /><span>{translate(language, 'nav.friends')}</span><ArrowUpRight size={15} /></button>}
       </nav>
     </div>
   );
@@ -1572,6 +1578,7 @@ function RoomDailyQuests({ daily, availableXp, language, onReroll, onClaim }) {
 function TimerPanel({
   profile,
   username,
+  recoveredSessionId,
   onNotice,
   language,
   onSessionStart,
@@ -1600,10 +1607,14 @@ function TimerPanel({
   const [completed, setCompleted] = useState(false);
   const [endedEarly, setEndedEarly] = useState(false);
   const [reloadInterrupted, setReloadInterrupted] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('idle');
   const [clientPerformanceNow, setClientPerformanceNow] = useState(() => performance.now());
   const startedAtRef = useRef(0);
+  const sessionIdRef = useRef('');
   const localSessionActiveRef = useRef(false);
   const completionHandled = useRef(false);
+  const pendingSaveRef = useRef(null);
+  const saveInProgressRef = useRef(false);
   const activeRoomSession = useRef('');
   const chimeContext = useRef(null);
   const timerStorageKey = `focusmate-active-timer:${username}`;
@@ -1618,20 +1629,35 @@ function TimerPanel({
       );
       if (!state) throw new Error('Invalid saved timer');
       startedAtRef.current = state.startedAt;
+      sessionIdRef.current = state.pendingSave?.sessionId
+        || state.sessionId
+        || recoveredSessionId
+        || crypto.randomUUID();
       localSessionActiveRef.current = true;
       completionHandled.current = false;
       setDuration(state.duration);
       setRemaining(state.remaining);
       setPaused(state.paused);
-      setRunning(!state.paused);
-      onSessionStateChange(true);
-      onSessionPauseStateChange(state.paused);
+      if (state.pendingSave) {
+        pendingSaveRef.current = state.pendingSave;
+        setSaveStatus('failed');
+        setCompleted(state.pendingSave.completed);
+        setEndedEarly(!state.pendingSave.completed);
+        setRunning(false);
+        localSessionActiveRef.current = false;
+        onSessionStateChange(false);
+        onSessionPauseStateChange(false);
+      } else {
+        setRunning(!state.paused);
+        onSessionStateChange(true);
+        onSessionPauseStateChange(state.paused);
+      }
       return;
     } catch {
       sessionStorage.removeItem(timerStorageKey);
       setReloadInterrupted(true);
     }
-  }, [timerStorageKey]);
+  }, [recoveredSessionId, timerStorageKey]);
   const playChime = () => {
     if (!profile.session_preferences?.session_chimes || chimeContext.current?.state !== 'running') return;
     const context = chimeContext.current;
@@ -1646,7 +1672,27 @@ function TimerPanel({
     oscillator.start();
     oscillator.stop(context.currentTime + 0.33);
   };
-  const endLocalSession = (wasCompleted) => {
+  const saveEndedSession = async (pendingSave) => {
+    if (saveInProgressRef.current) return;
+    saveInProgressRef.current = true;
+    setSaveStatus('saving');
+    try {
+      await onSessionEnd({
+        completed: pendingSave.completed,
+        sessionId: pendingSave.sessionId,
+      });
+      sessionStorage.removeItem(timerStorageKey);
+      pendingSaveRef.current = null;
+      setSaveStatus('saved');
+      if (pendingSave.completed) void playSessionCompletionBeep(chimeContext.current);
+    } catch (error) {
+      setSaveStatus('failed');
+      onNotice(`Your session could not be saved yet. Retry to preserve its history and progress. ${error.message}`);
+    } finally {
+      saveInProgressRef.current = false;
+    }
+  };
+  const endLocalSession = async (wasCompleted) => {
     if (!localSessionActiveRef.current || !claimTimerCompletion(completionHandled)) return;
     const remainingAtEnd = paused
       ? remaining
@@ -1660,10 +1706,22 @@ function TimerPanel({
     setCompleted(completedByDeadline);
     setEndedEarly(!completedByDeadline);
     setRemaining(completedByDeadline ? 0 : remainingAtEnd);
-    sessionStorage.removeItem(timerStorageKey);
     onSessionStateChange(false);
-    onSessionEnd({ completed: completedByDeadline });
-    if (completedByDeadline) void playSessionCompletionBeep(chimeContext.current);
+    const pendingSave = {
+      startedAt: startedAtRef.current,
+      duration,
+      remainingSeconds: completedByDeadline ? 0 : remainingAtEnd,
+      sessionId: sessionIdRef.current || crypto.randomUUID(),
+      status: 'save-pending',
+      completed: completedByDeadline,
+    };
+    pendingSaveRef.current = pendingSave;
+    try {
+      sessionStorage.setItem(timerStorageKey, JSON.stringify(pendingSave));
+    } catch (error) {
+      onNotice(`Session recovery could not be stored in this tab: ${error.message}`);
+    }
+    await saveEndedSession(pendingSave);
   };
   useEffect(() => () => { chimeContext.current?.close(); }, []);
   useEffect(() => {
@@ -1699,6 +1757,7 @@ function TimerPanel({
       completionHandled.current = false;
       setCompleted(false);
       setEndedEarly(false);
+      setSaveStatus('idle');
     }
     setDuration(roomDuration);
     setRemaining(remainingRoomFocusSeconds(roomTimer, performance.now()));
@@ -1744,10 +1803,12 @@ function TimerPanel({
     endLocalSession(true);
   }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, paused, profile.tasks, remaining, roomSessionId, roomTimer, running, timerStorageKey, username]);
   const chooseDuration = (value) => {
-    if (running || !durationOptions.includes(value)) return;
+    if (running || pendingSaveRef.current || saveInProgressRef.current
+      || !durationOptions.includes(value)) return;
     completionHandled.current = false;
     setCompleted(false);
     setEndedEarly(false);
+    setSaveStatus('idle');
     setReloadInterrupted(false);
     setPaused(false);
     setDuration(value);
@@ -1763,15 +1824,19 @@ function TimerPanel({
     setPaused(false);
     onSessionPauseStateChange(false);
     setReloadInterrupted(false);
+    setSaveStatus('idle');
     setRemaining(duration * 60);
+    const sessionId = crypto.randomUUID();
+    sessionIdRef.current = sessionId;
     sessionStorage.setItem(timerStorageKey, JSON.stringify({
       startedAt,
       duration,
       status: 'running',
+      sessionId,
     }));
     setRunning(true);
     onSessionStateChange(true);
-    onSessionStart({ duration, startedAt });
+    onSessionStart({ duration, startedAt, sessionId });
     if (!chimeContext.current) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass) {
@@ -1788,10 +1853,12 @@ function TimerPanel({
     }).catch(() => {});
   };
   const reset = () => {
-    if (roomTimer || running || paused || localSessionActiveRef.current) return;
+    if (roomTimer || running || paused || localSessionActiveRef.current
+      || pendingSaveRef.current || saveInProgressRef.current) return;
     completionHandled.current = false;
     setCompleted(false);
     setEndedEarly(false);
+    setSaveStatus('idle');
     setRemaining(duration * 60);
   };
   const pause = async () => {
@@ -1822,6 +1889,7 @@ function TimerPanel({
       duration,
       status: 'paused',
       remainingSeconds,
+      sessionId: sessionIdRef.current,
     }));
   };
   const resume = async () => {
@@ -1852,6 +1920,7 @@ function TimerPanel({
       startedAt,
       duration,
       status: 'running',
+      sessionId: sessionIdRef.current,
     }));
   };
   const minutes = String(Math.floor(remaining / 60)).padStart(2, '0');
@@ -1861,7 +1930,7 @@ function TimerPanel({
     <div className="timer-top">
       <span className="eyebrow">{t('timerEyebrow')}</span>
       <label className="select-wrap">
-        <select value={duration} disabled={running || paused || Boolean(roomTimer)} onChange={(event) => chooseDuration(Number(event.target.value))}>
+        <select value={duration} disabled={running || paused || Boolean(roomTimer) || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onChange={(event) => chooseDuration(Number(event.target.value))}>
           {durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}
         </select>
         <ChevronDown size={15} />
@@ -1874,6 +1943,14 @@ function TimerPanel({
     <p className="timer-caption">{t('timerCaption')}</p>
     {completed && <div className="timer-complete" role="status" aria-live="polite"><strong>🎉 {t('sessionComplete')}</strong><span>{t('sessionEnded')}</span></div>}
     {endedEarly && <div className="timer-complete" role="status" aria-live="polite"><strong>{t('sessionEndedEarly')}</strong><span>{t('sessionEnded')}</span></div>}
+    {saveStatus === 'saving' && <p className="timer-reload-note" role="status">{t('sessionSavePending')}</p>}
+    {saveStatus === 'saved' && <p className="timer-reload-note" role="status">{t('sessionSaveSucceeded')}</p>}
+    {saveStatus === 'failed' && <div className="timer-reload-note" role="alert">
+      <span>{t('sessionSaveFailed')}</span>
+      <button className="outline-button" disabled={saveStatus === 'saving'} onClick={() => {
+        if (pendingSaveRef.current) void saveEndedSession(pendingSaveRef.current);
+      }}>{t('retrySessionSave')}</button>
+    </div>}
     {reloadInterrupted && <p className="timer-reload-note" role="status">{t('sessionReloadInterrupted')}</p>}
     <div className="timer-actions">
       {running ? (
@@ -1899,7 +1976,7 @@ function TimerPanel({
           <Play size={17} /> {t('startFocus')}
         </button>
       )}
-      <button className="outline-button" disabled={Boolean(roomTimer) || running || paused || transitioning} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
+      <button className="outline-button" disabled={Boolean(roomTimer) || running || paused || transitioning || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
     </div>
     <small className="muted-note">{t('timerNote')}</small>
   </section>;
@@ -1911,6 +1988,14 @@ function FocusBuddy({ username, profile, live, language }) {
   const [reminder, setReminder] = useState(null);
   const [animationState, setAnimationState] = useState('hidden');
   const [scheduleVersion, setScheduleVersion] = useState(0);
+  const [buddyAudioReady, setBuddyAudioReady] = useState(false);
+  const buddyAudioContext = useRef(null);
+  const pendingBuddySound = useRef(false);
+  const appearanceSoundState = useRef({
+    visible: false,
+    character: '',
+    lastPlayedAt: Number.NEGATIVE_INFINITY,
+  });
   const animationFallbackTimeout = useRef(null);
   const reminderResponseClaimed = useRef(false);
   const reminderPending = useRef(false);
@@ -1918,9 +2003,59 @@ function FocusBuddy({ username, profile, live, language }) {
   const storageKey = waterReminderStorageKey(username);
   const activeSession = Boolean(live.session_active || roomTimer?.status === 'focusing');
   const allowDuringSession = preferences.focus_buddy_during_sessions;
+  const buddySoundsEnabled = preferences.focus_buddy_sounds_enabled;
+  const character = preferences.focus_buddy_character;
+  const buddyVisible = preferences.focus_buddy_enabled
+    && (animationState === 'walking-in' || animationState === 'waiting'
+      || animationState === 'happy-swinging' || animationState === 'sad-walking-back');
   const t = (key, values) => translate(language, `focusBuddy.${key}`, values);
 
   useEffect(() => subscribeToRoomTimerState(setRoomTimer), []);
+  useEffect(() => {
+    const initializeBuddyAudio = () => {
+      if (!buddySoundsEnabled || buddyAudioContext.current) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      try {
+        const context = new AudioContextClass();
+        buddyAudioContext.current = context;
+        Promise.resolve(context.resume()).then(() => {
+          if (context.state === 'running') setBuddyAudioReady(true);
+        }).catch(() => {});
+      } catch {
+        buddyAudioContext.current = null;
+      }
+    };
+    window.addEventListener('pointerdown', initializeBuddyAudio);
+    window.addEventListener('keydown', initializeBuddyAudio);
+    return () => {
+      window.removeEventListener('pointerdown', initializeBuddyAudio);
+      window.removeEventListener('keydown', initializeBuddyAudio);
+    };
+  }, [buddySoundsEnabled]);
+  useEffect(() => {
+    const shouldPlay = claimFocusBuddyAppearanceSound(
+      appearanceSoundState.current,
+      { visible: buddyVisible, character, enabled: buddySoundsEnabled },
+      performance.now(),
+    );
+    if (!buddySoundsEnabled) {
+      pendingBuddySound.current = false;
+      return;
+    }
+    if (!shouldPlay) return;
+    if (!buddyAudioContext.current) {
+      pendingBuddySound.current = true;
+      return;
+    }
+    void playFocusBuddyAppearanceSound(buddyAudioContext.current);
+  }, [animationState, buddySoundsEnabled, buddyVisible, character]);
+  useEffect(() => {
+    if (!buddyAudioReady || !buddySoundsEnabled || !pendingBuddySound.current) return;
+    pendingBuddySound.current = false;
+    void playFocusBuddyAppearanceSound(buddyAudioContext.current);
+  }, [buddyAudioReady, buddySoundsEnabled]);
+  useEffect(() => () => { void buddyAudioContext.current?.close(); }, []);
   useEffect(() => {
     if (previousUsername.current === username) return;
     previousUsername.current = username;
@@ -2055,8 +2190,6 @@ function FocusBuddy({ username, profile, live, language }) {
     : animationState === 'sad-walking-back'
       ? t('snoozed')
       : name ? t('greeting', { name }) : t('greetingFallback');
-  const character = preferences.focus_buddy_character;
-
   return (
     <div
       className={`focus-buddy-overlay is-${animationState}`}
@@ -2107,25 +2240,31 @@ function FocusRoom({
       : profile.session_preferences,
   );
   const t = (key, values) => translate(language, `focus.${key}`, values);
-  const startSession = ({ duration, startedAt }) => {
+  const sessionPlanRef = useRef(null);
+  const startSession = ({ duration, startedAt, sessionId }) => {
     const plan = {
       subject,
       goal,
       mood,
+      session_id: sessionId,
       session_started_at: new Date(startedAt).toISOString(),
       session_duration_seconds: duration * 60,
       session_configuration: sessionConfiguration,
     };
+    sessionPlanRef.current = plan;
     sessionLifecyclePromiseRef.current = Promise.resolve(onBeginSession(plan));
     void onStartCamera(plan);
+    return sessionLifecyclePromiseRef.current;
   };
-  const endSession = () => {
-    void sessionLifecyclePromiseRef.current
-      .then((started) => {
-        if (started || live.session_active) return onStopSession();
-        return undefined;
-      })
-      .catch((error) => onNotice(`Your focus session could not be completed: ${error.message}`));
+  const endSession = async ({ completed, sessionId }) => {
+    let started = await sessionLifecyclePromiseRef.current;
+    if (!started && sessionPlanRef.current?.session_id === sessionId) {
+      started = await onBeginSession(sessionPlanRef.current);
+    }
+    if (!started && !live.session_active && !sessionId) {
+      throw new Error('The focus session could not be started for saving. Retry to try again.');
+    }
+    return onStopSession({ completed, sessionId });
   };
   const pauseSession = async () => {
     const started = await sessionLifecyclePromiseRef.current;
@@ -2154,6 +2293,7 @@ function FocusRoom({
       <TimerPanel
         profile={profile}
         username={username}
+        recoveredSessionId={live.session_id}
         onNotice={onNotice}
         language={language}
         onSessionStart={startSession}
@@ -2493,6 +2633,7 @@ function Preferences({ profile, onSave }) {
     session_chimes: false,
     focus_buddy_enabled: true,
     focus_buddy_character: 'web-hero',
+    focus_buddy_sounds_enabled: true,
     focus_buddy_interval_minutes: 60,
     focus_buddy_snooze_minutes: 10,
     focus_buddy_greet_by_name: true,
@@ -2599,6 +2740,11 @@ function Preferences({ profile, onSave }) {
           <label className="setting-row">
             <span><strong>{translate(language, 'focusBuddy.enabled')}</strong><small>{translate(language, 'focusBuddy.enabledHelp')}</small></span>
             <input type="checkbox" checked={Boolean(preferences.focus_buddy_enabled)} onChange={(event) => set('focus_buddy_enabled', event.target.checked)} />
+            <i className="toggle-track" />
+          </label>
+          <label className="setting-row">
+            <span><strong>{translate(language, 'focusBuddy.soundsEnabled')}</strong><small>{translate(language, 'focusBuddy.soundsHelp')}</small></span>
+            <input type="checkbox" disabled={!preferences.focus_buddy_enabled} checked={Boolean(preferences.focus_buddy_sounds_enabled)} onChange={(event) => set('focus_buddy_sounds_enabled', event.target.checked)} />
             <i className="toggle-track" />
           </label>
           <label className="buddy-setting-select">

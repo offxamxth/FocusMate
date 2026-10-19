@@ -23,6 +23,32 @@ function leaderboardError(code, message) {
   return error;
 }
 
+function isMissingLeaderboardFunction(error) {
+  const code = String(error?.code || '');
+  if (code === 'PGRST202' || code === '42883') return true;
+  const details = [error?.message, error?.details, error?.hint]
+    .filter((value) => typeof value === 'string')
+    .join(' ');
+  return /(?:could not find|does not exist|not found)[\s\S]{0,120}get_focusmate_leaderboard|function[\s\S]{0,120}get_focusmate_leaderboard[\s\S]{0,80}(?:does not exist|not found)|schema cache[\s\S]{0,120}get_focusmate_leaderboard/i
+    .test(details);
+}
+
+function throwLeaderboardRpcError(error, message) {
+  if (isMissingLeaderboardFunction(error)) {
+    throw leaderboardError(
+      'MIGRATION_REQUIRED',
+      'The leaderboard database needs an update before Global XP rankings are available.',
+    );
+  }
+  const details = [error?.message, error?.details, error?.hint]
+    .filter((value) => typeof value === 'string')
+    .join(' ');
+  if (/fetch failed|failed to fetch|network|connection|timeout/i.test(details)) {
+    throw leaderboardError('NETWORK_ERROR', 'The leaderboard network request failed.');
+  }
+  throw leaderboardError(error?.code, message);
+}
+
 function isLegacyLeaderboardResponse(data) {
   return isRecord(data)
     && Array.isArray(data.entries)
@@ -115,7 +141,7 @@ export async function getFocusMateLeaderboard(
     p_limit: limit,
     p_offset: offset,
   });
-  if (error) throw leaderboardError(error.code, 'The leaderboard could not be loaded.');
+  if (error) throwLeaderboardRpcError(error, 'The leaderboard could not be loaded.');
   return normalizeLeaderboard(data);
 }
 
@@ -128,7 +154,7 @@ export async function setFocusMateLeaderboardVisibility(client, visibility) {
   const { data, error } = await client.rpc('set_focusmate_leaderboard_visibility', {
     p_visibility: visibility,
   });
-  if (error) throw leaderboardError(error.code, 'The leaderboard privacy setting could not be saved.');
+  if (error) throwLeaderboardRpcError(error, 'The leaderboard privacy setting could not be saved.');
   if (!allowedVisibilities.has(data)) {
     throw leaderboardError('INVALID_RESPONSE', 'The leaderboard privacy response was invalid.');
   }
@@ -140,6 +166,7 @@ export function leaderboardErrorTranslationKey(error) {
   if (code === '28000') return 'leaderboard.error.signIn';
   if (code === '22023') return 'leaderboard.error.request';
   if (code === '42501') return 'leaderboard.error.forbidden';
+  if (code === 'NETWORK_ERROR') return 'leaderboard.error.network';
   if (code === 'MIGRATION_REQUIRED') return 'leaderboard.error.updateRequired';
   if (code === 'INVALID_RESPONSE') return 'leaderboard.error.response';
   if (error instanceof TypeError || /fetch failed|failed to fetch|network|connection|timeout/i.test(error?.message || '')) {

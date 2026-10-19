@@ -111,6 +111,7 @@ test('Focus page starts its camera from Start Focus and keeps the existing previ
 
 test('restored focus timers complete their persisted active session after reload', async () => {
   const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  assert.match(source, /if \(started \|\| live\.session_active\) return onStopSession\(\)/);
+  assert.match(source, /if \(!started && !live\.session_active && !sessionId\) \{[\s\S]*?throw new Error\('The focus session could not be started for saving/);
+  assert.match(source, /return onStopSession\(\{ completed, sessionId \}\)/);
   assert.match(source, /sessionLifecyclePromiseRef\.current = Promise\.resolve\(onBeginSession\(plan\)\)/);
 });

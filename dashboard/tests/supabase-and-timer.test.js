@@ -308,6 +308,14 @@ test('focus timer state restores legacy running sessions and persisted pauses af
     restoreLocalFocusTimer({ startedAt: now - 61_000, duration: 15 }, options, now),
     { duration: 15, startedAt: now - 61_000, paused: false, remaining: 839 },
   );
+  assert.equal(
+    restoreLocalFocusTimer({
+      startedAt: now - 61_000,
+      duration: 15,
+      sessionId: 'persisted-session-id',
+    }, options, now).sessionId,
+    'persisted-session-id',
+  );
   assert.deepEqual(
     restoreLocalFocusTimer({
       startedAt: now - 61_000,
@@ -319,6 +327,31 @@ test('focus timer state restores legacy running sessions and persisted pauses af
   );
   assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 17 }, options, now), null);
   assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 15, status: 'unknown' }, options, now), null);
+});
+
+test('a failed completion save restores an explicit retry state with the same session identity', () => {
+  const pendingSave = {
+    startedAt: 900_000,
+    duration: 15,
+    remainingSeconds: 0,
+    status: 'save-pending',
+    completed: true,
+    sessionId: 'completion-retry-id',
+  };
+  assert.deepEqual(
+    restoreLocalFocusTimer(pendingSave, [15, 25, 45, 60, 90, 120], 1_000_000),
+    {
+      duration: 15,
+      startedAt: 900_000,
+      paused: false,
+      remaining: 0,
+      pendingSave,
+    },
+  );
+  assert.equal(restoreLocalFocusTimer({
+    ...pendingSave,
+    sessionId: '',
+  }, [15, 25, 45, 60, 90, 120], 1_000_000), null);
 });
 
 test('pausing freezes the remaining time and resuming anchors a fresh countdown', () => {
@@ -344,6 +377,11 @@ test('timer integration keeps its owner mounted across navigation and stops came
   assert.match(source, /if \(page !== 'focus-room' && \(streamRef\.current \|\| stream\)\) stopCamera\(\)/);
   assert.match(source, /claimTimerCompletion\(completionHandled\)/);
   assert.match(source, /sessionStorage\.setItem\(timerStorageKey, JSON\.stringify\(\{\s*startedAt,\s*duration,\s*status: 'running'/);
+  assert.match(source, /onSessionEnd\(\{\s*completed:\s*pendingSave\.completed,\s*sessionId:\s*pendingSave\.sessionId/);
+  assert.match(source, /status: 'save-pending'/);
+  assert.match(source, /retrySessionSave/);
+  assert.match(localApiSource, /session_completed:\s*completed/);
+  assert.match(localApiSource, /SESSION_SAVE_PREFIX/);
   assert.match(source, /status: 'paused',\s*remainingSeconds/);
   assert.match(source, /onSessionPause=\{pauseSession\}/);
   assert.match(source, /onSessionResume=\{resumeSession\}/);
