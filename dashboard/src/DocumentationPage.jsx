@@ -1,5 +1,11 @@
 const updates = [
   {
+    date: 'October 19, 2026',
+    commit: '198156f',
+    title: 'Session recovery, leaderboard, and buddy sounds',
+    detail: 'Clarified early session completion and retryable session saves, improved missing leaderboard-function errors, added optional Focus Buddy appearance sounds, and linked Documentation from the signed-out home page.',
+  },
+  {
     date: 'October 18, 2026',
     commit: 'e824c4b',
     title: 'Progression and room video',
@@ -111,6 +117,10 @@ export default function DocumentationPage({ publicPage = false }) {
             <p>Use tasks, study goals, session history, achievements, and daily quests to organize and review your activity. Saved data depends on whether you use a local or cloud profile.</p>
           </article>
           <article>
+            <h3>Focus Buddy</h3>
+            <p>Choose whether Focus Buddy is enabled and select its appearance in Session preferences. Buddy appearance sounds are optional, use a short locally synthesized chime, and can be turned off separately. Audio starts only after browser interaction; camera and microphone access are not needed.</p>
+          </article>
+          <article>
             <h3>Optional webcam signals</h3>
             <p>MediaPipe processes camera frames in the browser to estimate enabled face, eye-closure, head-turn, posture, and screen-distance signals. These are approximate cues, not attention measurements. Frames and landmarks are not saved as session history.</p>
           </article>
@@ -187,7 +197,7 @@ export default function DocumentationPage({ publicPage = false }) {
           ))}
         </ol>
       </section>
-      <p className="documentation-footnote">Documentation content reviewed for the FocusMate project history through October 18, 2026.</p>
+      <p className="documentation-footnote">Documentation content reviewed for the FocusMate project history through October 19, 2026.</p>
     </div>
   );
 }
