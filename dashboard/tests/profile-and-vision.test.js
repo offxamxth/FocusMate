@@ -13,6 +13,7 @@ globalThis.window = { location: { origin: 'http://localhost' } };
 
 const { api, levelForXp } = await import('../src/local-api.js');
 const {
+  countCompletedVerifiedDailyQuests,
   dailyFocusSeconds,
   generateDailyQuests,
   localDateKey,
@@ -41,6 +42,22 @@ test('levels are derived consistently from normalized XP', () => {
   assert.equal(levelForXp(100), 2);
   assert.equal(levelForXp(199), 2);
   assert.equal(levelForXp(200), 3);
+});
+
+test('daily token progress counts only completed server-verified eligible quests', () => {
+  const quests = [
+    { category: 'focus_time', verified: true, completed: true },
+    { category: 'session_count', verified: true, completed: true },
+    { category: 'session_xp', verified: true, completed: true },
+    { category: 'room_host_sessions', verified: true, completed: false },
+    { category: 'camera_alerts', verified: true, completed: true },
+    { category: 'room_host_sessions', verified: false, completed: true },
+  ];
+
+  assert.equal(countCompletedVerifiedDailyQuests(quests.slice(0, 2)), 2);
+  assert.equal(countCompletedVerifiedDailyQuests(quests), 3);
+  assert.equal(countCompletedVerifiedDailyQuests([...quests, quests[0]]), 4);
+  assert.equal(countCompletedVerifiedDailyQuests(null), 0);
 });
 
 test('only tired and stressed session moods require confirmation', () => {

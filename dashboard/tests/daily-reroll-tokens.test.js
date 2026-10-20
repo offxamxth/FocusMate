@@ -164,6 +164,8 @@ test('daily quest UI confirms token spending and reports verified state and rero
   assert.match(dailyComponent, /quest\.verified \? translate\(language, 'quests\.tokenMilestone'\)/);
   assert.match(dailyComponent, /quests\.verifiedDailySubtitle/);
   assert.match(dailyComponent, /quests\.dailyTokenEarned/);
+  assert.match(dailyComponent, /countCompletedVerifiedDailyQuests\(daily\.quests\) >= 3/);
+  assert.match(dailyComponent, /: completed === 4/);
   assert.match(dailyComponent, /quest\.completed && !quest\.verified && <small className="quest-reward-note">\+\{quest\.rewardXP\} XP/);
   assert.doesNotMatch(dailyComponent, /onClick=\{\(\) => void reroll\(quest\.id\)\}/);
   assert.doesNotMatch(localApiSource, /\/api\/quests\/reroll/);

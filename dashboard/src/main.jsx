@@ -17,7 +17,13 @@ import {
   supabaseConfigurationError,
   updatePrivateProfile,
 } from './lib/supabase.js';
-import { dailyFocusSeconds, localDateKey, studyStreak, weekStudyDays } from './progress-data.js';
+import {
+  countCompletedVerifiedDailyQuests,
+  dailyFocusSeconds,
+  localDateKey,
+  studyStreak,
+  weekStudyDays,
+} from './progress-data.js';
 import {
   browserLanguage,
   supportedLanguages,
@@ -1402,6 +1408,9 @@ function DailyQuests({
     : Number(profile.rerolls_remaining_today);
   const canReroll = Boolean(onReroll && tokenBalance > 0 && rerollsRemaining > 0);
   const completed = daily.quests.filter((quest) => quest.completed).length;
+  const rewardEarned = cloudAccount
+    ? countCompletedVerifiedDailyQuests(daily.quests) >= 3
+    : completed === 4;
   const confirmingQuest = daily.quests.find((quest) => quest.id === confirmingQuestId);
   const closeRerollConfirmation = (restoreTrigger = true) => {
     setConfirmingQuestId('');
@@ -1466,7 +1475,7 @@ function DailyQuests({
           </article>;
         })}
       </div>
-      {completed === 4 && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, cloudAccount ? 'quests.dailyTokenEarned' : 'quests.completedAll')}</strong><span>{translate(language, cloudAccount ? 'quests.dailyTokenEarnedDescription' : 'quests.congratulations')}</span></div>}
+      {rewardEarned && <div className="quest-all-complete" role="status"><strong>🎉 {translate(language, cloudAccount ? 'quests.dailyTokenEarned' : 'quests.completedAll')}</strong><span>{translate(language, cloudAccount ? 'quests.dailyTokenEarnedDescription' : 'quests.congratulations')}</span></div>}
     </section>
     {confirmingQuest && <div className="quest-reroll-confirmation-backdrop">
       <section

@@ -224,3 +224,19 @@ export function refreshDailyQuests(profile, live = {}, date = localDateKey()) {
   }
   return { profile, changed };
 }
+
+const verifiedDailyQuestCategories = new Set([
+  'focus_time',
+  'session_count',
+  'session_xp',
+  'room_host_sessions',
+]);
+
+export function countCompletedVerifiedDailyQuests(quests) {
+  if (!Array.isArray(quests)) return 0;
+  return quests.filter((quest) => (
+    quest?.verified === true
+    && quest.completed === true
+    && verifiedDailyQuestCategories.has(quest.category)
+  )).length;
+}
