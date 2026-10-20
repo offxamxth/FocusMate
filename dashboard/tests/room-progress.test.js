@@ -6,6 +6,7 @@ import {
   getFocusmateRoomProgress,
   rerollFocusmateDailyQuest,
   rerollFocusmateRoomQuest,
+  roomProgressErrorTranslationKey,
 } from '../src/room-progress.js';
 import { achievementCatalog } from '../src/achievement-data.js';
 import { supportedLanguages, translate, translateAchievement } from '../src/i18n.js';
@@ -86,6 +87,27 @@ test('room progress errors are explicit and do not expose backend details', asyn
   await assert.rejects(getFocusmateRoomProgress(client), /database update is applied/);
 });
 
+test('daily quest progress distinguishes a missing RPC from unrelated request failures', () => {
+  assert.equal(
+    roomProgressErrorTranslationKey({
+      code: 'PGRST202',
+      message: 'Could not find the function in the schema cache',
+    }),
+    'quests.serverUpdateRequired',
+  );
+  assert.equal(
+    roomProgressErrorTranslationKey({
+      code: '42501',
+      message: 'private database detail',
+    }),
+    'quests.serverProgressError',
+  );
+  assert.equal(
+    roomProgressErrorTranslationKey(new TypeError('Failed to fetch')),
+    'quests.serverProgressError',
+  );
+});
+
 test('trusted room progress loads for cloud accounts outside the Focus Room page', async () => {
   const [roomSource, appSource] = await Promise.all([
     readFile(new URL('../src/RoomFoundation.jsx', import.meta.url), 'utf8'),
@@ -95,6 +117,8 @@ test('trusted room progress loads for cloud accounts outside the Focus Room page
   assert.match(appSource, /presentProfile = \(value, trustedProgress = roomProgressRef\.current\)/);
   assert.match(appSource, /roomProgressRef\.current = next/);
   assert.match(appSource, /daily_quests: trustedProgress\?\.daily_quests \|\| null/);
+  assert.match(appSource, /setRoomProgressError\(roomProgressErrorTranslationKey\(progressError\)\)/);
+  assert.match(appSource, /dailyProgressError=\{roomProgressError\}/);
   assert.match(roomSource, /if \(!account \|\| room\?\.status !== 'finished'\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)/);
   assert.doesNotMatch(roomSource, /if \(!account \|\| !pageActive\)/);
   assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance/);

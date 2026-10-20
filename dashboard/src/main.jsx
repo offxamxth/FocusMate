@@ -35,6 +35,7 @@ import {
   publishFocusmateRoomProgress,
   rerollFocusmateDailyQuest,
   rerollFocusmateRoomQuest,
+  roomProgressErrorTranslationKey,
 } from './room-progress.js';
 import ContactPage from './ContactPage.jsx';
 import DocumentationPage from './DocumentationPage.jsx';
@@ -291,6 +292,7 @@ function FocusMateApp({
   const [username, setUsername] = useState(account?.storageUsername || localStorage.getItem('focusmate-user') || '');
   const [profile, setProfile] = useState(null);
   const [roomProgress, setRoomProgress] = useState(null);
+  const [roomProgressError, setRoomProgressError] = useState('');
   const roomProgressRef = useRef(null);
   const [live, setLive] = useState({});
   const [page, setPage] = useState(() => pageFromLocation(window.location));
@@ -383,6 +385,7 @@ function FocusMateApp({
   useEffect(() => {
     roomProgressRef.current = null;
     setRoomProgress(null);
+    setRoomProgressError('');
   }, [account?.id]);
 
   useEffect(() => {
@@ -393,10 +396,14 @@ function FocusMateApp({
         if (active) {
           roomProgressRef.current = progress;
           setRoomProgress(progress);
+          setRoomProgressError('');
         }
       })
       .catch((progressError) => {
-        if (active) setNotice(progressError.message);
+        if (active) {
+          setRoomProgressError(roomProgressErrorTranslationKey(progressError));
+          setNotice(progressError.message);
+        }
       });
     return () => { active = false; };
   }, [account?.id, Boolean(profile)]);
@@ -982,7 +989,7 @@ function FocusMateApp({
         </nav>
         <PageHeading page={current} profile={profile} language={language} />
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button></div>}
-        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress)} />}
+        {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress && !roomProgressError)} dailyProgressError={roomProgressError} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
         {page === 'leaderboard' && account && <LeaderboardPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
@@ -1001,7 +1008,7 @@ function FocusMateApp({
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} language={language} />}
-        {page === 'quests' && <Quests profile={profile} language={language} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress)} />}
+        {page === 'quests' && <Quests profile={profile} language={language} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress && !roomProgressError)} dailyProgressError={roomProgressError} />}
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
@@ -1156,6 +1163,7 @@ function Overview({
   onReroll,
   cloudAccount,
   dailyProgressLoading,
+  dailyProgressError,
 }) {
   const now = new Date();
   const hour = now.getHours();
@@ -1240,6 +1248,7 @@ function Overview({
         onReroll={onReroll}
         cloudAccount={cloudAccount}
         dailyProgressLoading={dailyProgressLoading}
+        dailyProgressError={dailyProgressError}
       />
       <nav className="overview-shortcuts" aria-label={translate(language, 'dashboard.shortcuts')}>
         <button type="button" onClick={() => onNavigate('insights')}><BarChart3 size={17} /><span>{translate(language, 'nav.progress')}</span><ArrowUpRight size={15} /></button>
@@ -1347,6 +1356,7 @@ function DailyQuests({
   onReroll,
   cloudAccount = false,
   dailyProgressLoading = false,
+  dailyProgressError = '',
 }) {
   const [rerollingId, setRerollingId] = useState('');
   const [rerollError, setRerollError] = useState('');
@@ -1377,7 +1387,7 @@ function DailyQuests({
   }, [confirmingQuestId]);
   if (!daily || !Array.isArray(daily.quests) || daily.quests.length !== 4) {
     const unavailableKey = cloudAccount
-      ? dailyProgressLoading ? 'quests.serverProgressLoading' : 'quests.serverUpdateRequired'
+      ? dailyProgressError || (dailyProgressLoading ? 'quests.serverProgressLoading' : 'quests.serverUpdateRequired')
       : 'quests.unavailable';
     return <section className="surface-panel daily-quests" role="alert"><h3>{translate(language, 'quests.title')}</h3><p>{translate(language, unavailableKey)}</p></section>;
   }
@@ -2620,8 +2630,9 @@ function Quests({
   onReroll,
   cloudAccount,
   dailyProgressLoading,
+  dailyProgressError,
 }) {
-  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} cloudAccount={cloudAccount} dailyProgressLoading={dailyProgressLoading} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
+  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} cloudAccount={cloudAccount} dailyProgressLoading={dailyProgressLoading} dailyProgressError={dailyProgressError} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
 }
 
 function Preferences({ profile, onSave }) {

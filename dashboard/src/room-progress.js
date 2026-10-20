@@ -21,6 +21,14 @@ export function getFocusmateRoomProgress(client) {
   return invokeProgressRpc(client, 'get_focusmate_room_progress');
 }
 
+export function roomProgressErrorTranslationKey(error) {
+  const message = String(error?.message || '').toLowerCase();
+  if (error?.code === 'PGRST202' || message.includes('could not find the function')) {
+    return 'quests.serverUpdateRequired';
+  }
+  return 'quests.serverProgressError';
+}
+
 export function rerollFocusmateRoomQuest(client, questId, requestId) {
   return invokeProgressRpc(client, 'reroll_focusmate_room_quest', {
     p_quest_id: questId,

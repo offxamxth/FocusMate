@@ -8,6 +8,10 @@ const migrationUrl = new URL(
   '../../supabase/migrations/20261018120000_verified_daily_quest_reroll_tokens.sql',
   import.meta.url,
 );
+const rewardMigrationUrl = new URL(
+  '../../supabase/migrations/20261020120000_fix_daily_quest_token_threshold.sql',
+  import.meta.url,
+);
 
 function fakeRpcClient(responses) {
   const calls = [];
@@ -51,6 +55,10 @@ test('the database derives daily quest state only from verified room completions
   assert.match(progress, /private\.focusmate_room_session_completions/);
   assert.match(progress, /completion\.focus_seconds/);
   assert.match(progress, /completion\.was_host/);
+  assert.match(progress, /completed_at >= \(p_quest_date::timestamp at time zone 'UTC'\)/);
+  assert.match(migration, /primary key \(user_id, quest_date\)/);
+  assert.match(refresh, /on conflict \(user_id, quest_date\) do nothing/);
+  assert.match(refresh, /assignment\.quest_date = p_quest_date\s+for update/);
   assert.match(refresh, /pg_catalog\.gen_random_uuid\(\)/);
   assert.match(refresh, /'verified', true/);
   assert.match(refresh, /'rewardXP', 0/);
@@ -61,12 +69,55 @@ test('the database derives daily quest state only from verified room completions
   assert.match(migration, /primary key \(user_id, award_type, award_key\)/);
 });
 
+test('verified daily quest migration adds the missing progress contract and private token storage', async () => {
+  const migration = await readFile(migrationUrl, 'utf8');
+  const progressRpc = migration.match(
+    /create or replace function public\.get_focusmate_room_progress\(\)[\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(progressRpc);
+  assert.match(progressRpc, /current_user_id uuid := \(select auth\.uid\(\)\)/);
+  assert.match(progressRpc, /if current_user_id is null then[\s\S]*?Authentication required/);
+  assert.match(progressRpc, /'daily_quests', jsonb_build_object\([\s\S]*?daily_quest_set/);
+  assert.match(progressRpc, /'reroll_tokens', token_balance/);
+  assert.match(progressRpc, /'rerolls_remaining_today', greatest\(0, 3 - rerolls_used_today\)/);
+  assert.match(progressRpc, /private\.refresh_focusmate_daily_quests/);
+  assert.match(migration, /create or replace function public\.reroll_focusmate_daily_quest\(\s*p_quest_id text,\s*p_request_id uuid\s*\)/i);
+  for (const table of [
+    'focusmate_daily_quest_assignments',
+    'focusmate_reroll_token_wallets',
+    'focusmate_reroll_token_awards',
+    'focusmate_daily_reroll_requests',
+  ]) {
+    assert.match(migration, new RegExp(`create table if not exists private\\.${table}`));
+    assert.match(migration, new RegExp(`private\\.${table}[\\s\\S]*?enable row level security`));
+  }
+  assert.match(migration, /grant execute on function public\.get_focusmate_room_progress\(\)\s+to authenticated/i);
+  assert.match(migration, /grant execute on function public\.reroll_focusmate_daily_quest\(text, uuid\)\s+to authenticated/i);
+});
+
+test('three verified completed quests award one token per UTC quest date', async () => {
+  const migration = await readFile(rewardMigrationUrl, 'utf8');
+  const refresh = migration.match(
+    /create or replace function private\.refresh_focusmate_daily_quests\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(refresh);
+  assert.match(refresh, /completed_eligible_quests integer/);
+  assert.match(refresh, /where coalesce\(\(quest\.value ->> 'verified'\)::boolean, false\)[\s\S]*?and coalesce\(\(quest\.value ->> 'completed'\)::boolean, false\)[\s\S]*?and quest\.value ->> 'category' in \([\s\S]*?'focus_time'[\s\S]*?'session_count'[\s\S]*?'session_xp'[\s\S]*?'room_host_sessions'/);
+  assert.match(refresh, /if completed_eligible_quests >= 3 then[\s\S]*?award_focusmate_reroll_token\([\s\S]*?'daily_quests',[\s\S]*?p_quest_date::text/);
+  assert.doesNotMatch(refresh, /jsonb_array_length\(next_quests\) = 4/);
+  assert.doesNotMatch(refresh, /where not coalesce\(\(quest\.value ->> 'completed'\)::boolean, false\)/);
+  assert.match(migration, /revoke all on function private\.refresh_focusmate_daily_quests\(uuid, date\)[\s\S]*?from public, anon, authenticated, service_role/i);
+});
+
 test('daily reroll RPC randomizes eligible replacements, serializes spending and is idempotent', async () => {
   const migration = await readFile(migrationUrl, 'utf8');
   const reroll = migration.match(
     /create or replace function public\.reroll_focusmate_daily_quest\([\s\S]*?\n\$\$;/i,
   )?.[0];
   assert.ok(reroll);
+  assert.match(reroll, /current_user_id uuid := \(select auth\.uid\(\)\)/);
+  assert.match(reroll, /assignment\.user_id = current_user_id[\s\S]*?for update/);
+  assert.match(reroll, /wallet\.user_id = current_user_id[\s\S]*?for update/);
   assert.match(reroll, /private\.refresh_focusmate_daily_quests/);
   assert.match(reroll, /for update/);
   assert.match(reroll, /request\.request_id = p_request_id/);
@@ -81,6 +132,21 @@ test('daily reroll RPC randomizes eligible replacements, serializes spending and
   assert.match(reroll, /token_balance < 1/);
   assert.match(reroll, /balance = balance - 1/);
   assert.doesNotMatch(reroll, /p_replacement|adjust_focusmate_profile_xp|balance = balance - 5/);
+  assert.match(reroll, /current_quest ->> 'category'[\s\S]*?candidate\.category = quest_category/);
+  assert.match(reroll, /or coalesce\(\(current_quest ->> 'completed'\)::boolean, false\)/);
+  assert.ok(
+    reroll.indexOf('if replacement is null then') < reroll.indexOf('balance = balance - 1'),
+    'an unavailable replacement fails before token spending',
+  );
+  assert.ok(
+    reroll.indexOf('if token_balance < 1 then') < reroll.indexOf('balance = balance - 1'),
+    'an insufficient token balance fails before token spending',
+  );
+  assert.ok(
+    reroll.indexOf('update private.focusmate_daily_quest_assignments')
+      < reroll.indexOf('insert into private.focusmate_daily_reroll_requests'),
+    'the replacement and idempotency response are committed by the same RPC transaction',
+  );
   assert.match(migration, /revoke all on function public\.reroll_focusmate_profile_quest\(text, text, uuid\)[\s\S]*?from public, anon, authenticated/i);
 });
 
