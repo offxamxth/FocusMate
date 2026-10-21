@@ -67,6 +67,12 @@ test('the database derives daily quest state only from verified room completions
   assert.match(migration, /streak_days >= 7 and streak_days % 7 = 0/);
   assert.match(migration, /private\.award_focusmate_reroll_token\(\s*new\.user_id,\s*'achievement'/);
   assert.match(migration, /primary key \(user_id, award_type, award_key\)/);
+  const award = migration.match(
+    /create or replace function private\.award_focusmate_reroll_token\([\s\S]*?\n\$\$;/i,
+  )?.[0];
+  assert.ok(award);
+  assert.match(award, /on conflict \(user_id, award_type, award_key\) do nothing/);
+  assert.match(award, /if found then[\s\S]*?set balance = balance \+ 1/);
 });
 
 test('verified daily quest migration adds the missing progress contract and private token storage', async () => {
@@ -106,7 +112,25 @@ test('three verified completed quests award one token per UTC quest date', async
   assert.match(refresh, /if completed_eligible_quests >= 3 then[\s\S]*?award_focusmate_reroll_token\([\s\S]*?'daily_quests',[\s\S]*?p_quest_date::text/);
   assert.doesNotMatch(refresh, /jsonb_array_length\(next_quests\) = 4/);
   assert.doesNotMatch(refresh, /where not coalesce\(\(quest\.value ->> 'completed'\)::boolean, false\)/);
+  assert.match(refresh, /where coalesce\(\(quest\.value ->> 'verified'\)::boolean, false\)[\s\S]*?and coalesce\(\(quest\.value ->> 'completed'\)::boolean, false\)/);
   assert.match(migration, /revoke all on function private\.refresh_focusmate_daily_quests\(uuid, date\)[\s\S]*?from public, anon, authenticated, service_role/i);
+});
+
+test('verified daily quest unavailability is described without assuming the environment', () => {
+  const message = translate('en', 'quests.serverUpdateRequired');
+  assert.equal(
+    message,
+    'Verified daily quests are temporarily unavailable because the required database support is unavailable.',
+  );
+  for (const language of supportedLanguages) {
+    const localizedMessage = translate(language, 'quests.serverUpdateRequired');
+    assert.notEqual(localizedMessage, 'quests.serverUpdateRequired', `${language} translation`);
+    assert.doesNotMatch(
+      localizedMessage,
+      /non-production environment|entorno no productivo|hors production|غير الإنتاجية|गैर-उत्पादन/i,
+      `${language} message must not assume the deployment environment`,
+    );
+  }
 });
 
 test('daily reroll RPC randomizes eligible replacements, serializes spending and is idempotent', async () => {

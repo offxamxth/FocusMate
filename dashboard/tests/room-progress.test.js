@@ -25,7 +25,19 @@ function fakeRpcClient(responses) {
 }
 
 test('cloud room XP and daily-token rerolls use authenticated RPCs with idempotency keys', async () => {
-  const response = { xp_balance: 15, total_xp: 80, reroll_tokens: 1 };
+  const response = {
+    xp_balance: 15,
+    total_xp: 80,
+    daily_quests: {
+      date: '2026-10-21',
+      quests: Array.from({ length: 4 }, (_, index) => ({
+        id: `quest_${index}`,
+        verified: true,
+      })),
+    },
+    reroll_tokens: 1,
+    rerolls_remaining_today: 3,
+  };
   const { client, calls } = fakeRpcClient([
     { data: response, error: null },
     { data: response, error: null },
@@ -47,6 +59,7 @@ test('cloud room XP and daily-token rerolls use authenticated RPCs with idempote
       p_request_id: requestId,
     }],
   ]);
+  assert.equal(response.daily_quests.quests.length, 4);
 });
 
 test('daily-token reroll errors are safe and distinguish token balance, cap, and migration failures', async () => {
@@ -122,6 +135,17 @@ test('trusted room progress loads for cloud accounts outside the Focus Room page
   assert.match(roomSource, /if \(!account \|\| room\?\.status !== 'finished'\) return undefined;[\s\S]*?getFocusmateRoomProgress\(supabase\)/);
   assert.doesNotMatch(roomSource, /if \(!account \|\| !pageActive\)/);
   assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance/);
+});
+
+test('a successful legacy progress response without verified daily quests selects the explicit fallback', async () => {
+  const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const dailyStart = appSource.indexOf('function DailyQuests(');
+  const roomStart = appSource.indexOf('function RoomDailyQuests(');
+  const dailyComponent = appSource.slice(dailyStart, roomStart);
+  assert.ok(dailyStart >= 0 && roomStart > dailyStart);
+  assert.match(appSource, /daily_quests: trustedProgress\?\.daily_quests \|\| null/);
+  assert.match(dailyComponent, /if \(!daily \|\| !Array\.isArray\(daily\.quests\) \|\| daily\.quests\.length !== 4\)/);
+  assert.match(dailyComponent, /cloudAccount[\s\S]*?dailyProgressError \|\| \(dailyProgressLoading \? 'quests\.serverProgressLoading' : 'quests\.serverUpdateRequired'\)/);
 });
 
 test('all 20 room and accepted-friend achievements have progress and localization', () => {
