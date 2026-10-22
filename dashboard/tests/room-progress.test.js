@@ -349,24 +349,14 @@ test('profile quest rerolls keep their independent request type and profile ques
   assert.match(roomReroll, /values \(current_user_id, p_request_id, 'reroll', result\)/);
 });
 
-test('room quest UI exposes a known balance, blocks unaffordable rerolls, and locks duplicate clicks', async () => {
+test('verified room quests are not rendered in Focus Room while server quest APIs remain available', async () => {
   const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  const dailyQuestsStart = appSource.indexOf('function DailyQuests(');
-  const roomDailyQuestsStart = appSource.indexOf('function RoomDailyQuests(');
   const focusRoomPage = appSource.match(
-    /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<FocusRoom/,
+    /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<\/div>\s*\{page === 'insights'/,
   )?.[0];
-  assert.ok(dailyQuestsStart >= 0 && roomDailyQuestsStart > dailyQuestsStart);
-  const dailyQuestsComponent = appSource.slice(dailyQuestsStart, roomDailyQuestsStart);
-  assert.doesNotMatch(dailyQuestsComponent, /RoomDailyQuests/);
-  assert.match(focusRoomPage || '', /<RoomDailyQuests/);
-  assert.match(appSource, /verifiedXpBalance', \{ xp: roomXp \?\? '—' \}/);
-  assert.match(appSource, /roomXp !== null && roomXp < 5/);
-  assert.match(appSource, /busyRef\.current\) return/);
-  assert.match(appSource, /busyAction === 'reroll' \? t\('rerolling'\)/);
-  assert.match(appSource, /actionError\.code === 'QUEST_REROLL_INSUFFICIENT_XP'/);
+  assert.ok(focusRoomPage);
+  assert.doesNotMatch(focusRoomPage, /RoomDailyQuests|room-daily-quests|verifiedRoomQuests|roomQuestTitle|verifiedXpBalance|serverVerified|roomReroll/);
+  assert.match(appSource, /claimFocusmateRoomQuest/);
+  assert.match(appSource, /rerollFocusmateRoomQuest/);
   assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance === null[\s\S]*?: null/);
-  for (const language of supportedLanguages) {
-    assert.notEqual(translate(language, 'quests.rerolling'), 'quests.rerolling');
-  }
 });

@@ -18,8 +18,6 @@ import {
 } from './room-api.js';
 import { translate } from './i18n.js';
 import { reportPwaSessionActivity } from './pwa-session-state.js';
-import RoomCameraMonitor from './RoomCameraMonitor.jsx';
-import RoomVideoConference from './RoomVideoConference.jsx';
 import { getFocusmateRoomProgress, publishFocusmateRoomProgress } from './room-progress.js';
 import { publishRoomTimerState } from './room-timer-sync.js';
 
@@ -53,7 +51,7 @@ function activeElapsedSeconds(room, serverNow) {
   return accumulated + Math.max(0, Math.floor((serverNow - segmentStart) / 1000));
 }
 
-export default function RoomFoundation({ account, language, profile, pageActive }) {
+export default function RoomFoundation({ account, language }) {
   const [room, setRoom] = useState(null);
   const [roomCode, setRoomCode] = useState('');
   const [presence, setPresence] = useState({});
@@ -65,7 +63,6 @@ export default function RoomFoundation({ account, language, profile, pageActive 
   const [clientPerformanceNow, setClientPerformanceNow] = useState(() => performance.now());
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [roomVideoStream, setRoomVideoStream] = useState(null);
   const t = (key) => translate(language, `room.${key}`);
   const sessionHost = room?.host_id === account?.id;
   const serverNow = roomClock(room, clientPerformanceNow);
@@ -354,15 +351,6 @@ export default function RoomFoundation({ account, language, profile, pageActive 
                 );
               })}
             </ul>
-            <RoomVideoConference
-              account={account}
-              language={language}
-              onLocalVideoStreamChange={setRoomVideoStream}
-              pageActive={pageActive}
-              participants={participants}
-              roomId={room.id}
-              roomStatus={room.status}
-            />
             <div className="room-session" aria-labelledby="room-session-title">
               <div className="room-session-heading">
                 <div><Timer size={17} /><h3 id="room-session-title">{t('session.title')}</h3></div>
@@ -405,15 +393,6 @@ export default function RoomFoundation({ account, language, profile, pageActive 
                     : null}
                   {room.status === 'finished' && (
                     <p className="room-host-note" role="status">{t('session.finished', { elapsed: formatDuration(elapsedSeconds) })}</p>
-                  )}
-                  {room.status === 'focusing' && (
-                    <RoomCameraMonitor
-                      roomStatus={room.status}
-                      pageActive={pageActive}
-                      preferences={profile?.session_preferences}
-                      language={language}
-                      stream={roomVideoStream}
-                    />
                   )}
                   {sessionHost && room.status !== 'finished' && (
                     <div className="room-session-controls">

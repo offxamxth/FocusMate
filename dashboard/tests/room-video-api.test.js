@@ -67,17 +67,22 @@ test('video token issuer derives identity from auth and grants only active room 
   assert.doesNotMatch(source, /SUPABASE_SERVICE_ROLE_KEY|roomAdmin:\s*true|roomCreate:\s*true/);
 });
 
-test('room video UI attaches remote tracks, labels members, and exposes explicit device controls', async () => {
-  const source = await readFile(
-    new URL('../src/RoomVideoConference.jsx', import.meta.url),
-    'utf8',
-  );
-  assert.match(source, /videoTrack\.attach\(video\)/);
-  assert.match(source, /participant\.microphoneTrack/);
-  assert.match(source, /track\.attach\(audio\)/);
-  assert.match(source, /participants\.map\(\(member\)/);
-  assert.match(source, /member\?\.display_name \|\| member\?\.username/);
-  assert.match(source, /setCameraEnabled\(!sessionState\.cameraEnabled\)/);
-  assert.match(source, /setMicrophoneEnabled\(!sessionState\.microphoneEnabled\)/);
-  assert.match(source, /roomStatus === 'finished'/);
+test('Focus Room omits video UI while keeping participant and session controls', async () => {
+  const [roomSource, appSource] = await Promise.all([
+    readFile(new URL('../src/RoomFoundation.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/main.jsx', import.meta.url), 'utf8'),
+  ]);
+  const renderedRoom = roomSource.slice(roomSource.indexOf('return ('), roomSource.length);
+  const focusRoomPage = appSource.match(
+    /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<\/div>\s*\{page === 'insights'/,
+  )?.[0];
+  assert.ok(focusRoomPage);
+  assert.doesNotMatch(roomSource, /RoomVideoConference|RoomCameraMonitor|roomVideoStream/);
+  assert.doesNotMatch(renderedRoom, /room-video|room-camera|<video|Connect video|Turn camera on|Turn microphone on/);
+  assert.doesNotMatch(focusRoomPage, /RoomDailyQuests|room-daily-quests|verifiedRoomQuests|verifiedXpBalance/);
+  assert.match(renderedRoom, /className="room-participant-list"/);
+  assert.match(renderedRoom, /className="room-session"/);
+  assert.match(renderedRoom, /className="room-session-clock"/);
+  assert.match(renderedRoom, /t\('create'\)/);
+  assert.match(renderedRoom, /t\('join'\)/);
 });

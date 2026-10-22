@@ -996,16 +996,7 @@ function FocusMateApp({
         {page === 'overview' && <Overview profile={profile} live={live} language={language} onNavigate={changePage} onSave={updateProfile} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress && !roomProgressError)} dailyProgressError={roomProgressError} />}
         {page === 'friends' && account && <SocialPage account={account} language={language} />}
         <div hidden={page !== 'focus-room'} aria-hidden={page !== 'focus-room'}>
-          <RoomFoundation account={account} language={language} profile={profile} pageActive={page === 'focus-room'} />
-          {account && profile && (
-            <RoomDailyQuests
-              daily={profile.room_daily_quests}
-              availableXp={profile.available_xp}
-              language={language}
-              onReroll={rerollRoomQuest}
-              onClaim={claimRoomQuest}
-            />
-          )}
+          <RoomFoundation account={account} language={language} />
           <FocusRoom profile={profile} live={live} stream={stream} videoRef={videoRef} onStartCamera={startCamera} onBeginSession={beginFocusSession} onStopSession={endFocusSession} onStopCamera={stopCamera} onNotice={inform} username={username} cameraState={cameraState} cameraError={cameraError} language={language} />
         </div>
         {page === 'insights' && <Insights profile={profile} language={language} />}
