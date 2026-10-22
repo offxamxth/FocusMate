@@ -24,15 +24,15 @@ test('mobile destinations resolve to the existing application pages', () => {
 test('legacy and secondary destinations remain directly addressable', () => {
   assert.equal(pageFromLocation(location('/', '#focus-room')), 'focus-room');
   assert.equal(mobileDestinationFromLocation(location('/', '#focus-room')), 'focus');
-  assert.equal(pageFromLocation(location('/', '#leaderboard')), 'leaderboard');
+  assert.equal(pageFromLocation(location('/', '#leaderboard')), 'overview');
   assert.equal(pageFromLocation(location('/contact')), 'contact');
 });
 
-test('authenticated leaderboard is wired into the application navigation and page shell', async () => {
+test('Global XP leaderboard is absent from application navigation and page routes', async () => {
   const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  assert.match(appSource, /import LeaderboardPage from '\.\/LeaderboardPage\.jsx'/);
-  assert.match(appSource, /\{\s*id: 'leaderboard', label: 'nav\.leaderboard', group: 'nav\.social', icon: Trophy, requiresCloud: true\s*\}/);
-  assert.match(appSource, /\{page === 'leaderboard' && account && <LeaderboardPage account=\{account\} language=\{language\} \/>\}/);
+  assert.doesNotMatch(appSource, /import LeaderboardPage from '\.\/LeaderboardPage\.jsx'/);
+  assert.doesNotMatch(appSource, /\{\s*id: 'leaderboard',/);
+  assert.doesNotMatch(appSource, /page === 'leaderboard'/);
 });
 
 test('public pages resolve from clean paths without changing authenticated hash routes', () => {
@@ -64,14 +64,14 @@ test('navigation paths retain the existing contact path and hash routes', () => 
   assert.equal(navigationPath('privacy'), '/privacy');
 });
 
-test('logged-out deep links to cloud-only pages return to overview', async () => {
+test('cloud-only deep links and all leaderboard deep links return to overview', async () => {
   const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  assert.match(appSource, /if \(!account && pages\.some\(\(item\) => item\.id === page && item\.requiresCloud\)\)/);
+  assert.doesNotMatch(appSource, /VITE_FOCUSMATE_GLOBAL_LEADERBOARD_ENABLED|globalLeaderboardEnabled/);
+  assert.match(appSource, /\(!account && pages\.some\(\(item\) => item\.id === page && item\.requiresCloud\)\)/);
   assert.match(appSource, /\{cloudAccount && <button type="button" onClick=\{\(\) => onNavigate\('friends'\)\}/);
   assert.doesNotMatch(appSource, /\{hasCloudAccount &&/);
-  for (const page of ['friends', 'leaderboard']) {
-    assert.match(appSource, new RegExp(`\\{ id: '${page}'.*requiresCloud: true`));
-  }
+  assert.match(appSource, /\{ id: 'friends'.*requiresCloud: true/);
+  assert.equal(pageFromLocation(location('/', '#leaderboard')), 'overview');
 });
 
 test('documentation is available in the app navigation and public page shell', async () => {

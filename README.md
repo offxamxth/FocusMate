@@ -35,6 +35,35 @@ You can also start it with `npm --prefix dashboard run dev`.
 Run a production build with `npm --prefix dashboard run build`, or preview the
 generated build with `npm --prefix dashboard run preview`.
 
+For a local-only demo on Windows, explicitly disable cloud configuration in
+the same PowerShell session before starting Vite. Use non-empty, deliberately
+invalid sentinel values: PowerShell removes environment variables assigned an
+empty string, which can otherwise let Vite load values from an ignored
+`.env.local` file. The loopback URL and invalid key make the app reject cloud
+configuration and keep the browser from constructing a Supabase client:
+
+```powershell
+Set-Location .\dashboard
+$env:VITE_SUPABASE_URL = 'http://127.0.0.1:1'
+$env:VITE_SUPABASE_PUBLISHABLE_KEY = 'local-demo-disabled'
+$env:VITE_FOCUSMATE_GLOBAL_LEADERBOARD_ENABLED = 'false'
+npm run dev -- --host 127.0.0.1
+```
+
+To preview the production build locally, stop the dev server and run these
+commands in the same PowerShell session so the disabled-cloud sentinels remain
+in effect:
+
+```powershell
+npm run build
+npm run preview -- --host 127.0.0.1
+```
+
+This mode supports browser-local profiles and personal focus timers only.
+Focus Rooms, verified Daily Quests, cloud XP, and provider video are not
+available without their backend services; do not present local quest progress
+as server-verified progress.
+
 ## Install and use FocusMate offline
 
 The production build includes a standalone web app manifest and branded icons.

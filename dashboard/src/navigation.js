@@ -8,7 +8,6 @@ const knownPages = new Set([
   'overview',
   'focus-room',
   'friends',
-  'leaderboard',
   'insights',
   'session-results',
   'achievements',
