@@ -1450,17 +1450,108 @@ html[dir='rtl'] .room-participant { direction: rtl; }
 .documentation-faq details { padding: 13px 15px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255, 255, 255, .025); }
 .documentation-faq summary { cursor: pointer; font-weight: 700; line-height: 1.5; }
 .documentation-faq p { margin: 10px 0 0; }
-.documentation-updates { display: grid; gap: 0; padding: 0; list-style: none; }
-.documentation-updates li { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 17px 0; border-top: 1px solid var(--line); }
-.documentation-updates time { color: var(--mint); font-size: 13px; font-weight: 700; }
-.documentation-updates li > div { min-width: 0; }
-.documentation-updates p { margin: 5px 0; }
-.documentation-updates code { color: var(--muted); font-size: 12px; }
+.documentation-section[id],
+.changelog-section[id],
+.changelog-policy[id] { scroll-margin-top: 24px; }
+.changelog-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 22px; }
+.changelog-nav a {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+.changelog-nav a:hover { border-color: var(--mint); color: var(--mint); }
+.changelog-section,
+.changelog-policy {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.changelog-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.changelog-section-heading > div { display: grid; gap: 6px; }
+.changelog-section-heading > time,
+.changelog-card-meta time { color: var(--muted); font-size: 12px; }
+.changelog-status,
+.changelog-latest-label {
+  width: fit-content;
+  padding: 4px 9px;
+  border: 1px solid rgba(115, 224, 186, .38);
+  border-radius: 999px;
+  color: var(--mint);
+  background: rgba(115, 224, 186, .08);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .04em;
+}
+.changelog-cards { display: grid; gap: 10px; }
+.changelog-card {
+  position: relative;
+  min-width: 0;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--quiet);
+}
+.changelog-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 8px; }
+.changelog-version { color: var(--mint); font-size: 13px; font-weight: 800; }
+.changelog-card h3 { margin: 0 0 6px; }
+.changelog-card p { margin: 0 0 12px; }
+.changelog-commit { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.changelog-commit code { color: var(--muted); }
+.changelog-category {
+  display: inline-flex;
+  margin-inline-start: 10px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+.changelog-category-added { border-color: rgba(115, 224, 186, .42); color: var(--mint); }
+.changelog-category-fixed { border-color: rgba(255, 189, 130, .42); color: #ffd0a7; }
+.changelog-policy {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.changelog-policy h3 { margin: 5px 0 10px; }
+.changelog-policy p { margin: 8px 0; }
+.changelog-policy ul { margin-bottom: 0; padding-inline-start: 22px; }
+.changelog-empty { padding: 12px 14px; border-inline-start: 2px solid var(--mint); }
+.changelog-disclosure { margin-top: 14px; }
+.changelog-disclosure > summary {
+  width: fit-content;
+  padding: 9px 2px;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.changelog-disclosure > summary:hover { color: var(--mint); }
+.changelog-disclosure > p { margin: 4px 0 12px; }
+.changelog-commit-history { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+.documentation-page a:focus-visible,
+.documentation-page summary:focus-visible {
+  outline: 3px solid var(--mint);
+  outline-offset: 3px;
+}
 .documentation-footnote { margin: 0; color: var(--muted); font-size: 12px; text-align: center; }
 .documentation-page-public { max-width: 1000px; margin-inline: auto; }
 
 @media (max-width: 560px) {
-  .documentation-updates li { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .documentation-toc > div { gap: 6px; }
   .documentation-toc a { font-size: 12px; }
+  .changelog-section-heading { align-items: flex-start; flex-direction: column; }
+  .changelog-card { padding: 14px; }
+  .changelog-category { margin: 10px 0 0; }
 }

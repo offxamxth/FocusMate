@@ -1,59 +1,5 @@
-const updates = [
-  {
-    date: 'October 19, 2026',
-    commit: '198156f',
-    title: 'Session recovery, leaderboard, and buddy sounds',
-    detail: 'Clarified early session completion and retryable session saves, improved missing leaderboard-function errors, added optional Focus Buddy appearance sounds, and linked Documentation from the signed-out home page.',
-  },
-  {
-    date: 'October 18, 2026',
-    commit: 'e824c4b',
-    title: 'Progression and room video',
-    detail: 'Added Focus Buddy support and room video features, with related progression, room, and leaderboard updates.',
-  },
-  {
-    date: 'October 17, 2026',
-    commit: '67d736f',
-    title: 'Focus Buddy reminders and translations',
-    detail: 'Improved Focus Buddy reminders and added translations.',
-  },
-  {
-    date: 'October 17, 2026',
-    commit: 'eee24a7',
-    title: 'Room, leaderboard, and profile updates',
-    detail: 'Updated FocusMate rooms, leaderboard, and profile features.',
-  },
-  {
-    date: 'October 16, 2026',
-    commit: 'e6658e3',
-    title: 'Leaderboard authentication handling',
-    detail: 'Fixed leaderboard authentication handling.',
-  },
-  {
-    date: 'October 12, 2026',
-    commit: '78e2f8c',
-    title: 'Focus Room quest reroll XP',
-    detail: 'Fixed XP handling when rerolling Focus Room quests.',
-  },
-  {
-    date: 'October 11, 2026',
-    commit: 'df8251b',
-    title: 'Multiplayer focus-session synchronization',
-    detail: 'Synchronized multiplayer focus sessions.',
-  },
-  {
-    date: 'October 10, 2026',
-    commit: '5fe0ea6',
-    title: 'Public pages and PWA navigation',
-    detail: 'Finalized public pages and installable-app navigation.',
-  },
-  {
-    date: 'October 9, 2026',
-    commit: '593e037',
-    title: 'Installable FocusMate',
-    detail: 'Added installable Progressive Web App support.',
-  },
-];
+import { changelog, sortReleasesByVersion } from './changelog.js';
+import { textDirection, translate } from './i18n.js';
 
 const sections = [
   ['getting-started', 'Getting started'],
@@ -65,13 +11,44 @@ const sections = [
   ['updates', 'Update history'],
 ];
 
-export default function DocumentationPage({ publicPage = false }) {
+export default function DocumentationPage({ publicPage = false, language = 'en' }) {
   const rootClass = publicPage
     ? 'documentation-page documentation-page-public public-content'
     : 'documentation-page documentation-page-app page-content';
+  const t = (key, values = {}) => translate(language, `changelog.${key}`, values);
+  const sortedReleases = sortReleasesByVersion(changelog.releases);
+  const latestRelease = sortedReleases[0];
+  const olderReleases = sortedReleases.slice(1);
+  const dateLabel = (date) => new Intl.DateTimeFormat(language, {
+    dateStyle: 'medium',
+    timeZone: 'UTC',
+  }).format(new Date(`${date}T00:00:00Z`));
+  const renderChange = (entry) => (
+    <article className="changelog-card" key={entry.commit || entry.version}>
+      <div className="changelog-card-meta">
+        {entry.version && <span className="changelog-version">{entry.version}</span>}
+        {entry.date && <time dateTime={entry.date}>{dateLabel(entry.date)}</time>}
+      </div>
+      <h3>{entry.title}</h3>
+      {entry.summary && <p>{entry.summary}</p>}
+      {entry.commit && (
+        <a
+          className="changelog-commit"
+          href={`https://github.com/offxamxth/FocusMate/commit/${entry.commit}`}
+        >
+          {t('commit')} <code>{entry.commit}</code>
+        </a>
+      )}
+      {entry.category && (
+        <span className={`changelog-category changelog-category-${entry.category}`}>
+          {t(`category.${entry.category}`)}
+        </span>
+      )}
+    </article>
+  );
 
   return (
-    <div className={rootClass} lang="en" dir="ltr">
+    <div className={rootClass} lang={language} dir={textDirection(language)}>
       {publicPage && (
         <header className="documentation-hero">
           <span className="public-eyebrow">FOCUSMATE HELP</span>
@@ -182,22 +159,73 @@ export default function DocumentationPage({ publicPage = false }) {
 
       <section id="updates" className="documentation-section">
         <span className="documentation-kicker">07 · PROJECT HISTORY</span>
-        <h2>Update history</h2>
-        <p>This short history is based on commits present in the FocusMate repository; it is not a promise that every deployment has the same database or provider configuration.</p>
-        <ol className="documentation-updates">
-          {updates.map((update) => (
-            <li key={update.commit}>
-              <time>{update.date}</time>
-              <div>
-                <strong>{update.title}</strong>
-                <p>{update.detail}</p>
-                <code>{update.commit}</code>
-              </div>
-            </li>
-          ))}
-        </ol>
+        <h2>{t('title')}</h2>
+        <p>{t('intro')}</p>
+        <nav className="changelog-nav" aria-label={t('navigation')}>
+          <a href="#unreleased">{t('unreleased')}</a>
+          <a href="#release-policy">{t('policy')}</a>
+          <a href="#release-history">{t('history')}</a>
+        </nav>
+
+        <section id="unreleased" className="changelog-section" aria-labelledby="unreleased-title">
+          <div className="changelog-section-heading">
+            <div>
+              <span className="changelog-status">{t('unreleased')}</span>
+              <h3 id="unreleased-title">{t('latestActivity')}</h3>
+            </div>
+            {changelog.unreleased[0]?.date && (
+              <time dateTime={changelog.unreleased[0].date}>
+                {dateLabel(changelog.unreleased[0].date)}
+              </time>
+            )}
+          </div>
+          <div className="changelog-cards">
+            {changelog.unreleased.map(renderChange)}
+          </div>
+        </section>
+
+        <section id="release-policy" className="changelog-policy" aria-labelledby="release-policy-title">
+          <span className="documentation-kicker">{t('versioning')}</span>
+          <h3 id="release-policy-title">{t('policy')}</h3>
+          <p>{t('noPublishedReleases')}</p>
+          <p>{t('format')} <strong>MAJOR.MINOR.PATCH</strong></p>
+          <p>{t('proposedVersion')} <strong>{changelog.proposedInitialVersion}</strong> — {t('proposedVersionNote')}</p>
+          <ul>
+            <li><strong>MAJOR</strong> — {t('major')}</li>
+            <li><strong>MINOR</strong> — {t('minor')}</li>
+            <li><strong>PATCH</strong> — {t('patch')}</li>
+          </ul>
+        </section>
+
+        <section id="release-history" className="changelog-section" aria-labelledby="release-history-title">
+          <h3 id="release-history-title">{t('publishedReleases')}</h3>
+          {latestRelease
+            ? (
+              <>
+                <span className="changelog-latest-label">{t('latestRelease')}</span>
+                <div className="changelog-cards">{renderChange(latestRelease)}</div>
+                {olderReleases.length > 0 && (
+                  <details className="changelog-disclosure">
+                    <summary>{t('olderReleases', { count: olderReleases.length })}</summary>
+                    <div className="changelog-cards">
+                      {olderReleases.map(renderChange)}
+                    </div>
+                  </details>
+                )}
+              </>
+            )
+            : <p className="changelog-empty">{t('noPublishedReleases')}</p>}
+        </section>
+
+        <details className="changelog-disclosure changelog-commit-history">
+          <summary>{t('confirmedHistory', { count: changelog.history.length })}</summary>
+          <p>{t('historyNote')}</p>
+          <div className="changelog-cards">
+            {changelog.history.map(renderChange)}
+          </div>
+        </details>
       </section>
-      <p className="documentation-footnote">Documentation content reviewed for the FocusMate project history through October 19, 2026.</p>
+      <p className="documentation-footnote">{t('footnote')}</p>
     </div>
   );
 }

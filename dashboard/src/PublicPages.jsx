@@ -303,7 +303,7 @@ export default function PublicPages({ page, metadata }) {
       <PublicHeader language={language} onLanguageChange={changeLanguage} />
       <main id="main-content" className={page === 'contact' ? 'public-main public-main-contact' : 'public-main'}>
         {page === 'about' && <AboutContent />}
-        {page === 'documentation' && <DocumentationPage publicPage />}
+        {page === 'documentation' && <DocumentationPage publicPage language={language} />}
         {page === 'privacy' && <PrivacyContent />}
         {page === 'contact' && <div className="public-content"><ContactPage language={language} /></div>}
         {page === 'not-found' && <NotFoundContent />}

@@ -82,9 +82,9 @@ test('documentation is available in the app navigation and public page shell', a
   const docsHtml = await readFile(new URL('../documentation.html', import.meta.url), 'utf8');
   const vercelConfig = await readFile(new URL('../../vercel.json', import.meta.url), 'utf8');
   assert.match(appSource, /\{ id: 'documentation', label: 'nav\.documentation'/);
-  assert.match(appSource, /\{page === 'documentation' && <DocumentationPage \/>}/);
+  assert.match(appSource, /\{page === 'documentation' && <DocumentationPage language=\{language\} \/>}/);
   assert.match(appSource, /className="welcome-documentation-link" href="\/documentation\.html"/);
-  assert.match(publicSource, /page === 'documentation' && <DocumentationPage publicPage \/>/);
+  assert.match(publicSource, /page === 'documentation' && <DocumentationPage publicPage language=\{language\} \/>/);
   assert.match(viteConfig, /documentation: resolve\(dashboardRoot, 'documentation\.html'\)/);
   assert.match(viteConfig, /documentation\\\.html/);
   assert.doesNotMatch(vercelConfig, /"source":\s*"\/documentation\.html"/);
@@ -102,5 +102,8 @@ test('documentation is available in the app navigation and public page shell', a
     assert.match(docsSource, new RegExp(`id="${section}"`));
   }
   assert.match(docsSource, /FocusMate does not currently show a Focus Score/);
-  assert.match(docsSource, /commit: 'e824c4b'/);
+  const changelogSource = await readFile(new URL('../src/changelog.js', import.meta.url), 'utf8');
+  assert.match(docsSource, /changelog\.unreleased\.map\(renderChange\)/);
+  assert.match(changelogSource, /commit: 'e824c4b'/);
+  assert.match(changelogSource, /proposedInitialVersion: 'v1\.0\.0'/);
 });
