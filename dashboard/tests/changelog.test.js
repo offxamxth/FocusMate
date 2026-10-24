@@ -8,11 +8,18 @@ import {
 } from '../src/changelog.js';
 import { supportedLanguages, translate } from '../src/i18n.js';
 
-test('changelog separates unreleased commits from unconfirmed release versions', () => {
+test('changelog separates current unreleased notes from confirmed history and release versions', () => {
   assert.equal(changelog.proposedInitialVersion, 'v1.0.0');
   assert.deepEqual(changelog.releases, []);
-  assert.equal(changelog.unreleased[0].date, '2026-10-22');
-  for (const entry of [...changelog.unreleased, ...changelog.history]) {
+  assert.equal(changelog.unreleased[0].date, '2026-10-24');
+  for (const entry of changelog.unreleased) {
+    if (entry.commit) assert.match(entry.commit, /^[a-f0-9]{7}$/);
+    assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(entry.title);
+    assert.ok(entry.summary);
+    assert.ok(entry.category);
+  }
+  for (const entry of changelog.history) {
     assert.match(entry.commit, /^[a-f0-9]{7}$/);
     assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
     assert.ok(entry.title);

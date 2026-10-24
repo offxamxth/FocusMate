@@ -18,7 +18,7 @@ const migration = await readFile(
   'utf8',
 );
 const globalXpLeaderboardMigration = await readFile(
-  new URL('../../supabase/migrations/20261017120000_global_xp_leaderboard.sql', import.meta.url),
+  new URL('../../supabase/migrations/20261024162826_global_xp_leaderboard.sql', import.meta.url),
   'utf8',
 );
 

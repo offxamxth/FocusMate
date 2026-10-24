@@ -2,21 +2,22 @@
 
 ## Current safety status
 
-- Staging is `knglawdgbafxscbbrkzi`. The local dashboard environment points to this project; no database request or write was made during this work.
-- Production is `qdvxfpzoychtgfenfjrs`. It was not contacted, and this plan does not authorize production changes.
+- Staging is `knglawdgbafxscbbrkzi`. The local dashboard environment points to this project; it was not changed during this work.
+- Production is `qdvxfpzoychtgfenfjrs`. After explicit user authorization, these migrations were applied: `20261024162826_global_xp_leaderboard`, `20261024162929_verified_daily_quest_reroll_tokens`, and `20261024162946_fix_daily_quest_token_threshold`.
+- A read-only production smoke check confirmed the leaderboard, visibility, room-progress, and daily-reroll RPCs exist as `SECURITY DEFINER` functions with an empty `search_path`. The four private quest/token tables have RLS enabled. No user records were queried or changed directly.
 - At the last read-only staging audit, WAL-G was enabled, but point-in-time recovery (PITR) was disabled and no physical backup was confirmed. There is not yet evidence of a tested, restorable recovery point.
 - `supabase db push --dry-run --linked` stopped at out-of-order migration history. An `--include-all --dry-run` listed pending migrations, but no migration was applied.
 - There is no available local Supabase/Postgres service to execute the SQL migrations locally.
 
 ## Migration history requiring reconciliation
 
-The last read-only comparison indicated these migrations as pending:
+The last read-only staging comparison indicated these migrations as pending:
 
 - `20261011170000_room_quest_reroll_guard.sql`
 - `20261016200000_fix_room_quest_reroll_request_type.sql`
 - `20261016210000_enable_verified_room_late_join.sql`
 - `20261016220000_preserve_finished_room_state_on_host_leave.sql`
-- `20261017120000_global_xp_leaderboard.sql`
+- `20261024162826_global_xp_leaderboard.sql`
 
 The audit also found staging successors or equivalent behavior already applied for:
 
@@ -24,7 +25,7 @@ The audit also found staging successors or equivalent behavior already applied f
 - `20261012130000_room_late_join.sql`
 - `20261017100000_fix_focusmate_leaderboard_scope_visibility.sql`
 
-The older pending reroll migrations may replace later function bodies if applied blindly. The late-join migration appears to duplicate behavior already applied, while the host-leave and Global-XP leaderboard migrations appear to contain behavior not yet present on staging. The new local-only `20261018120000_verified_daily_quest_reroll_tokens.sql` is also unapplied. Do not use `--include-all` as a way to bypass the ordering warning.
+The older pending reroll migrations may replace later function bodies if applied blindly. The late-join migration appears to duplicate behavior already applied, while the host-leave, Global-XP leaderboard, and daily quest/token migrations remain unapplied on staging. The production migration versions above do not authorize staging changes. Do not use `--include-all` as a way to bypass the ordering warning.
 
 ## Required recovery gate
 
@@ -47,10 +48,10 @@ After the recovery gate is met, but before deployment:
 
 ## Deployment approval and verification
 
-After presenting the recovery evidence and exact migration set, request explicit approval for staging-only deployment. Until that approval is received:
+After presenting the recovery evidence and exact migration set, request explicit approval for staging-only deployment. The production authorization recorded above was limited to the three named production migrations and does not authorize any staging change or additional production change. Until separate staging approval is received:
 
 - Do not apply migrations, create or alter staging records, or run reward/reroll tests against staging.
-- Do not deploy or configure anything in production.
+- Do not deploy or configure anything else in production.
 
 If approved, apply only the reviewed staging set, then verify RPC signatures, RLS and Realtime authorization, verified room progress, persisted token/XP invariants, and the client-facing leaderboard contract. Record the applied migration versions and test outcomes. Stop and report any mismatch rather than attempting an unreviewed repair.
 

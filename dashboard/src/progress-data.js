@@ -133,6 +133,7 @@ export function dailyFocusSeconds(profile, live = {}, date = localDateKey()) {
     ? positiveSeconds(profile.focus_timer_seconds_today)
     : 0;
   const completedCameraSeconds = sessionsForDate(profile, date)
+    .filter((session) => session.source !== 'focus_timer')
     .reduce((total, session) => total + positiveSeconds(session.seconds), 0);
   const activeSessionDate = live.session_started_at ? localDateKey(new Date(live.session_started_at)) : '';
   const activeSeconds = live.session_active && activeSessionDate === date
@@ -148,7 +149,7 @@ function questValue(profile, live, quest, date) {
     case 'focus_time':
       return dailyFocusSeconds(profile, live, date) / 60;
     case 'session_count':
-      return completedSessions.length;
+      return completedSessions.filter((session) => session.source !== 'focus_timer').length;
     case 'session_xp':
       return completedSessions.reduce((total, session) => total + Math.max(0, Number(session.xp) || 0), 0);
     case 'camera_alerts': {

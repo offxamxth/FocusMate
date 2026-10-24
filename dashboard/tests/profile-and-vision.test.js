@@ -624,6 +624,47 @@ test('daily quest rewards are based on actual timer data and are awarded once', 
   assert.equal(nextRead.daily_quest_claims.filter((claim) => claim.quest_id === focusQuest.id && claim.date === localDateKey()).length, 1);
 });
 
+test('daily focus and camera-session quests count their own timer and camera records once', async () => {
+  values.clear();
+  const initial = await post('/api/login', { username: 'questaccounting', name: 'Quest Accounting' });
+  const focusQuest = initial.profile.daily_quests.quests.find((quest) => quest.category === 'focus_time');
+  const cameraQuest = initial.profile.daily_quests.quests.find((quest) => quest.category === 'session_count');
+  const timerSeconds = Math.floor(focusQuest.target * 60 / 2);
+  const timerCredit = await post('/api/timer/credit?username=questaccounting', {
+    seconds: timerSeconds,
+    session_id: 'timer-half-target',
+  });
+  const timerFocusQuest = timerCredit.profile.daily_quests.quests.find((quest) => quest.id === focusQuest.id);
+  const timerCameraQuest = timerCredit.profile.daily_quests.quests.find((quest) => quest.id === cameraQuest.id);
+
+  assert.equal(timerFocusQuest.progress, timerSeconds / 60);
+  assert.equal(timerFocusQuest.completed, false);
+  assert.equal(timerCameraQuest.progress, 0);
+
+  const cameraProfile = {
+    ...timerCredit.profile,
+    session_history: [
+      ...timerCredit.profile.session_history,
+      {
+        session_id: 'camera-session',
+        source: 'camera',
+        date: localDateKey(),
+        seconds: 60,
+        completed: true,
+      },
+    ],
+  };
+  const updated = await api('/api/state?username=questaccounting', {
+    method: 'PUT',
+    body: JSON.stringify({ profile: cameraProfile }),
+  });
+  const combinedFocusQuest = updated.profile.daily_quests.quests.find((quest) => quest.id === focusQuest.id);
+  const updatedCameraQuest = updated.profile.daily_quests.quests.find((quest) => quest.id === cameraQuest.id);
+
+  assert.equal(combinedFocusQuest.progress, (timerSeconds + 60) / 60);
+  assert.equal(updatedCameraQuest.progress, 1);
+});
+
 test('completed room timer results are persisted and credited only once per room session', async () => {
   values.clear();
   await post('/api/login', { username: 'roomsession', name: 'Room Session' });

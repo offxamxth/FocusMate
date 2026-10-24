@@ -68,6 +68,12 @@ export const changelog = {
   proposedInitialVersion: 'v1.0.0',
   unreleased: [
     {
+      date: '2026-10-24',
+      title: 'Global XP leaderboard and daily quests',
+      summary: 'Applied the missing production leaderboard and verified daily-quest database support, corrected timer and camera-session quest accounting, and documented privacy scopes and reroll rules.',
+      category: 'fixed',
+    },
+    {
       date: '2026-10-22',
       commit: 'dfa456a',
       title: 'Availability of room video and verified quests',

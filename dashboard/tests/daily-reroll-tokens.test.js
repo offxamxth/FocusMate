@@ -5,11 +5,11 @@ import { rerollFocusmateDailyQuest } from '../src/room-progress.js';
 import { supportedLanguages, translate } from '../src/i18n.js';
 
 const migrationUrl = new URL(
-  '../../supabase/migrations/20261018120000_verified_daily_quest_reroll_tokens.sql',
+  '../../supabase/migrations/20261024162929_verified_daily_quest_reroll_tokens.sql',
   import.meta.url,
 );
 const rewardMigrationUrl = new URL(
-  '../../supabase/migrations/20261020120000_fix_daily_quest_token_threshold.sql',
+  '../../supabase/migrations/20261024162946_fix_daily_quest_token_threshold.sql',
   import.meta.url,
 );
 

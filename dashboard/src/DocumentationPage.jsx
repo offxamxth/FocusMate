@@ -24,7 +24,7 @@ export default function DocumentationPage({ publicPage = false, language = 'en' 
     timeZone: 'UTC',
   }).format(new Date(`${date}T00:00:00Z`));
   const renderChange = (entry) => (
-    <article className="changelog-card" key={entry.commit || entry.version}>
+    <article className="changelog-card" key={entry.commit || entry.version || entry.date || entry.title}>
       <div className="changelog-card-meta">
         {entry.version && <span className="changelog-version">{entry.version}</span>}
         {entry.date && <time dateTime={entry.date}>{dateLabel(entry.date)}</time>}
@@ -94,6 +94,10 @@ export default function DocumentationPage({ publicPage = false, language = 'en' 
             <p>Use tasks, study goals, session history, achievements, and daily quests to organize and review your activity. Saved data depends on whether you use a local or cloud profile.</p>
           </article>
           <article>
+            <h3>Daily quests</h3>
+            <p>Browser-local profiles receive four daily quests based on recorded timer time, completed camera sessions, session XP, and enabled camera signals; rewards are added to that local profile once. Cloud profiles receive a separate set of server-verified Focus Room quests using the UTC day. Completing at least three eligible verified quests awards one reroll token per UTC day; each reroll spends a token, with a limit of three rerolls per UTC day.</p>
+          </article>
+          <article>
             <h3>Focus Buddy</h3>
             <p>Choose whether Focus Buddy is enabled and select its appearance in Session preferences. Buddy appearance sounds are optional, use a short locally synthesized chime, and can be turned off separately. Audio starts only after browser interaction; camera and microphone access are not needed.</p>
           </article>
@@ -107,7 +111,7 @@ export default function DocumentationPage({ publicPage = false, language = 'en' 
           </article>
           <article>
             <h3>Friends and leaderboard</h3>
-            <p>Cloud social features require sign-in and an internet connection. Leaderboard visibility is controlled by your privacy setting. Rankings use persisted profile XP and the configured database function; an incompatible server response is reported instead of replaced with sample data.</p>
+            <p>Cloud social features require sign-in and an internet connection. The Global board lists public profiles; the Friends board lists accepted friends who chose Friends or Public visibility. You can choose Private, Friends, or Public visibility, and still see your own XP and level when unlisted. Rankings use persisted Global XP and a database function; a missing or incompatible server function is reported instead of replaced with sample data.</p>
           </article>
         </div>
       </section>
@@ -144,7 +148,7 @@ export default function DocumentationPage({ publicPage = false, language = 'en' 
           </details>
           <details>
             <summary>Why is the leaderboard unavailable or reporting an outdated response?</summary>
-            <p>The leaderboard needs an authenticated cloud account, a network connection, and a database function returning the current Global XP response. Retry after reconnecting or signing in again. If the outdated-response message persists, contact support so the service deployment can be checked.</p>
+            <p>The leaderboard needs an authenticated cloud account, a network connection, and the current Global XP database functions. Retry after reconnecting or signing in again. If an update-required message persists, contact support so the service deployment can be checked.</p>
           </details>
           <details>
             <summary>Does FocusMate measure my attention?</summary>

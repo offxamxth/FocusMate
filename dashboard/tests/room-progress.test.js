@@ -189,7 +189,7 @@ test('finished verified rooms award Global XP once through the profile progressi
   const [progressMigration, profileMigration, leaderboardMigration] = await Promise.all([
     readFile(new URL('../../supabase/migrations/20261011120000_trusted_room_progress.sql', import.meta.url), 'utf8'),
     readFile(new URL('../../supabase/migrations/20261004160000_profile_cloud_fields.sql', import.meta.url), 'utf8'),
-    readFile(new URL('../../supabase/migrations/20261017120000_global_xp_leaderboard.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../../supabase/migrations/20261024162826_global_xp_leaderboard.sql', import.meta.url), 'utf8'),
   ]);
   const completion = progressMigration.match(
     /create or replace function private\.record_focusmate_room_completion\(\)[\s\S]*?\n\$\$;/i,
