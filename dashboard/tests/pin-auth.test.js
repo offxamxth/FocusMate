@@ -284,10 +284,10 @@ test('Focus Score UI has been removed while local legacy-data sanitizing stays p
   assert.doesNotMatch(contact, /focus score|focus_score/i);
 });
 
-test('MediaPipe is loaded on demand when camera analysis starts', async () => {
+test('MediaPipe is loaded on demand by the single camera-analysis effect', async () => {
   const main = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  const cameraStart = main.slice(main.indexOf('const startCamera'), main.indexOf('const stopCamera'));
   assert.doesNotMatch(main, /from ['"]\.\/vision\.js['"]/);
-  assert.match(main, /await import\(['"]\.\/vision\.js['"]\)/);
-  assert.match(cameraStart, /await import\(['"]\.\/vision\.js['"]\)/);
+  assert.match(main, /const \{ createVisionLandmarkers, detectMetrics \} = await import\('\.\/vision\.js'\)/);
+  assert.match(main, /if \(!detectors\) \{[\s\S]*?await createVisionLandmarkers\(detectionConfigurationRef\.current\)/);
+  assert.doesNotMatch(main, /const \{ createVisionLandmarkers \} = await import\('\.\/vision\.js'\)/);
 });

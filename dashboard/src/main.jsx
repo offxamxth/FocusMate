@@ -324,6 +324,7 @@ function FocusMateApp({
   );
   const activeVisionTasks = visionTasksForConfiguration(activeDetectionConfiguration);
   const videoRef = useRef(null);
+  const analysisVideoRef = useRef(null);
   const miniVideoRef = useRef(null);
   const visionRef = useRef(null);
   const streamRef = useRef(null);
@@ -549,9 +550,30 @@ function FocusMateApp({
   }, [username]);
 
   useEffect(() => {
-    if (videoRef.current && stream) videoRef.current.srcObject = stream;
-    if (miniVideoRef.current && stream) miniVideoRef.current.srcObject = stream;
-  }, [stream, page]);
+    const videos = [analysisVideoRef.current, videoRef.current, miniVideoRef.current];
+    for (const video of videos) {
+      if (video && video.srcObject !== stream) video.srcObject = stream;
+    }
+    if (stream && analysisVideoRef.current) {
+      void analysisVideoRef.current.play().catch((error) => {
+        setCameraState('analysis-error');
+        setCameraError(error.message || 'The camera preview could not be started.');
+      });
+    }
+  }, [stream]);
+
+  useEffect(() => {
+    if (!stream) return undefined;
+    const resumeCameraPlayback = () => {
+      if (document.visibilityState !== 'visible' || !analysisVideoRef.current) return;
+      void analysisVideoRef.current.play().catch((error) => {
+        setCameraState('analysis-error');
+        setCameraError(error.message || 'The camera preview could not be resumed.');
+      });
+    };
+    document.addEventListener('visibilitychange', resumeCameraPlayback);
+    return () => document.removeEventListener('visibilitychange', resumeCameraPlayback);
+  }, [stream]);
 
   useEffect(() => {
     if (!stream || !camera) return undefined;
@@ -563,7 +585,7 @@ function FocusMateApp({
     let timeout;
     const analyze = async () => {
       if (stopped || busy) return;
-      const video = videoRef.current;
+      const video = analysisVideoRef.current;
       if (!video || video.readyState < 2 || !video.videoWidth) {
         timeout = window.setTimeout(analyze, 300);
         return;
@@ -772,7 +794,6 @@ function FocusMateApp({
     const generation = ++cameraStartGenerationRef.current;
     const isCurrent = () => generation === cameraStartGenerationRef.current;
     let nextStream;
-    let detectors;
     const sessionConfiguration = normalizeDetectionConfiguration(
       plan.session_configuration || profile.session_preferences,
     );
@@ -803,34 +824,27 @@ function FocusMateApp({
           if (streamRef.current !== nextStream) return;
           streamRef.current = null;
           setStream(null);
+          setCamera(null);
           setCameraState('unavailable');
           setCameraError('The camera disconnected. Your focus timer is still running.');
         }, { once: true });
       }
       setStream(nextStream);
       setCameraState('active');
-      const { createVisionLandmarkers } = await import('./vision.js');
-      if (!isCurrent()) return;
-      detectors = await createVisionLandmarkers(sessionConfiguration);
-      if (!isCurrent()) {
-        detectors?.face?.close();
-        detectors?.pose?.close();
-        nextStream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-        return;
+      if (cameraBackendActiveRef.current) {
+        setCamera((current) => current || {
+          live: { ...live, session_configuration: sessionConfiguration },
+        });
       }
-      visionRef.current = detectors;
-      setCameraState('active');
     } catch (error) {
-      detectors?.face?.close();
-      detectors?.pose?.close();
       if (!isCurrent()) return;
-      if (!nextStream) {
-        nextStream?.getTracks().forEach((track) => track.stop());
+      if (nextStream) {
+        nextStream.getTracks().forEach((track) => track.stop());
         if (streamRef.current === nextStream) streamRef.current = null;
+        setStream(null);
       }
-      const permissionDenied = !nextStream && ['NotAllowedError', 'SecurityError'].includes(error.name);
-      setCameraState(permissionDenied ? 'permission-denied' : nextStream ? 'analysis-unavailable' : 'unavailable');
+      const permissionDenied = ['NotAllowedError', 'SecurityError'].includes(error.name);
+      setCameraState(permissionDenied ? 'permission-denied' : 'unavailable');
       setCameraError(error.message || 'The camera could not be started.');
     }
   };
@@ -844,10 +858,6 @@ function FocusMateApp({
     setCameraState(navigator.mediaDevices?.getUserMedia ? 'off' : 'unavailable');
     setCameraError('');
   };
-
-  useEffect(() => {
-    if (page !== 'focus-room' && (streamRef.current || stream)) stopCamera();
-  }, [page]);
 
   const endFocusSession = async ({ completed = true, sessionId = '' } = {}) => {
     stopCamera();
@@ -931,6 +941,15 @@ function FocusMateApp({
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`} data-study-style={profile.session_preferences?.study_style || 'normal'}>
+      <video
+        ref={analysisVideoRef}
+        className="camera-analysis-source"
+        autoPlay
+        muted
+        playsInline
+        aria-hidden="true"
+        tabIndex={-1}
+      />
       <aside className="sidebar">
         <div className="sidebar-top">
           <a className="brand-lockup" href="#overview" aria-label="FocusMate home" onClick={(event) => { event.preventDefault(); changePage('overview'); }}>focus<span>mate</span><i>✳</i></a>
@@ -1006,7 +1025,7 @@ function FocusMateApp({
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
-        {page === 'documentation' && <DocumentationPage />}
+        {page === 'documentation' && <DocumentationPage language={language} />}
         <footer className="page-footer">FocusMate <span>·</span> {translate(language, 'app.footer')}</footer>
       </main>
       <FocusBuddy key={username} username={username} profile={profile} live={live} language={language} />
@@ -1600,6 +1619,7 @@ function TimerPanel({
   const preferredDuration = Number(profile.session_preferences?.session_length_minutes || 25);
   const defaultDuration = durationOptions.includes(preferredDuration) ? preferredDuration : 25;
   const [roomTimer, setRoomTimer] = useState(null);
+  const roomTimerActive = isRoomTimerActive(roomTimer, performance.now());
   const roomSessionId = roomTimer
     ? `${roomTimer.roomId}:${roomTimer.sessionStartedAt}`
     : '';

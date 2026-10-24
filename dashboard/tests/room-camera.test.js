@@ -99,6 +99,22 @@ test('room camera analysis consumes the shared local stream and has no network o
   assert.doesNotMatch(source, /\/api\/webcam\/start|fetch\(|\bapi\(|supabase|presence\.track|rpc\(/);
 });
 
+test('camera capture and analysis persist across app navigation and resume after tab visibility changes', async () => {
+  const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const docs = await readFile(new URL('../src/DocumentationPage.jsx', import.meta.url), 'utf8');
+  assert.match(source, /const analysisVideoRef = useRef\(null\)/);
+  assert.match(source, /className="camera-analysis-source"/);
+  assert.match(source, /const video = analysisVideoRef\.current/);
+  assert.match(source, /document\.addEventListener\('visibilitychange', resumeCameraPlayback\)/);
+  assert.match(source, /analysisVideoRef\.current\.play\(\)/);
+  assert.match(source, /if \(cameraBackendActiveRef\.current\) \{\s*setCamera\(\(current\) => current \|\|/);
+  assert.doesNotMatch(source, /const \{ createVisionLandmarkers \} = await import\('\.\/vision\.js'\);/);
+  assert.doesNotMatch(source, /if \(page !== 'focus-room'[\s\S]{0,100}stopCamera\(\)/);
+  assert.match(source, /const stopTracksOnPageHide = \(\) =>/);
+  assert.match(source, /activeStream\?\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
+  assert.match(docs, /Navigating to another FocusMate page or switching browser tabs does not intentionally stop an active camera/);
+});
+
 test('Focus page starts its camera from Start Focus and keeps the existing preview markup', async () => {
   const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
   assert.match(source, /void onStartCamera\(plan\)/);

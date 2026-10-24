@@ -368,13 +368,18 @@ test('pausing freezes the remaining time and resuming anchors a fresh countdown'
   assert.equal(resumeLocalFocusTimer(durationSeconds, 901, resumedAt), null);
 });
 
-test('timer integration keeps its owner mounted across navigation and stops camera tracks off the Focus Room', async () => {
+test('timer and camera analysis remain mounted and active across FocusMate navigation', async () => {
   const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
   const localApiSource = await readFile(new URL('../src/local-api.js', import.meta.url), 'utf8');
   const timerPanel = source.slice(source.indexOf('function TimerPanel('), source.indexOf('function FocusBuddy('));
   assert.match(source, /<div hidden=\{page !== 'focus-room'\}[\s\S]*?<FocusRoom/);
   assert.doesNotMatch(timerPanel, /pageActive|onSessionEnd\(\{\s*completed:\s*false\s*\}\)\s*;\s*return\s*;/);
-  assert.match(source, /if \(page !== 'focus-room' && \(streamRef\.current \|\| stream\)\) stopCamera\(\)/);
+  assert.doesNotMatch(source, /if \(page !== 'focus-room' && \(streamRef\.current \|\| stream\)\) stopCamera\(\)/);
+  assert.match(source, /const analysisVideoRef = useRef\(null\)/);
+  assert.match(source, /className="camera-analysis-source"/);
+  assert.match(source, /const video = analysisVideoRef\.current/);
+  assert.match(source, /document\.addEventListener\('visibilitychange', resumeCameraPlayback\)/);
+  assert.match(source, /if \(cameraBackendActiveRef\.current\) \{\s*setCamera\(\(current\) => current \|\|/);
   assert.match(source, /claimTimerCompletion\(completionHandled\)/);
   assert.match(source, /sessionStorage\.setItem\(timerStorageKey, JSON\.stringify\(\{\s*startedAt,\s*duration,\s*status: 'running'/);
   assert.match(source, /onSessionEnd\(\{\s*completed:\s*pendingSave\.completed,\s*sessionId:\s*pendingSave\.sessionId/);

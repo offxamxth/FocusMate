@@ -105,7 +105,7 @@ export default function DocumentationPage({ publicPage = false }) {
         <h2>Timer, pause, and session recovery</h2>
         <p>Choose a 15, 25, 45, 60, 90, or 120 minute timer. A focus timer can be paused and resumed; ending it early is shown as an early end rather than a completed session.</p>
         <p>Moving between pages inside FocusMate does not end the timer. The countdown is kept in this tab’s session storage so a refresh in the same tab can restore the remaining time. Closing the tab or clearing its session storage removes that recovery state.</p>
-        <p>Pausing or leaving the Focus Room stops an active camera stream and excludes paused time from the recorded session duration. Return to the Focus Room and explicitly start the camera again if you want local webcam support to continue.</p>
+        <p>Pausing a focus session stops its camera stream and excludes paused time from the recorded session duration. Navigating to another FocusMate page or switching browser tabs does not intentionally stop an active camera; the browser may reduce background processing. Use Stop camera or pause the session to turn it off.</p>
       </section>
 
       <section id="features" className="documentation-section">
@@ -163,7 +163,7 @@ export default function DocumentationPage({ publicPage = false }) {
           </details>
           <details>
             <summary>Why did webcam support stop when I changed pages?</summary>
-            <p>FocusMate stops an active camera stream when you leave the Focus Room page. Reopen Focus Room and start the camera again if you want camera support.</p>
+            <p>FocusMate keeps an active camera stream running when you navigate to another app page or switch browser tabs. Browsers and devices may throttle background analysis; return to the app to resume normal processing. Stop the camera or pause the focus session to end it.</p>
           </details>
           <details>
             <summary>Why is the leaderboard unavailable or reporting an outdated response?</summary>

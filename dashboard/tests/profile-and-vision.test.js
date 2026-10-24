@@ -1176,6 +1176,39 @@ function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0
 
 const video = { videoWidth: 640, videoHeight: 480 };
 
+test('face presence, eye aspect ratio, and head-turn metrics use face landmarks and video dimensions', () => {
+  const detectors = visionFixture();
+  const face = Array.from({ length: 455 }, () => ({ x: 0.5, y: 0.5 }));
+  face[1] = { x: 0.56, y: 0.5 };
+  face[234] = { x: 0.35, y: 0.5 };
+  face[454] = { x: 0.65, y: 0.5 };
+  for (const [first, upperA, upperB, outer, lowerB, lowerA, start, end] of [
+    [33, 160, 158, 133, 153, 144, 0.4, 0.5],
+    [362, 385, 387, 263, 373, 380, 0.6, 0.5],
+  ]) {
+    face[first] = { x: start, y: 0.5 };
+    face[upperA] = { x: start + (end - start) * 0.25, y: 0.48 };
+    face[upperB] = { x: start + (end - start) * 0.75, y: 0.48 };
+    face[outer] = { x: end, y: 0.5 };
+    face[lowerB] = { x: start + (end - start) * 0.75, y: 0.52 };
+    face[lowerA] = { x: start + (end - start) * 0.25, y: 0.52 };
+  }
+  detectors.setFace(face);
+
+  const detected = detectMetrics(detectors, video, 1);
+  assert.equal(detected.face_detected, true);
+  assert.equal(detected.looking_away, true);
+  assert.ok(Math.abs(detected.ear - 0.3) < 0.001);
+  assert.equal(detected.eyes_closed, false);
+  assert.equal(detected.distance_status, 'Good');
+
+  detectors.setFace(null);
+  const missing = detectMetrics(detectors, video, 2);
+  assert.equal(missing.face_detected, false);
+  assert.equal(missing.status, 'Face Not Detected');
+  assert.equal(missing.ear, null);
+});
+
 test('each independently disabled detector signal is suppressed without disabling other signals', () => {
   const signalPreferences = [
     'monitor_looking_away',
