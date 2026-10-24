@@ -42,6 +42,14 @@ export function remainingRoomFocusSeconds(timerState, clientPerformanceNow = per
   return Math.max(0, timerState.durationSeconds - elapsedRoomFocusSeconds(timerState, clientPerformanceNow));
 }
 
+export function isRoomTimerActive(timerState, clientPerformanceNow = performance.now()) {
+  if (!timerState || timerState.status === 'finished') return false;
+  if (timerState.status === 'focusing') {
+    return remainingRoomFocusSeconds(timerState, clientPerformanceNow) > 0;
+  }
+  return true;
+}
+
 export function elapsedParticipantFocusSeconds(timerState, clientPerformanceNow = performance.now()) {
   if (!timerState) return 0;
   let elapsed = Math.max(0, timerState.participantFocusedSeconds);

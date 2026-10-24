@@ -72,6 +72,7 @@ import {
 } from './focus-buddy.js';
 import {
   elapsedParticipantFocusSeconds,
+  isRoomTimerActive,
   remainingRoomFocusSeconds,
   subscribeToRoomTimerState,
 } from './room-timer-sync.js';
@@ -1640,6 +1641,7 @@ function TimerPanel({
   const sessionIdRef = useRef('');
   const localSessionActiveRef = useRef(false);
   const completionHandled = useRef(false);
+  const completedRoomSessionRef = useRef('');
   const pendingSaveRef = useRef(null);
   const saveInProgressRef = useRef(false);
   const activeRoomSession = useRef('');
@@ -1758,7 +1760,7 @@ function TimerPanel({
   useEffect(() => {
     if (!running) return undefined;
     const refreshClock = () => {
-      if (roomTimer) setClientPerformanceNow(performance.now());
+      if (roomTimerActive) setClientPerformanceNow(performance.now());
       else setRemaining(remainingFocusSeconds(startedAtRef.current, duration * 60));
     };
     const interval = window.setInterval(refreshClock, 1000);
@@ -1767,7 +1769,7 @@ function TimerPanel({
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', refreshClock);
     };
-  }, [duration, roomTimer, running]);
+  }, [duration, roomTimerActive, running]);
   useEffect(() => {
     if (!roomTimer) {
       if (activeRoomSession.current) {
@@ -1805,30 +1807,32 @@ function TimerPanel({
       const roomFinished = roomTimer.status === 'finished';
       const naturallyFinished = roomTimer.status === 'focusing'
         && remainingRoomFocusSeconds(roomTimer, performance.now()) === 0;
-      if ((!roomFinished && !naturallyFinished) || !claimTimerCompletion(completionHandled)) return;
-      setCompleted(true);
-      setRunning(false);
-      const secondsToCredit = elapsedParticipantFocusSeconds(roomTimer, performance.now());
-      if (secondsToCredit > 0) {
-        const taskText = profile.tasks?.find((task) => !task.done)?.text || '';
-        api(`/api/timer/credit?username=${encodeURIComponent(username)}`, {
-          method: 'POST',
-          body: JSON.stringify({
-            seconds: secondsToCredit,
-            session_id: roomSessionId,
-            session_started_at: roomTimer.sessionStartedAt,
-            task_text: taskText,
-          }),
-        })
-          .then(() => onNotice(translate(language, 'focus.timerSaved')))
-          .catch((error) => onNotice(error.message));
+      if ((roomFinished || naturallyFinished) && completedRoomSessionRef.current !== roomSessionId) {
+        completedRoomSessionRef.current = roomSessionId;
+        setCompleted(true);
+        setRunning(false);
+        const secondsToCredit = elapsedParticipantFocusSeconds(roomTimer, performance.now());
+        if (secondsToCredit > 0) {
+          const taskText = profile.tasks?.find((task) => !task.done)?.text || '';
+          api(`/api/timer/credit?username=${encodeURIComponent(username)}`, {
+            method: 'POST',
+            body: JSON.stringify({
+              seconds: secondsToCredit,
+              session_id: roomSessionId,
+              session_started_at: roomTimer.sessionStartedAt,
+              task_text: taskText,
+            }),
+          })
+            .then(() => onNotice(translate(language, 'focus.timerSaved')))
+            .catch((error) => onNotice(error.message));
+        }
+        if (roomFinished) void playSessionCompletionBeep(chimeContext.current);
       }
-      if (roomFinished) void playSessionCompletionBeep(chimeContext.current);
-      return;
+      if (roomTimerActive) return;
     }
     if (remaining !== 0 || (!running && !paused) || !localSessionActiveRef.current) return;
     endLocalSession(true);
-  }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, paused, profile.tasks, remaining, roomSessionId, roomTimer, running, timerStorageKey, username]);
+  }, [duration, language, onNotice, onSessionEnd, onSessionStateChange, paused, profile.tasks, remaining, roomSessionId, roomTimer, roomTimerActive, running, timerStorageKey, username]);
   const chooseDuration = (value) => {
     if (running || pendingSaveRef.current || saveInProgressRef.current
       || !durationOptions.includes(value)) return;
@@ -1842,7 +1846,7 @@ function TimerPanel({
     setRemaining(value * 60);
   };
   const start = () => {
-    if (roomTimer || localSessionActiveRef.current || !canStart || completed || endedEarly) return;
+    if (roomTimerActive || localSessionActiveRef.current || !canStart || completed || endedEarly) return;
     const startedAt = Date.now();
     startedAtRef.current = startedAt;
     localSessionActiveRef.current = true;
@@ -1880,7 +1884,7 @@ function TimerPanel({
     }).catch(() => {});
   };
   const reset = () => {
-    if (roomTimer || running || paused || localSessionActiveRef.current
+    if (roomTimerActive || running || paused || localSessionActiveRef.current
       || pendingSaveRef.current || saveInProgressRef.current) return;
     completionHandled.current = false;
     setCompleted(false);
@@ -1889,7 +1893,7 @@ function TimerPanel({
     setRemaining(duration * 60);
   };
   const pause = async () => {
-    if (roomTimer || paused || !localSessionActiveRef.current) return;
+    if (roomTimerActive || paused || !localSessionActiveRef.current) return;
     const remainingSeconds = pauseLocalFocusTimer(
       startedAtRef.current,
       duration * 60,
@@ -1920,7 +1924,7 @@ function TimerPanel({
     }));
   };
   const resume = async () => {
-    if (roomTimer || !paused || !localSessionActiveRef.current) return;
+    if (roomTimerActive || !paused || !localSessionActiveRef.current) return;
     if (remaining === 0) {
       endLocalSession(true);
       return;
@@ -1957,7 +1961,7 @@ function TimerPanel({
     <div className="timer-top">
       <span className="eyebrow">{t('timerEyebrow')}</span>
       <label className="select-wrap">
-        <select value={duration} disabled={running || paused || Boolean(roomTimer) || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onChange={(event) => chooseDuration(Number(event.target.value))}>
+        <select value={duration} disabled={running || paused || roomTimerActive || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onChange={(event) => chooseDuration(Number(event.target.value))}>
           {durations.map((item) => <option key={item} value={item}>{item} {t('minutes')}</option>)}
         </select>
         <ChevronDown size={15} />
@@ -1982,10 +1986,10 @@ function TimerPanel({
     <div className="timer-actions">
       {running ? (
         <>
-          <button className="outline-button" disabled={Boolean(roomTimer) || transitioning} onClick={pause}>
+          <button className="outline-button" disabled={roomTimerActive || transitioning} onClick={pause}>
             <Coffee size={16} /> {t('pause')}
           </button>
-          <button className="outline-button" disabled={Boolean(roomTimer) || transitioning} onClick={() => endLocalSession(false)}>
+          <button className="outline-button" disabled={roomTimerActive || transitioning} onClick={() => endLocalSession(false)}>
             <VideoOff size={16} /> {t('endSession')}
           </button>
         </>
@@ -1999,11 +2003,11 @@ function TimerPanel({
           </button>
         </>
       ) : (
-        <button className="primary-button" disabled={Boolean(roomTimer) || remaining === 0 || completed || endedEarly || !canStart} onClick={start}>
+        <button className="primary-button" disabled={roomTimerActive || remaining === 0 || completed || endedEarly || !canStart} onClick={start}>
           <Play size={17} /> {t('startFocus')}
         </button>
       )}
-      <button className="outline-button" disabled={Boolean(roomTimer) || running || paused || transitioning || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
+      <button className="outline-button" disabled={roomTimerActive || running || paused || transitioning || Boolean(pendingSaveRef.current) || saveStatus === 'saving'} onClick={reset}><RotateCcw size={16} /> {t('reset')}</button>
     </div>
     <small className="muted-note">{t('timerNote')}</small>
   </section>;

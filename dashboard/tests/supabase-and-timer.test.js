@@ -20,6 +20,7 @@ import {
   restoreLocalFocusTimer,
   resumeLocalFocusTimer,
 } from '../src/timer-completion.js';
+import { isRoomTimerActive } from '../src/room-timer-sync.js';
 
 test('Supabase auth validation and account-local storage identities are bounded', () => {
   assert.equal(Boolean(supabase), supabaseConfigured);
@@ -327,6 +328,33 @@ test('focus timer state restores legacy running sessions and persisted pauses af
   );
   assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 17 }, options, now), null);
   assert.equal(restoreLocalFocusTimer({ startedAt: now, duration: 15, status: 'unknown' }, options, now), null);
+});
+
+test('finished room timers release reset and restart without repeating room completion credit', async () => {
+  const roomTimer = {
+    status: 'finished',
+    durationSeconds: 900,
+    elapsedSeconds: 900,
+    serverNow: 1_000_000,
+    receivedAt: 100,
+  };
+  assert.equal(isRoomTimerActive(roomTimer, 100), false);
+  assert.equal(isRoomTimerActive({ ...roomTimer, status: 'paused' }, 100), true);
+  assert.equal(isRoomTimerActive({
+    ...roomTimer,
+    status: 'focusing',
+    elapsedSeconds: 0,
+    activeSegmentStartedAt: new Date(1_000_000).toISOString(),
+  }, 100), true);
+
+  const source = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const timerPanel = source.slice(source.indexOf('function TimerPanel('), source.indexOf('function FocusBuddy('));
+  assert.match(timerPanel, /const roomTimerActive = isRoomTimerActive\(roomTimer, performance\.now\(\)\)/);
+  assert.match(timerPanel, /if \(roomTimerActive \|\| localSessionActiveRef\.current/);
+  assert.match(timerPanel, /if \(roomTimerActive \|\| running \|\| paused/);
+  assert.match(timerPanel, /completedRoomSessionRef\.current !== roomSessionId/);
+  assert.match(timerPanel, /if \(roomTimerActive\) return;/);
+  assert.match(timerPanel, /sessionIdRef\.current = sessionId/);
 });
 
 test('a failed completion save restores an explicit retry state with the same session identity', () => {
