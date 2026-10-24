@@ -34,7 +34,7 @@ test('public pages have distinct indexable metadata and matching canonical URLs'
 });
 
 test('Vercel clean routes map to the static pages and stay outside the SPA fallback', async () => {
-  const config = JSON.parse(await readFile(new URL('../../vercel.json', import.meta.url), 'utf8'));
+  const config = JSON.parse(await readDashboardFile('vercel.json'));
   assert.ok(config.redirects.some(({ source, destination, permanent }) => (
     source === '/documentation.html'
     && destination === '/#documentation'

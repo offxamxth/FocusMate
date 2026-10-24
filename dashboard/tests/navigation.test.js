@@ -80,7 +80,7 @@ test('documentation is available in the app navigation and public page shell', a
   const publicSource = await readFile(new URL('../src/PublicPages.jsx', import.meta.url), 'utf8');
   const docsSource = await readFile(new URL('../src/DocumentationPage.jsx', import.meta.url), 'utf8');
   const viteConfig = await readFile(new URL('../vite.config.js', import.meta.url), 'utf8');
-  const vercelConfig = await readFile(new URL('../../vercel.json', import.meta.url), 'utf8');
+  const vercelConfig = await readFile(new URL('../vercel.json', import.meta.url), 'utf8');
   assert.match(appSource, /\{ id: 'documentation', label: 'nav\.documentation'/);
   assert.match(appSource, /\{page === 'documentation' && <DocumentationPage language=\{language\} \/>}/);
   assert.match(appSource, /className="welcome-documentation-link" href="\/#documentation"/);

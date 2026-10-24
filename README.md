@@ -91,8 +91,12 @@ stale indefinitely.
 ## Deploy to Vercel
 
 Import the repository into Vercel and set the **Root Directory** to
-`dashboard`. The root `vercel.json` commands are relative to that directory:
-install with `npm install`, build with `npm run build`, and publish `dist`.
+`dashboard`. Vercel reads the project configuration from
+[`dashboard/vercel.json`](./dashboard/vercel.json), which redirects the old
+`/documentation.html` address to the Documentation section on the app home
+page and maps the clean About, Contact, and Privacy routes to their static
+pages. Configure the build to install with `npm install`, run `npm run build`,
+and publish `dist`.
 
 Local profiles remain available in browser storage. When Supabase is
 configured and a user signs in, the profile snapshot (including study

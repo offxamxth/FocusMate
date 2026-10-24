@@ -1,0 +1,23 @@
+{
+  "redirects": [
+    {
+      "source": "/documentation.html",
+      "destination": "/#documentation",
+      "permanent": true
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/about",
+      "destination": "/about.html"
+    },
+    {
+      "source": "/contact",
+      "destination": "/contact.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    }
+  ]
+}
