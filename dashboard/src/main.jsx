@@ -1139,7 +1139,7 @@ function Welcome({ onLogin, onCloudLogin, cloudConfigurationError, notice }) {
         {onCloudLogin && <button className="outline-button auth-local-link" type="button" onClick={onCloudLogin}>{t('local.signInCloud')}</button>}
         {cloudConfigurationError && <small className="privacy-note cloud-config-warning" role="status">{cloudConfigurationError}</small>}
         <small className="privacy-note"><LockKeyhole size={14} /> {t('local.localNote')}</small>
-        <a className="welcome-documentation-link" href="/documentation.html">{translate(language, 'public.documentation')}</a>
+        <a className="welcome-documentation-link" href="/#documentation">{translate(language, 'public.documentation')}</a>
       </form>
     </main>
   );

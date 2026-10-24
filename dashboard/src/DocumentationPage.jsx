@@ -11,10 +11,8 @@ const sections = [
   ['updates', 'Update history'],
 ];
 
-export default function DocumentationPage({ publicPage = false, language = 'en' }) {
-  const rootClass = publicPage
-    ? 'documentation-page documentation-page-public public-content'
-    : 'documentation-page documentation-page-app page-content';
+export default function DocumentationPage({ language = 'en' }) {
+  const rootClass = 'documentation-page documentation-page-app page-content';
   const t = (key, values = {}) => translate(language, `changelog.${key}`, values);
   const sortedReleases = sortReleasesByVersion(changelog.releases);
   const latestRelease = sortedReleases[0];
@@ -49,15 +47,6 @@ export default function DocumentationPage({ publicPage = false, language = 'en' 
 
   return (
     <div className={rootClass} lang={language} dir={textDirection(language)}>
-      {publicPage && (
-        <header className="documentation-hero">
-          <span className="public-eyebrow">FOCUSMATE HELP</span>
-          <h1>Documentation</h1>
-          <p>A practical guide to FocusMate’s current features, privacy controls, and support options.</p>
-          <a className="public-primary-link" href="/#overview">Open FocusMate</a>
-        </header>
-      )}
-
       <nav className="documentation-toc" aria-label="Documentation contents">
         <strong>On this page</strong>
         <div>

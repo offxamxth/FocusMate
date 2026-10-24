@@ -21,7 +21,6 @@ const knownPages = new Set([
 const publicPaths = new Map([
   ['/about', 'about'],
   ['/contact', 'contact'],
-  ['/documentation.html', 'documentation'],
   ['/privacy', 'privacy'],
 ]);
 

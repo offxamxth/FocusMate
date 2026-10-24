@@ -14,7 +14,6 @@ test('public pages have distinct indexable metadata and matching canonical URLs'
   const pages = [
     ['about.html', 'https://getfocusmate.vercel.app/about'],
     ['contact.html', 'https://getfocusmate.vercel.app/contact'],
-    ['documentation.html', 'https://getfocusmate.vercel.app/documentation.html'],
     ['privacy.html', 'https://getfocusmate.vercel.app/privacy'],
   ];
   const titles = new Set();
@@ -36,6 +35,11 @@ test('public pages have distinct indexable metadata and matching canonical URLs'
 
 test('Vercel clean routes map to the static pages and stay outside the SPA fallback', async () => {
   const config = JSON.parse(await readFile(new URL('../../vercel.json', import.meta.url), 'utf8'));
+  assert.ok(config.redirects.some(({ source, destination, permanent }) => (
+    source === '/documentation.html'
+    && destination === '/#documentation'
+    && permanent === true
+  )));
   for (const page of ['about', 'contact', 'privacy']) {
     assert.ok(config.rewrites.some(({ source, destination }) => (
       source === `/${page}` && destination === `/${page}.html`
@@ -44,7 +48,7 @@ test('Vercel clean routes map to the static pages and stay outside the SPA fallb
 
   const viteConfig = await readDashboardFile('vite.config.js');
   assert.match(viteConfig, /navigateFallbackDenylist:[\s\S]*about\|contact\|privacy/);
-  assert.match(viteConfig, /globIgnores:[\s\S]*about\.html[\s\S]*contact\.html[\s\S]*documentation\.html[\s\S]*privacy\.html/);
+  assert.match(viteConfig, /globIgnores:[\s\S]*about\.html[\s\S]*contact\.html[\s\S]*privacy\.html/);
   assert.doesNotMatch(viteConfig, /runtimeCaching/);
   assert.match(viteConfig, /navigateFallbackDenylist:[\s\S]*\(\?!\$\|/);
 });

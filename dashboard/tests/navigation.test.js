@@ -40,8 +40,9 @@ test('public pages resolve from clean paths without changing authenticated hash 
     assert.equal(publicPageFromLocation(location(`/${page}`)), page);
     assert.equal(pageFromLocation(location(`/${page}`)), page);
   }
-  assert.equal(publicPageFromLocation(location('/documentation.html')), 'documentation');
-  assert.equal(pageFromLocation(location('/documentation.html')), 'documentation');
+  assert.equal(publicPageFromLocation(location('/documentation.html')), null);
+  assert.equal(isUnknownPath(location('/documentation.html')), true);
+  assert.equal(pageFromLocation(location('/', '#documentation')), 'documentation');
   assert.equal(navigationPath('about'), '/about');
   assert.equal(navigationPath('contact'), '/#contact');
   assert.equal(navigationPath('privacy'), '/privacy');
@@ -79,17 +80,14 @@ test('documentation is available in the app navigation and public page shell', a
   const publicSource = await readFile(new URL('../src/PublicPages.jsx', import.meta.url), 'utf8');
   const docsSource = await readFile(new URL('../src/DocumentationPage.jsx', import.meta.url), 'utf8');
   const viteConfig = await readFile(new URL('../vite.config.js', import.meta.url), 'utf8');
-  const docsHtml = await readFile(new URL('../documentation.html', import.meta.url), 'utf8');
   const vercelConfig = await readFile(new URL('../../vercel.json', import.meta.url), 'utf8');
   assert.match(appSource, /\{ id: 'documentation', label: 'nav\.documentation'/);
   assert.match(appSource, /\{page === 'documentation' && <DocumentationPage language=\{language\} \/>}/);
-  assert.match(appSource, /className="welcome-documentation-link" href="\/documentation\.html"/);
-  assert.match(publicSource, /page === 'documentation' && <DocumentationPage publicPage language=\{language\} \/>/);
-  assert.match(viteConfig, /documentation: resolve\(dashboardRoot, 'documentation\.html'\)/);
-  assert.match(viteConfig, /documentation\\\.html/);
-  assert.doesNotMatch(vercelConfig, /"source":\s*"\/documentation\.html"/);
-  assert.match(docsHtml, /<title>Documentation \| FocusMate<\/title>/);
-  assert.match(docsHtml, /canonical" href="https:\/\/getfocusmate\.vercel\.app\/documentation\.html"/);
+  assert.match(appSource, /className="welcome-documentation-link" href="\/#documentation"/);
+  assert.match(publicSource, /href="\/#documentation"/);
+  assert.match(vercelConfig, /"source":\s*"\/documentation\.html",\s*"destination":\s*"\/#documentation"/);
+  assert.doesNotMatch(viteConfig, /documentation\.html/);
+  assert.doesNotMatch(publicSource, /documentation\.html/);
   for (const section of [
     'getting-started',
     'focus-sessions',
@@ -102,6 +100,7 @@ test('documentation is available in the app navigation and public page shell', a
     assert.match(docsSource, new RegExp(`id="${section}"`));
   }
   assert.match(docsSource, /FocusMate does not currently show a Focus Score/);
+  assert.doesNotMatch(docsSource, /documentation-page-public|publicPage/);
   const changelogSource = await readFile(new URL('../src/changelog.js', import.meta.url), 'utf8');
   assert.match(docsSource, /changelog\.unreleased\.map\(renderChange\)/);
   assert.match(changelogSource, /commit: 'e824c4b'/);

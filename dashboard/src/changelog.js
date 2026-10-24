@@ -69,9 +69,9 @@ export const changelog = {
   unreleased: [
     {
       date: '2026-10-24',
-      title: 'Global XP leaderboard and daily quests',
-      summary: 'Applied the missing production leaderboard and verified daily-quest database support, corrected timer and camera-session quest accounting, and documented privacy scopes and reroll rules.',
-      category: 'fixed',
+      title: 'Leaderboard, daily quests, and one documentation route',
+      summary: 'Applied the missing production leaderboard and verified daily-quest database support, corrected timer and camera-session quest accounting, documented privacy and reroll rules, and consolidated Documentation links on the main app’s #documentation section.',
+      category: 'improved',
     },
     {
       date: '2026-10-22',
