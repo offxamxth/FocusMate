@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { supportedLanguages, translate } from '../src/i18n.js';
 
-test('shared Focus Rooms are disabled while individual focus sessions remain mounted', async () => {
+test('shared Focus Rooms and individual focus sessions remain mounted', async () => {
   const app = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
-  assert.match(app, /const sharedFocusRoomsAvailable = false;/);
-  assert.match(app, /sharedFocusRoomsAvailable \? \([\s\S]*?<RoomFoundation account=\{account\} language=\{language\} \/>/);
+  assert.match(app, /<RoomFoundation account=\{account\} language=\{language\} \/>/);
+  assert.doesNotMatch(app, /sharedFocusRoomsAvailable/);
   assert.match(app, /<FocusRoom profile=\{profile\} live=\{live\}/);
 });
 
-test('shared-room launch notice is translated for all supported languages', () => {
-  for (const language of supportedLanguages) {
-    assert.notEqual(translate(language, 'room.launchUnavailable'), 'room.launchUnavailable');
-  }
+test('daily quest rerolls remain connected to local and cloud handlers', async () => {
+  const app = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  assert.match(app, /onReroll=\{account \? rerollQuest : null\}/);
+  assert.match(app, /rerollFocusmateDailyQuest/);
+  assert.match(app, /rerollFocusmateRoomQuest/);
 });

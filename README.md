@@ -1,6 +1,6 @@
 # FocusMate
 
-FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Source inspection shows that webcam-analysis frames and landmarks are processed in the browser rather than sent as analysis payloads. Shared Focus Rooms are temporarily unavailable while production room behavior is verified; individual focus sessions remain available.
+FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Source inspection shows that webcam-analysis frames and landmarks are processed in the browser rather than sent as analysis payloads.
 
 ## FocusMate V1.0.0 — November 1, 2026
 
@@ -14,11 +14,13 @@ app. The current feature set includes:
   measures of attention, learning, or mental state.
 - Optional cloud profile synchronization and friend connections when the
   required Supabase services are configured.
+- Shared Focus Rooms and server-verified room quests for cloud accounts.
 
-FocusMate does not include a leaderboard or a Focus Score. Shared Focus Rooms
-are disabled pending production schema verification. Cloud features require
-network access and correctly configured backend support. Shared rooms are not
-part of the available V1.0.0 feature set.
+FocusMate does not include a leaderboard or a Focus Score. Cloud features
+require network access and correctly configured backend support. Production
+currently does not support joining a room after its session starts, and
+leaving a finished room as host may close it; these room flows need server-side
+verification before being relied on.
 
 ## Project structure
 
@@ -234,8 +236,10 @@ room/session idempotency key. Reconnecting restores the current room state.
 The repository's intended late-join migration allows invitation-code joins
 during focus, pause, or break and starts verified tracking at the
 server-recorded join time. The production join RPC inspected on October 29,
-2026 does not support this behavior, so shared rooms are disabled in the
-launch UI pending a reviewed migration and staging validation.
+2026 does not support this behavior. Production host-leave handling also
+differs from the repository's finished-room preservation migration. Resolve
+these server-side differences through a reviewed migration and staging
+validation.
 
 Apply the social and room migrations after the profile migrations above, in
 order:

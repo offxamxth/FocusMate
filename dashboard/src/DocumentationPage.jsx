@@ -84,7 +84,7 @@ export default function DocumentationPage({ language = 'en' }) {
           </article>
           <article>
             <h3>Daily quests</h3>
-            <p>Browser-local profiles receive four daily quests based on recorded timer time, completed camera sessions, session XP, and enabled camera signals; rewards are added to that local profile once. Cloud profiles can show a separate set of server-verified Focus Room quests using the UTC day, but shared rooms are temporarily unavailable, so new room-based progress cannot currently be earned.</p>
+            <p>Browser-local profiles receive four daily quests based on recorded timer time, completed camera sessions, session XP, and enabled camera signals; rewards are added to that local profile once. Cloud profiles receive a separate set of server-verified Focus Room quests using the UTC day. Completing at least three eligible verified quests awards one reroll token per UTC day; each reroll spends a token, with a limit of three rerolls per UTC day.</p>
           </article>
           <article>
             <h3>Focus Buddy</h3>
@@ -96,7 +96,7 @@ export default function DocumentationPage({ language = 'en' }) {
           </article>
           <article>
             <h3>Focus Rooms</h3>
-            <p>Shared Focus Rooms are temporarily unavailable while production room behavior is verified. Individual focus sessions remain available. When shared rooms return, their timing and verified progress will be server-controlled; room video is a separate optional connection that shares live media only after you choose to connect and enable a device.</p>
+            <p>Cloud accounts can create or join shared rooms. Room timing and verified room progress are server-controlled; room video is an optional, separate connection that shares live media only after you choose to connect and enable a device. Production currently does not support joining a room after its session starts, and leaving a finished room as host may close it.</p>
           </article>
           <article>
             <h3>Friends</h3>

@@ -67,6 +67,12 @@ const releaseHistory = [
 export const changelog = {
   unreleased: [
     {
+      date: '2026-11-01',
+      title: 'Restored shared Focus Rooms',
+      summary: 'Re-enabled the shared-room interface without changing the existing quest-reroll handlers. Production late joining and host departure from finished rooms remain limited by server behavior.',
+      category: 'changed',
+    },
+    {
       date: '2026-10-29',
       title: 'Release readiness and shared-room availability',
       summary: 'Made Documentation available without signing in, corrected release copy, and temporarily disabled shared Focus Rooms pending production schema verification while keeping individual focus sessions available.',
@@ -120,7 +126,7 @@ export const changelog = {
       version: 'v1.0.0',
       date: '2026-11-01',
       title: 'FocusMate V1.0.0',
-      summary: 'Initial release with individual focus sessions, planning, progress tools, and optional cloud profiles. Shared Focus Rooms are temporarily unavailable pending production schema verification.',
+      summary: 'Initial release with individual focus sessions, planning, progress tools, optional cloud profiles, and shared Focus Rooms.',
       category: 'added',
     },
   ],
