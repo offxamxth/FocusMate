@@ -75,7 +75,7 @@ export const changelog = {
     {
       date: '2026-10-29',
       title: 'Release readiness and shared-room availability',
-      summary: 'Made Documentation available without signing in, corrected release copy, and temporarily disabled shared Focus Rooms pending production schema verification while keeping individual focus sessions available.',
+      summary: 'Made Documentation available without signing in and corrected current feature and privacy copy ahead of the V1.0.0 release.',
       category: 'reliability',
     },
     {
@@ -126,7 +126,7 @@ export const changelog = {
       version: 'v1.0.0',
       date: '2026-11-01',
       title: 'FocusMate V1.0.0',
-      summary: 'Initial release with individual focus sessions, planning, progress tools, optional cloud profiles, and shared Focus Rooms.',
+      summary: 'Website release with individual focus sessions, planning, progress tools, optional cloud profiles, shared Focus Rooms, and a few bug fixes.',
       category: 'added',
     },
   ],

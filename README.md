@@ -20,7 +20,8 @@ FocusMate does not include a leaderboard or a Focus Score. Cloud features
 require network access and correctly configured backend support. Production
 currently does not support joining a room after its session starts, and
 leaving a finished room as host may close it; these room flows need server-side
-verification before being relied on.
+verification before being relied on. The November 1 website release also
+includes a few bug fixes and release-readiness improvements.
 
 ## Project structure
 

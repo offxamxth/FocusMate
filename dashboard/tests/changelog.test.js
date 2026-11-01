@@ -12,6 +12,7 @@ test('changelog separates current unreleased notes from confirmed history and re
   assert.equal(changelog.releases.length, 1);
   assert.equal(changelog.releases[0].version, 'v1.0.0');
   assert.equal(changelog.releases[0].date, '2026-11-01');
+  assert.match(changelog.releases[0].summary, /a few bug fixes/);
   assert.match(changelog.releases[0].summary, /shared Focus Rooms/);
   assert.equal(changelog.unreleased[0].date, '2026-11-01');
   for (const entry of changelog.releases) {
