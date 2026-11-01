@@ -2,7 +2,11 @@
 
 FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Source inspection shows that webcam-analysis frames and landmarks are processed in the browser rather than sent as analysis payloads.
 
-## FocusMate V1.0.0 — November 1, 2026
+## FocusMate V1.0.1 — November 1, 2026
+
+V1.0.1 restores access to verified room quest rerolls and claims on the Quests
+page and adds a forward-head depth cue to the approximate posture feedback.
+Camera signals remain estimates, not medical or precise posture measurements.
 
 FocusMate brings study sessions, planning, and progress review together in one
 app. The current feature set includes:

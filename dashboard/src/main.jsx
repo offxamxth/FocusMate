@@ -135,7 +135,7 @@ const CameraDetectionOverlay = memo(function CameraDetectionOverlay({ live, conf
   useEffect(() => setSignals((current) => ({
     ...live,
     ...(current.session_id === live.session_id
-      ? Object.fromEntries(['ear', 'head_turn_ratio', 'posture_angle', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']
+      ? Object.fromEntries(['ear', 'head_turn_ratio', 'posture_angle', 'forward_head_ratio', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']
         .filter((key) => current[key] !== undefined)
         .map((key) => [key, current[key]]))
       : {}),
@@ -147,6 +147,7 @@ const CameraDetectionOverlay = memo(function CameraDetectionOverlay({ live, conf
     live.ear,
     live.head_turn_ratio,
     live.posture_angle,
+    live.forward_head_ratio,
     live.shoulder_tilt_angle,
     live.distance_ratio,
     live.thresholds,
@@ -211,6 +212,7 @@ const CameraDetectionOverlay = memo(function CameraDetectionOverlay({ live, conf
               <div><dt>EAR</dt><dd>{configuration.monitor_eye_closure ? signals.ear ?? '—' : t('notMonitored')} {configuration.monitor_eye_closure && <small>{t('below')} {signals.thresholds?.ear_closed_below ?? 0.2}</small>}</dd></div>
               <div><dt>{t('headTurnProxy')}</dt><dd>{configuration.monitor_looking_away ? signals.head_turn_ratio ?? '—' : t('notMonitored')} {configuration.monitor_looking_away && <small>{t('threshold')} {signals.thresholds?.head_turn_ratio_above ?? 0.24}</small>}</dd></div>
               <div><dt>{t('postureAngle')}</dt><dd>{configuration.monitor_posture ? signals.posture_angle ?? '—' : t('notMonitored')} {configuration.monitor_posture && <small>{t('below')} {signals.thresholds?.slouch_angle_below_degrees ?? 52}°</small>}</dd></div>
+              <div><dt>{t('forwardHeadProxy')}</dt><dd>{configuration.monitor_posture ? signals.forward_head_ratio ?? '—' : t('notMonitored')} {configuration.monitor_posture && <small>{t('threshold')} {signals.thresholds?.forward_head_ratio_above ?? 0.2}</small>}</dd></div>
               <div><dt>{t('shoulderTilt')}</dt><dd>{configuration.monitor_posture ? signals.shoulder_tilt_angle ?? '—' : t('notMonitored')} {configuration.monitor_posture && <small>{signals.thresholds?.shoulder_tilt_activate_degrees ?? 17}° / {signals.thresholds?.shoulder_tilt_clear_degrees ?? 12}°</small>}</dd></div>
               <div><dt>{t('screenDistance')}</dt><dd>{configuration.monitor_distance ? signals.distance_ratio ?? '—' : t('notMonitored')} {configuration.monitor_distance && <small>{t('below')} {signals.thresholds?.distance_face_width_below ?? 0.12}</small>}</dd></div>
             </dl>
@@ -1022,7 +1024,19 @@ function FocusMateApp({
         {page === 'insights' && <Insights profile={profile} language={language} />}
         {page === 'session-results' && <SessionResults live={live} profile={profile} username={username} language={language} onProfile={setProfile} onGoal={async (outcome) => { const data = await api(`/api/session/goal?username=${encodeURIComponent(username)}`, { method: 'POST', body: JSON.stringify({ outcome }) }); setLive(data.live); }} />}
         {page === 'achievements' && <Achievements profile={profile} language={language} />}
-        {page === 'quests' && <Quests profile={profile} language={language} onReroll={account ? rerollQuest : null} cloudAccount={Boolean(account)} dailyProgressLoading={Boolean(account && !roomProgress && !roomProgressError)} dailyProgressError={roomProgressError} />}
+        {page === 'quests' && (
+          <Quests
+            profile={profile}
+            language={language}
+            onReroll={account ? rerollQuest : null}
+            cloudAccount={Boolean(account)}
+            dailyProgressLoading={Boolean(account && !roomProgress && !roomProgressError)}
+            dailyProgressError={roomProgressError}
+            roomProgress={roomProgress}
+            onRoomReroll={account ? rerollRoomQuest : null}
+            onRoomClaim={account ? claimRoomQuest : null}
+          />
+        )}
         {page === 'session-preferences' && <Preferences profile={profile} language={language} onSave={updateProfile} />}
         {page === 'profile' && <Profile profile={profile} language={language} onSave={updateProfile} onExport={() => downloadProfile(profile)} cloudAccount={account} />}
         {page === 'contact' && <ContactPage username={account?.username || username} language={language} accountType={account ? 'cloud' : 'local'} />}
@@ -2652,8 +2666,23 @@ function Quests({
   cloudAccount,
   dailyProgressLoading,
   dailyProgressError,
+  roomProgress,
+  onRoomReroll,
+  onRoomClaim,
 }) {
-  return <div className="page-content"><DailyQuests profile={profile} language={language} onReroll={onReroll} cloudAccount={cloudAccount} dailyProgressLoading={dailyProgressLoading} dailyProgressError={dailyProgressError} /><p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p></div>;
+  return <div className="page-content">
+    <DailyQuests profile={profile} language={language} onReroll={onReroll} cloudAccount={cloudAccount} dailyProgressLoading={dailyProgressLoading} dailyProgressError={dailyProgressError} />
+    {cloudAccount && roomProgress?.room_daily_quests && (
+      <RoomDailyQuests
+        daily={roomProgress.room_daily_quests}
+        availableXp={roomProgress.xp_balance}
+        language={language}
+        onReroll={onRoomReroll}
+        onClaim={onRoomClaim}
+      />
+    )}
+    <p className="muted-note">Progress is derived from saved timer activity and completed camera sessions. Camera alert challenges require recorded camera data.</p>
+  </div>;
 }
 
 function Preferences({ profile, onSave }) {

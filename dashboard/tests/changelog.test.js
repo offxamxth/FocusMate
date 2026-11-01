@@ -9,11 +9,16 @@ import {
 import { supportedLanguages, translate } from '../src/i18n.js';
 
 test('changelog separates current unreleased notes from confirmed history and release versions', () => {
-  assert.equal(changelog.releases.length, 1);
-  assert.equal(changelog.releases[0].version, 'v1.0.0');
+  assert.equal(changelog.releases.length, 2);
+  assert.equal(changelog.releases[0].version, 'v1.0.1');
   assert.equal(changelog.releases[0].date, '2026-11-01');
-  assert.match(changelog.releases[0].summary, /a few bug fixes/);
-  assert.match(changelog.releases[0].summary, /shared Focus Rooms/);
+  assert.match(changelog.releases[0].summary, /room quest rerolls and claims/);
+  assert.match(changelog.releases[0].summary, /forward-head depth cue/);
+  const initialRelease = changelog.releases.find(({ version }) => version === 'v1.0.0');
+  assert.ok(initialRelease);
+  assert.equal(initialRelease.date, '2026-11-01');
+  assert.match(initialRelease.summary, /a few bug fixes/);
+  assert.match(initialRelease.summary, /shared Focus Rooms/);
   assert.equal(changelog.unreleased[0].date, '2026-11-01');
   for (const entry of changelog.releases) {
     assert.match(entry.version, /^v\d+\.\d+\.\d+$/);

@@ -360,3 +360,15 @@ test('verified room quests are not rendered in Focus Room while server quest API
   assert.match(appSource, /rerollFocusmateRoomQuest/);
   assert.match(appSource, /available_xp: trustedProgress\?\.xp_balance === null[\s\S]*?: null/);
 });
+
+test('verified room quest reroll and claim controls are mounted on the Quests page', async () => {
+  const appSource = await readFile(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const questsComponent = appSource.match(/function Quests\([\s\S]*?(?=\nfunction Preferences)/)?.[0];
+  assert.ok(questsComponent);
+  assert.match(questsComponent, /cloudAccount && roomProgress\?\.room_daily_quests/);
+  assert.match(questsComponent, /<RoomDailyQuests/);
+  assert.match(questsComponent, /onReroll=\{onRoomReroll\}/);
+  assert.match(questsComponent, /onClaim=\{onRoomClaim\}/);
+  assert.match(appSource, /onRoomReroll=\{account \? rerollRoomQuest : null\}/);
+  assert.match(appSource, /onRoomClaim=\{account \? claimRoomQuest : null\}/);
+});

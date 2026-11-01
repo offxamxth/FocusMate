@@ -670,7 +670,7 @@ function applyTelemetry(username, metrics) {
     status: metrics.status || 'Starting',
     last_updated: new Date(now).toISOString(),
   });
-  for (const key of ['ear', 'head_turn_ratio', 'posture_angle', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']) {
+  for (const key of ['ear', 'head_turn_ratio', 'posture_angle', 'forward_head_ratio', 'shoulder_tilt_angle', 'distance_ratio', 'thresholds']) {
     delete live[key];
   }
   if (now - runtime.lastHistoryAt >= 5000) {

@@ -15,6 +15,7 @@ const SHOULDER_LOSS_FRAMES = 5;
 const SHOULDER_TILT_ACTIVATE_DEGREES = 17;
 const SHOULDER_TILT_CLEAR_DEGREES = 12;
 const SLOUCH_ANGLE_DEGREES = 52;
+const FORWARD_HEAD_RATIO_THRESHOLD = 0.2;
 const postureSignals = new WeakMap();
 
 export async function createVisionLandmarkers(configuration) {
@@ -176,6 +177,21 @@ export function detectMetrics(detectors, video, timestamp, configuration = {}) {
   const shoulderEarPairs = settings.monitor_posture && shouldersVisible
     ? [[7, 11], [8, 12]].filter(([ear]) => visible(pose?.[ear]))
     : [];
+  const shoulderSpan = shouldersVisible
+    ? Math.abs(rightShoulder.x - leftShoulder.x)
+    : 0;
+  const forwardHeadOffsets = shoulderEarPairs.map(([ear, shoulder]) => (
+    Number.isFinite(pose[ear].z) && Number.isFinite(pose[shoulder].z)
+      ? pose[shoulder].z - pose[ear].z
+      : null
+  ));
+  const forwardHeadRatio = forwardHeadOffsets.length === 2
+    && forwardHeadOffsets.every((offset) => offset !== null)
+    && shoulderSpan > 0
+    ? forwardHeadOffsets.reduce((total, offset) => total + offset, 0) / 2 / shoulderSpan
+    : null;
+  const forwardHeadSlouching = forwardHeadRatio !== null
+    && forwardHeadRatio > FORWARD_HEAD_RATIO_THRESHOLD;
   let postureState = postureSignals.get(detectors);
   if (!postureState) {
     postureState = {};
@@ -207,7 +223,8 @@ export function detectMetrics(detectors, video, timestamp, configuration = {}) {
     );
     postureAngle =
       angles.reduce((total, angle) => total + angle, 0) / angles.length;
-    const likelySlouching = angles.every((angle) => angle < SLOUCH_ANGLE_DEGREES);
+    const likelySlouching = angles.every((angle) => angle < SLOUCH_ANGLE_DEGREES)
+      || forwardHeadSlouching;
     posture = stableSignal(postureState, "slouching", likelySlouching)
       ? "Slouching"
       : "Good";
@@ -262,6 +279,8 @@ export function detectMetrics(detectors, video, timestamp, configuration = {}) {
     posture,
     posture_angle:
       postureAngle === null ? null : Math.round(postureAngle * 100) / 100,
+    forward_head_ratio:
+      forwardHeadRatio === null ? null : Math.round(forwardHeadRatio * 1000) / 1000,
     shoulder_tilt_angle:
       shoulderTilt === null ? null : Math.round(shoulderTilt * 100) / 100,
     distance_ratio:
@@ -272,6 +291,7 @@ export function detectMetrics(detectors, video, timestamp, configuration = {}) {
       ear_closed_below: settings.monitor_eye_closure ? 0.2 : null,
       head_turn_ratio_above: settings.monitor_looking_away ? HEAD_TURN_THRESHOLD : null,
       slouch_angle_below_degrees: settings.monitor_posture ? SLOUCH_ANGLE_DEGREES : null,
+      forward_head_ratio_above: settings.monitor_posture ? FORWARD_HEAD_RATIO_THRESHOLD : null,
       distance_face_width_below: settings.monitor_distance ? 0.12 : null,
       shoulder_tilt_activate_degrees: settings.monitor_posture ? SHOULDER_TILT_ACTIVATE_DEGREES : null,
       shoulder_tilt_clear_degrees: settings.monitor_posture ? SHOULDER_TILT_CLEAR_DEGREES : null,

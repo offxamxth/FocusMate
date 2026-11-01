@@ -123,6 +123,13 @@ export const changelog = {
   ],
   releases: [
     {
+      version: 'v1.0.1',
+      date: '2026-11-01',
+      title: 'FocusMate V1.0.1',
+      summary: 'Restored access to verified room quest rerolls and claims on the Quests page, and improved approximate posture feedback with a forward-head depth cue.',
+      category: 'fixed',
+    },
+    {
       version: 'v1.0.0',
       date: '2026-11-01',
       title: 'FocusMate V1.0.0',

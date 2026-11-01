@@ -781,6 +781,7 @@ test('detection settings, overlay, and result labels have localized text in ever
     'focus.sessionSaveFailed',
     'focus.retrySessionSave',
     'focus.detectionOverlay',
+    'focus.forwardHeadProxy',
     'focus.notMonitored',
     'results.signalCounts',
     'results.faceMissing',
@@ -1194,14 +1195,14 @@ test('disabled detection signals cannot grant no-alert achievements; legacy reco
 });
 
 function visionFixture({ shoulderTilt = 8, shoulderSpan = 0.2, earVisibility = 0.1, shoulderVisibility = 0.9, shoulderPresence = 0.9 } = {}) {
-  const points = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.5, visibility: 0.9, presence: 0.9 }));
+  const points = Array.from({ length: 13 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9, presence: 0.9 }));
   const rise = Math.tan((shoulderTilt * Math.PI) / 180) * shoulderSpan * 640 / 480;
   const leftX = 0.5 - shoulderSpan / 2;
   const rightX = 0.5 + shoulderSpan / 2;
-  points[11] = { x: leftX, y: 0.5, visibility: shoulderVisibility, presence: shoulderPresence };
-  points[12] = { x: rightX, y: 0.5 + rise, visibility: shoulderVisibility, presence: shoulderPresence };
-  points[7] = { x: leftX, y: 0.3, visibility: earVisibility, presence: earVisibility };
-  points[8] = { x: rightX, y: 0.3 + rise, visibility: earVisibility, presence: earVisibility };
+  points[11] = { x: leftX, y: 0.5, z: 0, visibility: shoulderVisibility, presence: shoulderPresence };
+  points[12] = { x: rightX, y: 0.5 + rise, z: 0, visibility: shoulderVisibility, presence: shoulderPresence };
+  points[7] = { x: leftX, y: 0.3, z: 0, visibility: earVisibility, presence: earVisibility };
+  points[8] = { x: rightX, y: 0.3 + rise, z: 0, visibility: earVisibility, presence: earVisibility };
   let currentFace = Array.from({ length: 455 }, () => ({ x: 0.5, y: 0.5 }));
   currentFace[234] = { x: 0.4, y: 0.5 };
   currentFace[454] = { x: 0.6, y: 0.5 };
@@ -1320,6 +1321,37 @@ test('a sustained, clearly tilted shoulder line is still detected', () => {
   const detectors = visionFixture({ shoulderTilt: 24, earVisibility: 0.9 });
   assert.notEqual(detectMetrics(detectors, video, 1).status, 'Reframe to align shoulders');
   assert.equal(detectMetrics(detectors, video, 2).status, 'Reframe to align shoulders');
+});
+
+test('forward head lean is detected from pose depth even when front-view ear height stays upright', () => {
+  const detectors = visionFixture({ shoulderTilt: 8, earVisibility: 0.9 });
+  const forwardLean = detectors.points.map((point) => ({ ...point }));
+  forwardLean[7].z = -0.06;
+  forwardLean[8].z = -0.06;
+  detectors.setPose(forwardLean);
+
+  const postureOnly = { monitor_eye_closure: false };
+  const first = detectMetrics(detectors, video, 1, postureOnly);
+  const second = detectMetrics(detectors, video, 2, postureOnly);
+  assert.equal(first.posture, 'Good');
+  assert.equal(second.posture, 'Slouching');
+  assert.ok(second.forward_head_ratio > second.thresholds.forward_head_ratio_above);
+  assert.equal(second.status, 'Slouching');
+});
+
+test('forward-head posture clears after a sustained return to neutral depth', () => {
+  const detectors = visionFixture({ shoulderTilt: 8, earVisibility: 0.9 });
+  const forwardLean = detectors.points.map((point) => ({ ...point }));
+  forwardLean[7].z = -0.06;
+  forwardLean[8].z = -0.06;
+  detectors.setPose(forwardLean);
+  const postureOnly = { monitor_eye_closure: false };
+  detectMetrics(detectors, video, 1, postureOnly);
+  assert.equal(detectMetrics(detectors, video, 2, postureOnly).posture, 'Slouching');
+
+  detectors.setPose(detectors.points);
+  assert.equal(detectMetrics(detectors, video, 3, postureOnly).posture, 'Slouching');
+  assert.equal(detectMetrics(detectors, video, 4, postureOnly).posture, 'Good');
 });
 
 test('temporary shoulder landmark loss is smoothed and sustained loss is reported after five frames', () => {
