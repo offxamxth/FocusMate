@@ -14,6 +14,8 @@ test('changelog separates current unreleased notes from confirmed history and re
   assert.equal(changelog.releases[0].date, '2026-11-01');
   assert.match(changelog.releases[0].summary, /room quest rerolls and claims/);
   assert.match(changelog.releases[0].summary, /forward-head depth cue/);
+  assert.match(changelog.releases[0].summary, /return after five minutes when snoozed/);
+  assert.match(changelog.releases[0].summary, /at the selected interval when marked done/);
   const initialRelease = changelog.releases.find(({ version }) => version === 'v1.0.0');
   assert.ok(initialRelease);
   assert.equal(initialRelease.date, '2026-11-01');

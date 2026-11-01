@@ -733,7 +733,7 @@ html[dir='rtl'] .pwa-dialog h2 { margin-right: 0; margin-left: 35px; }
 .mood-focus-tip p { margin: 0; font-size: 10px; line-height: 1.6; }
 .buddy-setting-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 54px; border-top: 1px solid rgba(193,217,220,.09); color: var(--soft); font-size: 10px; }
 .buddy-setting-select select { width: min(210px, 56%); min-height: 34px; font-size: 10px; }
-.buddy-number-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 10px 0; border-top: 1px solid rgba(193,217,220,.09); }
+.buddy-number-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid rgba(193,217,220,.09); }
 .buddy-number-settings label { display: grid; align-content: start; gap: 6px; color: var(--soft); font-size: 9px; }
 .buddy-number-settings select { min-height: 34px; font-size: 10px; }
 .focus-buddy-preferences select:disabled { opacity: .55; }

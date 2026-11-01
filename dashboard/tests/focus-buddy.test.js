@@ -12,8 +12,8 @@ import {
   normalizeFocusBuddyPreferences,
   readWaterReminderSchedule,
   scheduleNextWaterReminder,
+  WATER_REMINDER_SNOOZE_MINUTES,
   waterReminderIntervals,
-  waterReminderSnoozes,
   waterReminderDelayMs,
   waterReminderDelayForAction,
   waterReminderStorageKey,
@@ -46,7 +46,7 @@ test('Focus Buddy and every mood tip are translated in every supported language'
     'focusBuddy.enabledHelp', 'focusBuddy.character', 'focusBuddy.webHero',
     'focusBuddy.soundsEnabled', 'focusBuddy.soundsHelp',
     'focusBuddy.capeHero', 'focusBuddy.cat', 'focusBuddy.frog',
-    'focusBuddy.interval', 'focusBuddy.snooze', 'focusBuddy.greetByName',
+    'focusBuddy.interval', 'focusBuddy.snoozeHelp', 'focusBuddy.greetByName',
     'focusBuddy.duringSessions', 'focusBuddy.duringSessionsHelp',
     'focusBuddy.greeting', 'focusBuddy.greetingFallback', 'focusBuddy.done',
     'focusBuddy.later', 'focusBuddy.snoozed', 'focusBuddy.thanks',
@@ -67,9 +67,8 @@ test('Focus Buddy and every mood tip are translated in every supported language'
 
 test('Focus Buddy preferences validate character and reminder intervals', () => {
   assert.equal(normalizeFocusBuddyPreferences().focus_buddy_interval_minutes, 60);
-  assert.equal(normalizeFocusBuddyPreferences().focus_buddy_snooze_minutes, 10);
+  assert.equal(normalizeFocusBuddyPreferences().focus_buddy_snooze_minutes, WATER_REMINDER_SNOOZE_MINUTES);
   assert.deepEqual(waterReminderIntervals, [15, 30, 45, 60, 90, 120]);
-  assert.deepEqual(waterReminderSnoozes, [5, 10, 15, 20, 30]);
   const preferences = normalizeFocusBuddyPreferences({
     focus_buddy_character: 'frog',
     focus_buddy_interval_minutes: 30,
@@ -93,6 +92,7 @@ test('Focus Buddy preferences validate character and reminder intervals', () => 
     normalizeFocusBuddyPreferences({ focus_buddy_character: 'copied-hero', focus_buddy_interval_minutes: 1 }),
     normalizeFocusBuddyPreferences(),
   );
+  assert.equal(normalizeFocusBuddyPreferences({ focus_buddy_snooze_minutes: 30 }).focus_buddy_snooze_minutes, 5);
 });
 
 test('buddy appearance sound plays once per visible appearance and is throttled during rapid switches', () => {
@@ -250,13 +250,14 @@ test('Done and snooze select their configured independent reminder deadlines', (
     focus_buddy_snooze_minutes: 15,
   });
   assert.equal(waterReminderDelayForAction(preferences, 'done'), 45);
-  assert.equal(waterReminderDelayForAction(preferences, 'later'), 15);
+  assert.equal(waterReminderDelayForAction(preferences, 'later'), 5);
+  assert.equal(normalizeFocusBuddyPreferences({ focus_buddy_snooze_minutes: 30 }).focus_buddy_snooze_minutes, 5);
   assert.equal(waterReminderDelayForAction(preferences, 'unknown'), null);
 
   const storage = createStorage();
   const key = waterReminderStorageKey('alex');
   const now = 1_800_000_000_000;
-  for (const [action, minutes] of [['done', 45], ['later', 15]]) {
+  for (const [action, minutes] of [['done', 45], ['later', 5]]) {
     const nextAt = scheduleNextWaterReminder(
       storage,
       key,
@@ -266,6 +267,15 @@ test('Done and snooze select their configured independent reminder deadlines', (
     assert.equal(nextAt, now + minutes * 60_000);
     assert.equal(readWaterReminderSchedule(storage, key, 60, now), nextAt);
   }
+});
+
+test('Focus Buddy schedules responses and rechecks due reminders when the app becomes active', () => {
+  const source = readFileSync(new URL('../src/main.jsx', import.meta.url), 'utf8');
+  const buddy = source.slice(source.indexOf('function FocusBuddy('), source.indexOf('function FocusRoom('));
+  assert.match(buddy, /const delay = waterReminderDelayForAction\(preferences, action\);[\s\S]*?scheduleNextWaterReminder\(localStorage, storageKey, delay\);[\s\S]*?setScheduleVersion/);
+  assert.match(buddy, /document\.addEventListener\('visibilitychange', checkWhenActive\)/);
+  assert.match(buddy, /window\.addEventListener\('focus', checkWhenActive\)/);
+  assert.match(buddy, /scheduleVersion/);
 });
 
 test('reminder schedules are isolated by account', () => {

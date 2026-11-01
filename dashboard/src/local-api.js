@@ -62,7 +62,7 @@ function freshProfile(username, name = 'Focus friend') {
       focus_buddy_character: 'web-hero',
       focus_buddy_sounds_enabled: true,
       focus_buddy_interval_minutes: 60,
-      focus_buddy_snooze_minutes: 10,
+      focus_buddy_snooze_minutes: 5,
       focus_buddy_greet_by_name: true,
       focus_buddy_during_sessions: false,
       session_length_minutes: 25,

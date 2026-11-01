@@ -19,7 +19,7 @@ export const focusBuddyImageFrames = {
   'sad-walking-back': ['sad.png', 'walk-away.png'],
 };
 export const waterReminderIntervals = [15, 30, 45, 60, 90, 120];
-export const waterReminderSnoozes = [5, 10, 15, 20, 30];
+export const WATER_REMINDER_SNOOZE_MINUTES = 5;
 export const focusBuddyAnimationStates = [
   'hidden',
   'walking-in',
@@ -49,7 +49,7 @@ export function transitionFocusBuddyAnimation(state, event) {
 
 export function waterReminderDelayForAction(preferences, action) {
   if (action === 'done') return preferences.focus_buddy_interval_minutes;
-  if (action === 'later') return preferences.focus_buddy_snooze_minutes;
+  if (action === 'later') return WATER_REMINDER_SNOOZE_MINUTES;
   return null;
 }
 
@@ -58,7 +58,7 @@ const defaults = {
   focus_buddy_character: 'web-hero',
   focus_buddy_sounds_enabled: true,
   focus_buddy_interval_minutes: 60,
-  focus_buddy_snooze_minutes: 10,
+  focus_buddy_snooze_minutes: WATER_REMINDER_SNOOZE_MINUTES,
   focus_buddy_greet_by_name: true,
   focus_buddy_during_sessions: false,
 };
@@ -73,9 +73,7 @@ export function normalizeFocusBuddyPreferences(preferences = {}) {
     focus_buddy_interval_minutes: waterReminderIntervals.includes(Number(preferences.focus_buddy_interval_minutes))
       ? Number(preferences.focus_buddy_interval_minutes)
       : defaults.focus_buddy_interval_minutes,
-    focus_buddy_snooze_minutes: waterReminderSnoozes.includes(Number(preferences.focus_buddy_snooze_minutes))
-      ? Number(preferences.focus_buddy_snooze_minutes)
-      : defaults.focus_buddy_snooze_minutes,
+    focus_buddy_snooze_minutes: WATER_REMINDER_SNOOZE_MINUTES,
     focus_buddy_greet_by_name: preferences.focus_buddy_greet_by_name !== false,
     focus_buddy_during_sessions: preferences.focus_buddy_during_sessions === true,
   };

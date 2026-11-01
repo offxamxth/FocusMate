@@ -126,7 +126,7 @@ export const changelog = {
       version: 'v1.0.1',
       date: '2026-11-01',
       title: 'FocusMate V1.0.1',
-      summary: 'Restored access to verified room quest rerolls and claims on the Quests page, and improved approximate posture feedback with a forward-head depth cue.',
+      summary: 'Restored access to verified room quest rerolls and claims on the Quests page, improved approximate posture feedback with a forward-head depth cue, and fixed Study Buddy reminders to return after five minutes when snoozed or at the selected interval when marked done.',
       category: 'fixed',
     },
     {

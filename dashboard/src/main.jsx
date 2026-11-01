@@ -64,7 +64,6 @@ import {
   readWaterReminderSchedule,
   scheduleNextWaterReminder,
   waterReminderIntervals,
-  waterReminderSnoozes,
   waterReminderDelayMs,
   waterReminderStorageKey,
   transitionFocusBuddyAnimation,
@@ -2696,7 +2695,7 @@ function Preferences({ profile, onSave }) {
     focus_buddy_character: 'web-hero',
     focus_buddy_sounds_enabled: true,
     focus_buddy_interval_minutes: 60,
-    focus_buddy_snooze_minutes: 10,
+    focus_buddy_snooze_minutes: 5,
     focus_buddy_greet_by_name: true,
     focus_buddy_during_sessions: false,
     session_length_minutes: 25,
@@ -2821,13 +2820,8 @@ function Preferences({ profile, onSave }) {
                 {waterReminderIntervals.map((minutes) => <option key={minutes} value={minutes}>{minutes} {translate(language, 'focus.minutes')}</option>)}
               </select>
             </label>
-            <label>
-              {translate(language, 'focusBuddy.snooze')}
-              <select disabled={!preferences.focus_buddy_enabled} value={preferences.focus_buddy_snooze_minutes} onChange={(event) => set('focus_buddy_snooze_minutes', Number(event.target.value))}>
-                {waterReminderSnoozes.map((minutes) => <option key={minutes} value={minutes}>{minutes} {translate(language, 'focus.minutes')}</option>)}
-              </select>
-            </label>
           </div>
+          <small className="muted-note">{translate(language, 'focusBuddy.snoozeHelp')}</small>
           <label className="setting-row">
             <span><strong>{translate(language, 'focusBuddy.greetByName')}</strong></span>
             <input type="checkbox" disabled={!preferences.focus_buddy_enabled} checked={Boolean(preferences.focus_buddy_greet_by_name)} onChange={(event) => set('focus_buddy_greet_by_name', event.target.checked)} />
