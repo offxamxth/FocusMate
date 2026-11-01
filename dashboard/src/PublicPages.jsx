@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import ContactPage from './ContactPage.jsx';
+import DocumentationPage from './DocumentationPage.jsx';
 import {
   browserLanguage,
   supportedLanguages,
@@ -27,6 +28,11 @@ export const PUBLIC_PAGE_METADATA = {
     description: 'Read how FocusMate handles account, study, optional webcam-derived, and support information.',
     url: `${siteUrl}/privacy`,
   },
+  documentation: {
+    title: 'FocusMate Documentation | Study sessions, settings, and support',
+    description: 'Instructions for FocusMate study sessions, tasks, quests, progress, preferences, privacy, and troubleshooting.',
+    url: `${siteUrl}/#documentation`,
+  },
   'not-found': {
     title: 'Page Not Found | FocusMate',
     description: 'The requested FocusMate page could not be found.',
@@ -39,7 +45,7 @@ const privacySections = [
     id: 'scope',
     title: 'About this notice',
     paragraphs: [
-      'This notice describes the data flows visible in the FocusMate application source code and database policies reviewed for this page. It is not a promise about provider practices that FocusMate cannot verify.',
+      'This notice describes data flows visible in the FocusMate application source and selected database policies and schema metadata reviewed for this page. It is not a promise about provider practices that FocusMate cannot verify.',
       'FocusMate is a study and student-wellbeing app. It is not an AI-powered app, a medical service, or a diagnostic tool. The optional webcam feature provides approximate study-session signals, not a measure or proof of attention.',
     ],
   },
@@ -89,7 +95,7 @@ const privacySections = [
     title: 'When information may be visible to others',
     paragraphs: [
       'The profiles table and its app-data snapshot are owner-scoped. Separate authenticated search and friend functions expose a matching username, display name, and relationship/request status; accepted friends can see each other’s username and display name and the app publishes online presence only to accepted friends. These functions do not grant friends access to another person’s tasks, reflections, or full profile snapshot.',
-      'Leaderboard visibility defaults to private. If changed to friends, accepted friends can see that account in the friends board; if changed to public, eligible signed-in users can see it in the global board. Leaderboard results expose rank, username, display name, and verified room-focus seconds—not personal session history or task/reflection data.',
+      'A leaderboard is not available in the current app. FocusMate does not present XP or session history in a public or friends ranking view.',
       'Active room participants can see the room name, code, state, timing details, and participant usernames, display names, roles, and join times. Leaving an active room records a leave time; finishing a room marks it finished and does not itself delete the room or its membership/history rows. A later leave action on an already closed room can remove that member row. Closed-room data otherwise remains available to previous participants under the reviewed policies. These records are not a public profile feed.',
       'The app uses Supabase for authentication and cloud data, Vercel for hosting, and Web3Forms for submitted support forms. Those provider integrations are visible in the app configuration/code; provider locations, subprocessors, independent logging, backups, and retention practices were not established by this review and should be confirmed with the service operator and providers.',
     ],
@@ -107,7 +113,7 @@ const privacySections = [
     id: 'security',
     title: 'Security and your choices',
     paragraphs: [
-      'The reviewed database policies restrict direct profile access to the account owner and limit social data through authenticated functions and room/friend membership rules. These controls do not guarantee that a system is completely secure. Keep your PIN private, use a device you trust, review your leaderboard visibility, and only enable webcam monitoring when you want it.',
+      'The reviewed database policies restrict direct profile access to the account owner and limit social data through authenticated functions and room/friend membership rules. These controls do not guarantee that a system is completely secure. Keep your PIN private, use a device you trust, and only enable webcam monitoring when you want it.',
       'FocusMate is designed for students, but the reviewed app and public site do not specify a minimum age or a parental-consent process. The appropriate age and consent requirements need to be confirmed with the service operator and qualified legal counsel before publication.',
     ],
   },
@@ -206,7 +212,7 @@ function AboutContent() {
         <div className="public-feature-grid">
           <article><h3>Plan the next step</h3><p>Keep tasks, goals, subjects, and study notes together so it is easier to decide what to work on next.</p></article>
           <article><h3>Build a study rhythm</h3><p>Use focus timers, session history, progress summaries, and achievements to reflect on your own routine.</p></article>
-          <article><h3>Study together</h3><p>Cloud accounts can connect with friends, join Focus Rooms, and use a verified room leaderboard with visibility controls.</p></article>
+          <article><h3>Study together</h3><p>Cloud accounts can connect with friends and join Focus Rooms.</p></article>
         </div>
       </section>
 
@@ -232,7 +238,7 @@ function PrivacyContent() {
         <span className="public-eyebrow">FOCUSMATE</span>
         <h1>Privacy Policy</h1>
         <p>A plain-language description of how the current app handles account, study, optional webcam-derived, and support information.</p>
-        <p className="privacy-updated">Last updated: October 10, 2026</p>
+        <p className="privacy-updated">Last updated: October 29, 2026</p>
       </section>
       <nav className="privacy-toc" aria-label="Privacy policy contents">
         <h2>On this page</h2>
@@ -297,6 +303,7 @@ export default function PublicPages({ page, metadata }) {
       <PublicHeader language={language} onLanguageChange={changeLanguage} />
       <main id="main-content" className={page === 'contact' ? 'public-main public-main-contact' : 'public-main'}>
         {page === 'about' && <AboutContent />}
+        {page === 'documentation' && <DocumentationPage language={language} />}
         {page === 'privacy' && <PrivacyContent />}
         {page === 'contact' && <div className="public-content"><ContactPage language={language} /></div>}
         {page === 'not-found' && <NotFoundContent />}

@@ -42,12 +42,29 @@ test('public pages resolve from clean paths without changing authenticated hash 
   }
   assert.equal(publicPageFromLocation(location('/documentation.html')), null);
   assert.equal(isUnknownPath(location('/documentation.html')), true);
+  for (const anchor of [
+    'documentation',
+    'getting-started',
+    'focus-sessions',
+    'features',
+    'focus-score',
+    'privacy-and-data',
+    'troubleshooting',
+    'updates',
+    'unreleased',
+    'release-policy',
+    'release-history',
+  ]) {
+    assert.equal(publicPageFromLocation(location('/', `#${anchor}`)), 'documentation');
+  }
+  assert.equal(publicPageFromLocation(location('/', '#focus')), null);
   assert.equal(pageFromLocation(location('/', '#documentation')), 'documentation');
   assert.equal(navigationPath('about'), '/about');
   assert.equal(navigationPath('contact'), '/#contact');
   assert.equal(navigationPath('privacy'), '/privacy');
   assert.equal(publicPageFromLocation(location('/privacy/')), 'privacy');
   assert.equal(publicPageFromLocation(location('/#privacy')), null);
+  assert.equal(publicPageFromLocation(location('/', '#privacy')), null);
   assert.equal(pageFromLocation(location('/', '#privacy')), 'overview');
   assert.equal(isUnknownPath(location('/unknown')), true);
   assert.equal(isUnknownPath(location('/unknown/')), true);
@@ -93,7 +110,7 @@ test('documentation is available in the app navigation and public page shell', a
     'focus-sessions',
     'features',
     'focus-score',
-    'privacy',
+    'privacy-and-data',
     'troubleshooting',
     'updates',
   ]) {
@@ -104,5 +121,5 @@ test('documentation is available in the app navigation and public page shell', a
   const changelogSource = await readFile(new URL('../src/changelog.js', import.meta.url), 'utf8');
   assert.match(docsSource, /changelog\.unreleased\.map\(renderChange\)/);
   assert.match(changelogSource, /commit: 'e824c4b'/);
-  assert.match(changelogSource, /proposedInitialVersion: 'v1\.0\.0'/);
+  assert.match(changelogSource, /version: 'v1\.0\.0',\s+date: '2026-11-01'/);
 });

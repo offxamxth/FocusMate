@@ -9,9 +9,18 @@ import {
 import { supportedLanguages, translate } from '../src/i18n.js';
 
 test('changelog separates current unreleased notes from confirmed history and release versions', () => {
-  assert.equal(changelog.proposedInitialVersion, 'v1.0.0');
-  assert.deepEqual(changelog.releases, []);
-  assert.equal(changelog.unreleased[0].date, '2026-10-24');
+  assert.equal(changelog.releases.length, 1);
+  assert.equal(changelog.releases[0].version, 'v1.0.0');
+  assert.equal(changelog.releases[0].date, '2026-11-01');
+  assert.match(changelog.releases[0].summary, /Shared Focus Rooms are temporarily unavailable/);
+  assert.equal(changelog.unreleased[0].date, '2026-10-29');
+  for (const entry of changelog.releases) {
+    assert.match(entry.version, /^v\d+\.\d+\.\d+$/);
+    assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(entry.title);
+    assert.ok(entry.summary);
+    assert.ok(entry.category);
+  }
   for (const entry of changelog.unreleased) {
     if (entry.commit) assert.match(entry.commit, /^[a-f0-9]{7}$/);
     assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
@@ -79,6 +88,7 @@ test('changelog labels use the existing translation system in every supported la
     'changelog.confirmedHistory',
     'changelog.historyNote',
     'changelog.noPublishedReleases',
+    'changelog.currentVersion',
     'changelog.proposedVersion',
     'changelog.proposedVersionNote',
     'changelog.major',

@@ -83,17 +83,26 @@ test('privacy content documents current webcam, support, storage, and deletion b
     'Web3Forms',
     'Logging out does not delete those local profile copies',
     'tasks, study plans, session history, reflections, and wellbeing entries',
-    'Leaderboard results expose rank, username, display name, and verified room-focus seconds',
+    'A leaderboard is not available in the current app.',
     'Leaving an active room records a leave time; finishing a room marks it finished',
     'Removing a friend changes the friendship row to a removed status rather than deleting it',
     'no caching rule for API responses or profile data',
     'There is no self-service account-deletion feature',
     'cascading foreign keys for the Auth user’s profile, PIN credential',
-    'October 10, 2026',
+    'October 29, 2026',
     'minimum age or a parental-consent process',
   ]) {
     assert.ok(pages.includes(statement), `privacy content should include: ${statement}`);
   }
+});
+
+test('public Documentation renders for signed-out visitors and omits unavailable leaderboard claims', async () => {
+  const pages = await readDashboardFile('src/PublicPages.jsx');
+  const documentation = await readDashboardFile('src/DocumentationPage.jsx');
+  assert.match(pages, /page === 'documentation' && <DocumentationPage language=\{language\} \/>/);
+  assert.match(pages, /title: 'FocusMate Documentation/);
+  assert.match(documentation, /A leaderboard is not available in the current app/);
+  assert.doesNotMatch(documentation, /Global board|Friends board|Leaderboard needs/);
 });
 
 test('public navigation copy is available through each supported language', async () => {

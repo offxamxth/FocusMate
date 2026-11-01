@@ -6,7 +6,7 @@ const sections = [
   ['focus-sessions', 'Focus sessions'],
   ['features', 'Feature guides'],
   ['focus-score', 'Focus Score'],
-  ['privacy', 'Privacy and data'],
+  ['privacy-and-data', 'Privacy and data'],
   ['troubleshooting', 'Troubleshooting and FAQs'],
   ['updates', 'Update history'],
 ];
@@ -84,7 +84,7 @@ export default function DocumentationPage({ language = 'en' }) {
           </article>
           <article>
             <h3>Daily quests</h3>
-            <p>Browser-local profiles receive four daily quests based on recorded timer time, completed camera sessions, session XP, and enabled camera signals; rewards are added to that local profile once. Cloud profiles receive a separate set of server-verified Focus Room quests using the UTC day. Completing at least three eligible verified quests awards one reroll token per UTC day; each reroll spends a token, with a limit of three rerolls per UTC day.</p>
+            <p>Browser-local profiles receive four daily quests based on recorded timer time, completed camera sessions, session XP, and enabled camera signals; rewards are added to that local profile once. Cloud profiles can show a separate set of server-verified Focus Room quests using the UTC day, but shared rooms are temporarily unavailable, so new room-based progress cannot currently be earned.</p>
           </article>
           <article>
             <h3>Focus Buddy</h3>
@@ -96,11 +96,11 @@ export default function DocumentationPage({ language = 'en' }) {
           </article>
           <article>
             <h3>Focus Rooms</h3>
-            <p>Cloud accounts can use shared rooms. Room timing and verified room progress are server-controlled; room video is an optional, separate connection that shares live media only after you choose to connect and enable a device.</p>
+            <p>Shared Focus Rooms are temporarily unavailable while production room behavior is verified. Individual focus sessions remain available. When shared rooms return, their timing and verified progress will be server-controlled; room video is a separate optional connection that shares live media only after you choose to connect and enable a device.</p>
           </article>
           <article>
-            <h3>Friends and leaderboard</h3>
-            <p>Cloud social features require sign-in and an internet connection. The Global board lists public profiles; the Friends board lists accepted friends who chose Friends or Public visibility. You can choose Private, Friends, or Public visibility, and still see your own XP and level when unlisted. Rankings use persisted Global XP and a database function; a missing or incompatible server function is reported instead of replaced with sample data.</p>
+            <h3>Friends</h3>
+            <p>Cloud social features require sign-in and an internet connection. Find people by username, send or respond to friend requests, and see accepted friends’ presence. A leaderboard is not available in the current app; XP, achievements, quests, and session history remain separate features.</p>
           </article>
         </div>
       </section>
@@ -111,7 +111,7 @@ export default function DocumentationPage({ language = 'en' }) {
         <p>FocusMate does not currently show a Focus Score. The former score UI was removed. Session duration and optional camera-derived signals are separate records; none is a score or proof of concentration, learning, or mental state.</p>
       </section>
 
-      <section id="privacy" className="documentation-section">
+      <section id="privacy-and-data" className="documentation-section">
         <span className="documentation-kicker">05 · PRIVACY</span>
         <h2>Privacy and data</h2>
         <ul>
@@ -134,10 +134,6 @@ export default function DocumentationPage({ language = 'en' }) {
           <details>
             <summary>Why did webcam support stop when I changed pages?</summary>
             <p>FocusMate keeps an active camera stream running when you navigate to another app page or switch browser tabs. Browsers and devices may throttle background analysis; return to the app to resume normal processing. Stop the camera or pause the focus session to end it.</p>
-          </details>
-          <details>
-            <summary>Why is the leaderboard unavailable or reporting an outdated response?</summary>
-            <p>The leaderboard needs an authenticated cloud account, a network connection, and the current Global XP database functions. Retry after reconnecting or signing in again. If an update-required message persists, contact support so the service deployment can be checked.</p>
           </details>
           <details>
             <summary>Does FocusMate measure my attention?</summary>
@@ -180,9 +176,13 @@ export default function DocumentationPage({ language = 'en' }) {
         <section id="release-policy" className="changelog-policy" aria-labelledby="release-policy-title">
           <span className="documentation-kicker">{t('versioning')}</span>
           <h3 id="release-policy-title">{t('policy')}</h3>
-          <p>{t('noPublishedReleases')}</p>
+          <p>{latestRelease
+            ? t('currentVersion', { version: latestRelease.version })
+            : t('noPublishedReleases')}</p>
           <p>{t('format')} <strong>MAJOR.MINOR.PATCH</strong></p>
-          <p>{t('proposedVersion')} <strong>{changelog.proposedInitialVersion}</strong> — {t('proposedVersionNote')}</p>
+          {!latestRelease && (
+            <p>{t('proposedVersion')} <strong>v1.0.0</strong> — {t('proposedVersionNote')}</p>
+          )}
           <ul>
             <li><strong>MAJOR</strong> — {t('major')}</li>
             <li><strong>MINOR</strong> — {t('minor')}</li>
@@ -192,6 +192,7 @@ export default function DocumentationPage({ language = 'en' }) {
 
         <section id="release-history" className="changelog-section" aria-labelledby="release-history-title">
           <h3 id="release-history-title">{t('publishedReleases')}</h3>
+          <p>Older history entries may describe features that are no longer available. See the current feature guides above for what FocusMate offers now.</p>
           {latestRelease
             ? (
               <>

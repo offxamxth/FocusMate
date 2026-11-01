@@ -1,6 +1,24 @@
 # FocusMate
 
-FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Camera frames are analyzed in the browser and are not uploaded.
+FocusMate is a study and focus application with a React dashboard, optional in-browser webcam estimates, and optional Supabase accounts. Source inspection shows that webcam-analysis frames and landmarks are processed in the browser rather than sent as analysis payloads. Shared Focus Rooms are temporarily unavailable while production room behavior is verified; individual focus sessions remain available.
+
+## FocusMate V1.0.0 — November 1, 2026
+
+FocusMate brings study sessions, planning, and progress review together in one
+app. The current feature set includes:
+
+- Personal focus timers with pause, resume, session results, and history.
+- Tasks, study goals, progress summaries, achievements, and daily quests.
+- Profile preferences, wellbeing tracking, and supported data exports.
+- Optional browser-side camera signals, which are approximate cues rather than
+  measures of attention, learning, or mental state.
+- Optional cloud profile synchronization and friend connections when the
+  required Supabase services are configured.
+
+FocusMate does not include a leaderboard or a Focus Score. Shared Focus Rooms
+are disabled pending production schema verification. Cloud features require
+network access and correctly configured backend support. Shared rooms are not
+part of the available V1.0.0 feature set.
 
 ## Project structure
 
@@ -32,8 +50,9 @@ python start_focusmate.py
 This starts the React dashboard in one terminal and opens it in your browser.
 The optional camera analysis runs in the browser after you grant camera access.
 You can also start it with `npm --prefix dashboard run dev`.
-Run a production build with `npm --prefix dashboard run build`, or preview the
-generated build with `npm --prefix dashboard run preview`.
+Run the automated tests with `npm --prefix dashboard test`, build with
+`npm --prefix dashboard run build`, or preview the generated build with
+`npm --prefix dashboard run preview`.
 
 For a local-only demo on Windows, explicitly disable cloud configuration in
 the same PowerShell session before starting Vite. Use non-empty, deliberately
@@ -46,7 +65,6 @@ configuration and keep the browser from constructing a Supabase client:
 Set-Location .\dashboard
 $env:VITE_SUPABASE_URL = 'http://127.0.0.1:1'
 $env:VITE_SUPABASE_PUBLISHABLE_KEY = 'local-demo-disabled'
-$env:VITE_FOCUSMATE_GLOBAL_LEADERBOARD_ENABLED = 'false'
 npm run dev -- --host 127.0.0.1
 ```
 
@@ -213,8 +231,11 @@ The shared room coordinates the session, while every participant keeps the
 normal personal Focus Room and timer. Each client derives its countdown from
 the room's server start time; personal timer results are recorded once using a
 room/session idempotency key. Reconnecting restores the current room state.
-Invitation codes can also join a room during focus, pause, or break; verified
-focus tracking for a late joiner starts at their server-recorded join time.
+The repository's intended late-join migration allows invitation-code joins
+during focus, pause, or break and starts verified tracking at the
+server-recorded join time. The production join RPC inspected on October 29,
+2026 does not support this behavior, so shared rooms are disabled in the
+launch UI pending a reviewed migration and staging validation.
 
 Apply the social and room migrations after the profile migrations above, in
 order:
@@ -240,34 +261,21 @@ not mutate room state automatically; the host explicitly resumes or finishes.
 Only the active host can control the shared session. A finished room session
 cannot be restarted; create another room for a new session.
 
-### Verified Focus Room leaderboard
+### Retained legacy leaderboard database objects
 
-`supabase/migrations/20261004240000_verified_focus_leaderboard.sql` adds a
-private, trigger-maintained focus-interval ledger and authenticated leaderboard
-RPCs. The ledger opens and closes intervals only as server-authoritative room
-timer transitions occur. It credits each authenticated member only while their
-room membership is active, closes their interval when they leave, and includes
-scores only after the room reaches the completed `finished` state. Pauses,
-breaks, abandoned/closed rooms, browser-local timers, camera-session estimates,
-client XP, and profile snapshots are not score sources.
-
-Weekly totals use the overlap of those verified intervals with the current
-Monday-to-Monday UTC week. All-time totals use the same completed interval
-ledger. Ranks sort by verified seconds descending, then case-insensitive
-username ascending, then internal account ID ascending; account IDs are never
-returned to the browser. The friends view includes only accepted friendships.
-Leaderboard visibility defaults to private; users may opt into accepted-friend
-or public visibility. Public results contain only username, display name,
-rank, and verified focus seconds. The RPC derives identity from the signed-in
-caller and does not accept client-supplied scores or user IDs.
-
-Historical completed rooms are not backfilled because the prior schema kept
-only cumulative time and cannot reconstruct exact pause/break intervals or UTC
-week boundaries. An active focus interval during the migration is safely
-captured from its existing server timestamp. The service worker does not cache
-leaderboard or other authenticated RPC responses.
+The repository retains historical leaderboard migrations and related server
+objects, but the current FocusMate app does not expose a leaderboard. It is not
+a V1.0 feature. The production migration ledger was inspected read-only during
+this audit; no database schema or data changes were made. A local migration
+file alone does not establish its production status, so use a current remote
+ledger and a reviewed dry run before any database operation.
 
 ### Production database recovery gate
+
+The backup and recovery details below come from dated October 2026 read-only
+notes and have not been reverified for this release. The production migration
+ledger was checked read-only on October 29, 2026; treat backup and recovery
+status as unknown until an authorized current check confirms them.
 
 Production Supabase project `qdvxfpzoychtgfenfjrs` previously had no listed
 backups and point-in-time recovery (PITR) was disabled. The latest CLI check
@@ -322,7 +330,8 @@ local tooling, database-password, and project prerequisites above. Existing
 plan, compute, or data-transfer charges may still apply; confirm them before
 proceeding. A logical dump is not a PITR substitute.
 
-The most recent production dry run (read-only; migrations were not applied)
+The October 11, 2026 production dry run (read-only; migrations were not applied
+at that time)
 reported these four pending migrations, in order:
 
 1. `supabase/migrations/20261010120000_focus_room_readiness.sql`

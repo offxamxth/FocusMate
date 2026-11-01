@@ -65,13 +65,12 @@ const releaseHistory = [
 ];
 
 export const changelog = {
-  proposedInitialVersion: 'v1.0.0',
   unreleased: [
     {
-      date: '2026-10-24',
-      title: 'Leaderboard, daily quests, and one documentation route',
-      summary: 'Applied the missing production leaderboard and verified daily-quest database support, corrected timer and camera-session quest accounting, documented privacy and reroll rules, and consolidated Documentation links on the main app’s #documentation section.',
-      category: 'improved',
+      date: '2026-10-29',
+      title: 'Release readiness and shared-room availability',
+      summary: 'Made Documentation available without signing in, corrected release copy, and temporarily disabled shared Focus Rooms pending production schema verification while keeping individual focus sessions available.',
+      category: 'reliability',
     },
     {
       date: '2026-10-22',
@@ -116,7 +115,15 @@ export const changelog = {
       category: 'improved',
     },
   ],
-  releases: [],
+  releases: [
+    {
+      version: 'v1.0.0',
+      date: '2026-11-01',
+      title: 'FocusMate V1.0.0',
+      summary: 'Initial release with individual focus sessions, planning, progress tools, and optional cloud profiles. Shared Focus Rooms are temporarily unavailable pending production schema verification.',
+      category: 'added',
+    },
+  ],
   history: releaseHistory,
 };
 

@@ -24,8 +24,29 @@ const publicPaths = new Map([
   ['/privacy', 'privacy'],
 ]);
 
+const documentationAnchors = new Set([
+  'documentation',
+  'getting-started',
+  'focus-sessions',
+  'features',
+  'focus-score',
+  'privacy-and-data',
+  'troubleshooting',
+  'updates',
+  'unreleased',
+  'release-policy',
+  'release-history',
+]);
+
 export function publicPageFromLocation(location) {
   const pathname = location.pathname.replace(/\/+$/, '') || '/';
+  const fragment = location.hash.slice(1);
+  if (
+    (pathname === '/' || pathname === '/index.html')
+    && documentationAnchors.has(fragment)
+  ) {
+    return 'documentation';
+  }
   return publicPaths.get(pathname) || null;
 }
 
